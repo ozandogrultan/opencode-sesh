@@ -93,12 +93,11 @@ function getMarkdownStyle(theme: ThemeColors): SyntaxStyle | undefined {
 //    the native sidebar via the `sidebar_content` slot. Native session_list
 //    (<leader>l) is left untouched; this complements it with a cross-project
 //    view. Rows are display-only; ctrl+o opens the full picker.
-// 2. Dialog (ctrl+o, command palette): an xlarge grouped picker over every
-//    session across all project directories, newest first.
+// 2. Picker (ctrl+o, `/sesh`, command palette): an xlarge grouped picker over
+//    every session across all project directories, newest first.
 //
-// Deliberately no `/sessions` slash here: `opencode/commands/sessions.md`
-// owns that name (agent flow, works headless and in the Desktop app where
-// TUI plugins don't run). Two `/sessions` entries would collide.
+// `/sesh` is registered by this plugin (a markdown command cannot open the
+// dialog). Native `/sessions` and session_list (<leader>l) stay untouched.
 const BASE_MODE = "base"
 const POLL_MS = 15_000
 
@@ -1126,6 +1125,7 @@ const tui: TuiPlugin = async (api) => {
       value: "sesh.pick",
       description: "Switch to any session across all project directories",
       category: "Sessions",
+      slash: { name: "sesh" },
       onSelect: () => {
         void openPicker()
       },

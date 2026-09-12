@@ -16,7 +16,6 @@ CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 CONFIG_DIR="$CONFIG_HOME/opencode"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 
-INSTALL_COMMAND=1
 INSTALL_TOOL=1
 INSTALL_TUI=1
 UNINSTALL=0
@@ -30,10 +29,9 @@ SOLID_VERSION="1.9.12"
 
 usage() {
   cat <<'USAGE'
-Usage: bash install.sh [--bin-dir DIR] [--no-command] [--no-tool] [--no-tui] [--uninstall]
+Usage: bash install.sh [--bin-dir DIR] [--no-tool] [--no-tui] [--uninstall]
 
   --bin-dir DIR  Directory for the sesh launcher (default: ~/.local/bin).
-  --no-command   Skip installing the /sesh slash command.
   --no-tool      Skip installing the sesh-list custom tool.
   --no-tui       Skip installing the in-TUI sessions panel plugin.
   --uninstall    Remove everything this script installed.
@@ -44,7 +42,6 @@ USAGE
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bin-dir) [ "$#" -ge 2 ] || fail "--bin-dir needs a directory."; BIN_DIR="$2"; shift 2 ;;
-    --no-command) INSTALL_COMMAND=0; shift ;;
     --no-tool) INSTALL_TOOL=0; shift ;;
     --no-tui) INSTALL_TUI=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
@@ -54,6 +51,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 LAUNCHER="$BIN_DIR/sesh"
+# `/sesh` is registered by the TUI plugin (a markdown command cannot open the
+# dialog); this path only exists so we can clean up an obsolete install.
 COMMAND_DST="$CONFIG_DIR/commands/sesh.md"
 TOOL_DST="$CONFIG_DIR/tools/sesh-list.ts"
 PANEL_DST="$CONFIG_DIR/plugins/sesh-panel.tsx"
@@ -102,7 +101,6 @@ for path in \
   bin/sesh-delete.sh \
   bin/sesh-refresh-worker.sh \
   bin/sesh-shortcuts.sh \
-  opencode/commands/sesh.md \
   opencode/tools/sesh-list.ts \
   tui/sesh-panel.tsx \
   themes/glow-dark-clean.json; do
@@ -147,7 +145,10 @@ install_file() {
   note "installed $dst"
 }
 
-[ "$INSTALL_COMMAND" = 1 ] && install_file "$SOURCE_DIR/opencode/commands/sesh.md" "$COMMAND_DST"
+# Earlier versions shipped a markdown `/sesh` command that could only prompt the
+# agent; the TUI plugin now registers the slash itself. Drop the old file so the
+# two do not collide.
+remove_if_marker "$COMMAND_DST" "rich interactive picker" && note "removed obsolete markdown command $COMMAND_DST"
 [ "$INSTALL_TOOL" = 1 ] && install_file "$SOURCE_DIR/opencode/tools/sesh-list.ts" "$TOOL_DST"
 
 opencode_version=''

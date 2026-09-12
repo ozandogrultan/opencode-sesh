@@ -11,9 +11,10 @@ territory: read this first, then the specific file you need.
    any terminal. Lists **all** sessions across **all** project directories,
    full-text searchable, with transcript preview and resume/fork/delete.
 2. **`tui/sesh-panel.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
-   recent-sessions section in the sidebar plus a `ctrl+o` picker.
-3. **`opencode/`** — agent-side integration: a `/sesh` slash command and a
-   `sesh-list` custom tool.
+   recent-sessions section in the sidebar plus a `ctrl+o` / `/sesh` picker.
+3. **`opencode/tools/sesh-list.ts`** — the `sesh-list` custom tool, so the agent
+   can list sessions across every directory (the native `opencode session list`
+   is project-scoped).
 
 No iTerm2, no AppleScript, no panes, no window management — **never add any.**
 opencode has no persistent-sidebar API, so the "sidebar" is a `sidebar_content`
@@ -34,7 +35,7 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 - `bin/` — flat; no subdirs. Scripts resolve siblings from their own location.
   Never hardcode install paths.
 - `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
-- `opencode/commands/sesh.md`, `opencode/tools/sesh-list.ts` — agent integration.
+- `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
 - `themes/`, `tests/`, `install.sh`, `README.md`.
 
 The **filename becomes the tool name** in opencode, so `sesh-list.ts` is the
@@ -110,9 +111,13 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   home search are keymap-captured queries (priority-20 base layer, letters /
   space / backspace, Esc exits); click the box to activate, click elsewhere to
   leave.
-- Do not bind `<leader>l` (native `session_list`) and do not register a
-  `/sessions` slash in the panel — the native `/sessions` command owns that
-  name; ours is `/sesh`.
+- **`/sesh` is the plugin's slash**, registered with
+  `slash: { name: "sesh" }` on the `api.command.register` entry — that is the
+  only way to open the dialog. A markdown command under `commands/` cannot drive
+  the picker (it just prompts the model), so never ship one; the installer
+  removes any leftover `commands/sesh.md`.
+- Do not bind `<leader>l` (native `session_list`) or shadow the native
+  `/sessions` command.
 
 ## Verifying
 

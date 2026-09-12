@@ -4,9 +4,9 @@
 across every project, preview the transcript, and resume in place — from your
 terminal or from inside the TUI.
 
-`opencode` keeps a growing pile of sessions per project. Native `<leader>l` only
-shows the current one; `sesh` gives you all of them, full-text searchable and
-previewable from anywhere.
+`opencode` keeps a growing pile of sessions, and its native lists (`<leader>l`,
+`/sessions`) are scoped to the current project. `sesh` shows all of them —
+grouped by directory, full-text searchable, and previewable from anywhere.
 
 [![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -49,11 +49,11 @@ cd opencode-sesh
 bash install.sh
 ```
 
-The installer links `sesh` into `~/.local/bin`, copies the `/sesh` command, the
-`sesh-list` tool and the TUI panel into
-`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `tui.json`, and
-declares the plugin dependencies (opencode installs them on next start). It
-never edits your shell rc, and any file it would overwrite is backed up first.
+The installer links `sesh` into `~/.local/bin`, copies the `sesh-list` tool and
+the TUI panel into `${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel
+in `tui.json`, and declares the plugin dependencies (opencode installs them on
+next start). The panel registers the `/sesh` slash command. It never edits your
+shell rc, and any file it would overwrite is backed up first.
 
 Restart opencode to load the panel, then:
 
@@ -62,8 +62,8 @@ sesh              # terminal picker
 ```
 
 ```text
-/sesh             # inside opencode — agent flow
-ctrl+o            # inside opencode — full picker
+/sesh             # inside opencode — picker (TUI plugin)
+ctrl+o            # inside opencode — picker
 ```
 
 ### Requirements
@@ -109,6 +109,7 @@ read -r id cwd < <(sesh --print --query "auth")
 
 | Key | Action |
 | --- | --- |
+| `/sesh` | Open the full picker |
 | `ctrl+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
@@ -152,6 +153,10 @@ the opencode SDK over the same store.
 
 **Does it replace opencode's native session list?** No. `<leader>l` and the
 native `/sessions` command are untouched; `sesh` is additive.
+
+**Is there an agent-facing list?** Yes — the `sesh-list` tool lets the model list
+every session across all directories (the native `opencode session list` only
+covers the current project) and offer to resume one.
 
 **Where is my data?** It reads the opencode database read-only and caches
 extracted text under `~/.cache/sesh`. Nothing is uploaded anywhere.
