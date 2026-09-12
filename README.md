@@ -72,6 +72,9 @@ ctrl+o            # inside opencode — picker
 - `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) `>= 0.52`
 - `sqlite3` recommended — the picker queries the session DB directly in
   milliseconds and falls back to the slower `opencode db` CLI without it
+- [`glow`](https://github.com/charmbracelet/glow) optional — styles the
+  transcript preview as Markdown; without it the preview shows the plain
+  Markdown, unchanged otherwise
 
 ### Uninstall
 
