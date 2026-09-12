@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  shell:
+    name: shell tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3 shellcheck
+      - name: Syntax check
+        run: bash -n bin/*.sh install.sh tests/sesh.sh
+      - name: ShellCheck (errors)
+        run: shellcheck -x --severity=error bin/*.sh install.sh tests/sesh.sh
+      - name: Regression suite
+        run: ./tests/sesh.sh
+
+  typecheck:
+    name: tui typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck

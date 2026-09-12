@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+source_path=${BASH_SOURCE[0]}
+links=0
+while [ -L "$source_path" ]; do
+  links=$((links + 1))
+  [ "$links" -le 40 ] || { echo 'sesh: launcher symlink loop.' >&2; exit 1; }
+  source_dir="$(cd "$(dirname "$source_path")" && pwd -P)"
+  link_target=$(readlink "$source_path")
+  case "$link_target" in
+    /*) source_path=$link_target ;;
+    *) source_path="$source_dir/$link_target" ;;
+  esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$source_path")" && pwd -P)"
+exec "$SCRIPT_DIR/sesh.sh" "$@"
