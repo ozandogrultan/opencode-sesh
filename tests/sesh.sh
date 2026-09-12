@@ -102,10 +102,14 @@ grep -Fq 'ses_alpha' "$fixture/tool.tsv" && { echo "tool payload indexed" >&2; e
 # 5. Warm refresh reuses extractions; new activity re-extracts only that session.
 alpha_cache="$SESH_CACHE_DIR/extractions/ses_alpha.json"
 [ -f "$alpha_cache" ]
-before=$(stat -f '%m' "$alpha_cache" 2>/dev/null || stat -c '%Y' "$alpha_cache")
+# GNU stat first: BSD stat has no -c, and `stat -f '%m'` on GNU prints
+# filesystem stats to stdout (including volatile free-block counts) even as it
+# exits nonzero, which would poison the captured value.
+cache_mtime() { stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1"; }
+before=$(cache_mtime "$alpha_cache")
 sleep 1
 "$list" --refresh --state-dir "$state" > /dev/null
-after=$(stat -f '%m' "$alpha_cache" 2>/dev/null || stat -c '%Y' "$alpha_cache")
+after=$(cache_mtime "$alpha_cache")
 [ "$before" = "$after" ] || { echo "warm refresh re-parsed an unchanged session" >&2; exit 1; }
 sqlite3 "$SESH_DB" "UPDATE session SET time_updated = 1800000000000 WHERE id = 'ses_alpha';"
 add_part 'ses_alpha' 'msg_a4' 'user' 'text' 'brand new penguin discussion' 1800000000000
