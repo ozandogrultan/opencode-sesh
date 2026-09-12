@@ -14,9 +14,9 @@ jobs:
       - name: Install test tools
         run: sudo apt-get update && sudo apt-get install -y jq sqlite3 shellcheck
       - name: Syntax check
-        run: bash -n bin/*.sh install.sh tests/sesh.sh
+        run: bash -n bin/*.sh bin/sesh install.sh tests/sesh.sh
       - name: ShellCheck (errors)
-        run: shellcheck -x --severity=error bin/*.sh install.sh tests/sesh.sh
+        run: shellcheck -x --severity=error bin/*.sh bin/sesh install.sh tests/sesh.sh
       - name: Regression suite
         run: ./tests/sesh.sh
 

@@ -13,4 +13,14 @@ while [ -L "$source_path" ]; do
   esac
 done
 SCRIPT_DIR="$(cd "$(dirname "$source_path")" && pwd -P)"
+case ${1:-} in
+  install)
+    shift
+    exec bash "$SCRIPT_DIR/../install.sh" "$@"
+    ;;
+  uninstall)
+    shift
+    exec bash "$SCRIPT_DIR/../install.sh" --uninstall "$@"
+    ;;
+esac
 exec "$SCRIPT_DIR/sesh.sh" "$@"

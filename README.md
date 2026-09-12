@@ -43,17 +43,30 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 
 ## Install
 
+With npm:
+
+```bash
+npm install -g opencode-sesh
+sesh install
+```
+
+Or from source:
+
 ```bash
 git clone https://github.com/ozandogrultan/opencode-sesh.git
 cd opencode-sesh
 bash install.sh
 ```
 
-The installer links `sesh` into `~/.local/bin`, copies the `sesh-list` tool and
-the TUI panel into `${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel
-in `tui.json`, and declares the plugin dependencies (opencode installs them on
-next start). The panel registers the `/sesh` slash command. It never edits your
-shell rc, and any file it would overwrite is backed up first.
+`sesh install` (or `bash install.sh`) links `sesh` into `~/.local/bin`, copies
+the `sesh-list` tool and the TUI panel into
+`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `tui.json`, and
+declares the plugin dependencies (opencode installs them on next start). The
+panel registers the `/sesh` slash command. It never edits your shell rc, and any
+file it would overwrite is backed up first.
+
+The npm package ships the same scripts and installer; the runtime tools below
+are still required.
 
 Restart opencode to load the panel, then:
 
@@ -79,7 +92,8 @@ ctrl+o            # inside opencode — picker
 ### Uninstall
 
 ```bash
-bash install.sh --uninstall
+sesh uninstall        # npm installs
+bash install.sh --uninstall   # from source
 ```
 
 ## Usage

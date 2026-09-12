@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # With no token configured the step is a no-op so tag pushes stay
+          # green. Add the NPM_TOKEN repository secret to enable publishing.
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning title=npm publish skipped::Set the NPM_TOKEN repository secret to publish."
+            exit 0
+          fi
+          npm publish --provenance --access public
