@@ -301,6 +301,77 @@ async function fetchTranscriptText(api: TuiPluginApi, sessionID: string): Promis
   }
 }
 
+// Shared transcript preview dialog. Call from a component's setup scope so the
+// preview key layer is torn down with it.
+function createTranscriptPreview(api: TuiPluginApi) {
+  const [previewID, setPreviewID] = createSignal<string>()
+  const [previewText, setPreviewText] = createSignal("")
+  let disposePreviewKeys: (() => void) | undefined
+
+  const close = () => {
+    setPreviewID(undefined)
+    api.ui.dialog.clear()
+    disposePreviewKeys?.()
+    disposePreviewKeys = undefined
+  }
+
+  const open = (entry: Entry) => {
+    if (previewID() === entry.id) {
+      close()
+      return
+    }
+    setPreviewID(entry.id)
+    setPreviewText("Loading…")
+    void fetchTranscriptText(api, entry.id).then(setPreviewText)
+    api.ui.dialog.replace(
+      () => (
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
+          <box flexDirection="row" justifyContent="space-between">
+            <text attributes={TextAttributes.BOLD}>{entry.title}</text>
+            <text style={{ fg: api.theme.current.textMuted }}>esc</text>
+          </box>
+          <text style={{ fg: api.theme.current.textMuted }}>
+            {prettyDir(entry.dir, process.env.HOME ?? "")} · {ago(entry.updated)}
+          </text>
+          <scrollbox
+            paddingLeft={1}
+            paddingRight={1}
+            scrollbarOptions={{ visible: false }}
+            maxHeight={Math.max(6, Math.floor(api.renderer.height / 2))}
+          >
+            {getMarkdownStyle(api.theme.current) ? (
+              <markdown content={previewText()} syntaxStyle={getMarkdownStyle(api.theme.current)!} />
+            ) : (
+              <text wrapMode="word">{previewText()}</text>
+            )}
+          </scrollbox>
+        </box>
+      ),
+      () => {
+        setPreviewID(undefined)
+        disposePreviewKeys?.()
+        disposePreviewKeys = undefined
+      },
+    )
+    api.ui.dialog.setSize("large")
+    disposePreviewKeys?.()
+    disposePreviewKeys = api.keymap.registerLayer({
+      bindings: [
+        {
+          key: "escape",
+          desc: "Close preview",
+          preventDefault: true,
+          cmd: close,
+        },
+      ],
+    })
+  }
+
+  onCleanup(() => disposePreviewKeys?.())
+
+  return { open }
+}
+
 type TreeRow =
   | { kind: "group"; dir: string; label: string; count: number }
   | { kind: "item"; entry: Entry }
@@ -311,8 +382,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
   const [entries, setEntries] = createSignal<Entry[]>([])
   const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({})
   const [hovered, setHovered] = createSignal<string>()
-  const [sidebarPreviewID, setSidebarPreviewID] = createSignal<string>()
-  const [sidebarPreviewText, setSidebarPreviewText] = createSignal("")
+  const preview = createTranscriptPreview(props.api)
   const [query, setQuery] = createSignal("")
   const [deleting, setDeleting] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
@@ -417,7 +487,6 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
   }
 
   let disposeHoverSpace: (() => void) | undefined
-  let disposePreviewKeys: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
   let insideSearchBox = false
 
@@ -451,65 +520,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     })
   })
 
-  const openSidebarPreview = (entry: Entry) => {
-    if (sidebarPreviewID() === entry.id) {
-      setSidebarPreviewID(undefined)
-      props.api.ui.dialog.clear()
-      disposePreviewKeys?.()
-      disposePreviewKeys = undefined
-      return
-    }
-    setSidebarPreviewID(entry.id)
-    setSidebarPreviewText("Loading…")
-    void fetchTranscriptText(props.api, entry.id).then(setSidebarPreviewText)
-    props.api.ui.dialog.replace(
-      () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
-          <box flexDirection="row" justifyContent="space-between">
-            <text attributes={TextAttributes.BOLD}>{entry.title}</text>
-            <text style={{ fg: props.api.theme.current.textMuted }}>esc</text>
-          </box>
-          <text style={{ fg: props.api.theme.current.textMuted }}>
-            {prettyDir(entry.dir, home)} · {ago(entry.updated)}
-          </text>
-          <scrollbox
-            paddingLeft={1}
-            paddingRight={1}
-            scrollbarOptions={{ visible: false }}
-            maxHeight={Math.max(6, Math.floor(props.api.renderer.height / 2))}
-          >
-            {getMarkdownStyle(props.api.theme.current) ? (
-              <markdown content={sidebarPreviewText()} syntaxStyle={getMarkdownStyle(props.api.theme.current)!} />
-            ) : (
-              <text wrapMode="word">{sidebarPreviewText()}</text>
-            )}
-          </scrollbox>
-        </box>
-      ),
-      () => {
-        setSidebarPreviewID(undefined)
-        disposePreviewKeys?.()
-        disposePreviewKeys = undefined
-      },
-    )
-    props.api.ui.dialog.setSize("large")
-    disposePreviewKeys?.()
-    disposePreviewKeys = props.api.keymap.registerLayer({
-      bindings: [
-        {
-          key: "escape",
-          desc: "Close preview",
-          preventDefault: true,
-          cmd: () => {
-            setSidebarPreviewID(undefined)
-            props.api.ui.dialog.clear()
-            disposePreviewKeys?.()
-            disposePreviewKeys = undefined
-          },
-        },
-      ],
-    })
-  }
+  const openSidebarPreview = (entry: Entry) => preview.open(entry)
 
   createEffect(() => {
     disposeHoverSpace?.()
@@ -519,6 +530,8 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     const entry = entries().find((e) => e.id === id)
     if (!entry) return
     disposeHoverSpace = props.api.keymap.registerLayer({
+      mode: "base",
+      priority: 20,
       bindings: [
         {
           key: "space",
@@ -544,7 +557,6 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
   onCleanup(() => {
     disposeHoverSpace?.()
-    disposePreviewKeys?.()
     disposeSearch?.()
   })
 
@@ -648,6 +660,8 @@ function HomeSessions(props: { api: TuiPluginApi }) {
   const [query, setQuery] = createSignal("")
   const [hovered, setHovered] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
+  const preview = createTranscriptPreview(props.api)
+  let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
   let insideSearchBox = false
 
@@ -681,7 +695,29 @@ function HomeSessions(props: { api: TuiPluginApi }) {
     })
   })
 
+  createEffect(() => {
+    disposeHoverSpace?.()
+    disposeHoverSpace = undefined
+    const id = hovered()
+    if (!id) return
+    const entry = entries().find((e) => e.id === id)
+    if (!entry) return
+    disposeHoverSpace = props.api.keymap.registerLayer({
+      mode: "base",
+      priority: 20,
+      bindings: [
+        {
+          key: "space",
+          desc: "Preview session transcript",
+          preventDefault: true,
+          cmd: () => preview.open(entry),
+        },
+      ],
+    })
+  })
+
   onCleanup(() => disposeSearch?.())
+  onCleanup(() => disposeHoverSpace?.())
 
   onMount(() => {
     let alive = true

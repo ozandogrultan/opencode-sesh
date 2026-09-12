@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-12
+
+### Fixed
+
+- The home-screen recent-sessions list had no transcript preview binding, so
+  pressing space while hovering a session typed into the prompt instead. It now
+  opens the same preview as the sidebar.
+
 ## [0.1.1] - 2026-09-12
 
 ### Changed
@@ -33,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ozandogrultan/opencode-sesh/releases/tag/v0.1.0
