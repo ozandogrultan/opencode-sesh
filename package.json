@@ -6,6 +6,25 @@
   "description": "Browse, search, preview and resume opencode sessions from the terminal and the TUI.",
   "license": "MIT",
   "author": "Ozan Dogrultan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ozandogrultan/opencode-sesh.git"
+  },
+  "homepage": "https://github.com/ozandogrultan/opencode-sesh#readme",
+  "bugs": {
+    "url": "https://github.com/ozandogrultan/opencode-sesh/issues"
+  },
+  "keywords": [
+    "opencode",
+    "sessions",
+    "session-browser",
+    "fzf",
+    "tui",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "bash tests/sesh.sh",
     "typecheck": "tsc -p tsconfig.json",

@@ -170,7 +170,9 @@ any shell, including outside opencode.
 
 ## Contributing
 
-Issues and PRs are welcome. Run the checks before opening a PR:
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full
+guide; this project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Run the
+checks before opening a PR:
 
 ```bash
 npm install
