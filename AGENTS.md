@@ -88,6 +88,10 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - The installer prefers the local opencode version for `@opencode-ai/*` and
   merges (never clobbers) the config `package.json`; opencode runs `bun install`
   at startup.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  (`feat`, `fix`, `docs`, `ci`, …). See
+  [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages) for the types and the
+  version mapping.
 
 ## TUI panel (`tui/sesh-panel.tsx`)
 

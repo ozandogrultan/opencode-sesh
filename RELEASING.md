@@ -22,13 +22,17 @@ Do this from a green `main` — it releases whatever is there.
 If you prefer to bump locally:
 
 ```bash
-npm version patch          # updates package.json + lock, commits, tags vX.Y.Z
+npm version minor          # patch / minor / major per the commit types
 git push --follow-tags     # the tag push triggers the same release workflow
 ```
 
 `prepublishOnly` runs the tests and typecheck again before uploading.
 
 ## Before you release
+
+Pick the bump from the [Conventional Commits](CONTRIBUTING.md#commit-messages)
+since the last release — the highest impact wins: `feat` → minor,
+`fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
 
 Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) into a new
 `## [x.y.z] - YYYY-MM-DD` section and update the compare links. The one-click
