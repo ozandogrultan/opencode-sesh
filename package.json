@@ -42,7 +42,8 @@
   "scripts": {
     "test": "bash tests/sesh.sh",
     "typecheck": "tsc -p tsconfig.json",
-    "lint:sh": "bash -n bin/*.sh bin/sesh install.sh tests/sesh.sh"
+    "lint:sh": "bash -n bin/*.sh bin/sesh install.sh tests/sesh.sh",
+    "prepublishOnly": "npm test && npm run typecheck"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.18.30",

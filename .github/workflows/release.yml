@@ -3,33 +3,86 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump for the new release
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
-  publish:
-    name: publish to npm
+  tagged:
+    name: publish tagged release
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          # Trusted publishing needs npm >= 11.5.1 (newer than Node 20 ships).
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
-      - name: Publish
+      - name: Publish to npm
+        # No token: npm authenticates with the OIDC id-token and attaches
+        # provenance automatically (package Trusted Publisher settings).
+        run: npm publish --provenance --access public
+      - name: Create GitHub release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # With no token configured the step is a no-op so tag pushes stay
-          # green. Add the NPM_TOKEN repository secret to enable publishing.
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::warning title=npm publish skipped::Set the NPM_TOKEN repository secret to publish."
-            exit 0
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$tag"
+          else
+            gh release create "$tag" --title "$tag" --generate-notes --verify-tag
           fi
-          npm publish --provenance --access public
+
+  cut:
+    name: cut, tag, publish
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Bump version and tag
+        id: version
+        run: |
+          npm version "${{ inputs.bump }}" -m "v%s"
+          echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+      - name: Push commit and tag
+        # Tags pushed with GITHUB_TOKEN do not re-trigger this workflow, so the
+        # publish below is the only one for this release.
+        run: git push --follow-tags
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes --verify-tag
