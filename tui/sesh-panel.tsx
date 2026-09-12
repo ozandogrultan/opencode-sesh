@@ -293,6 +293,7 @@ async function fetchTranscriptText(api: TuiPluginApi, sessionID: string): Promis
       })
       .filter(Boolean)
       .slice(-TRANSCRIPT_PREVIEW_TURNS)
+      .reverse()
     const text = blocks.join("\n\n---\n\n")
     return text || "(no text in this session)"
   } catch {

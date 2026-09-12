@@ -122,6 +122,11 @@ grep -Fq '# You' "$fixture/preview.txt"
 grep -Fq '# Opencode' "$fixture/preview.txt"
 grep -Fq 'fix the widget search ranking' "$fixture/preview.txt"
 grep -Fq 'SECRET_TOOL_OUTPUT' "$fixture/preview.txt" && { echo "preview leaked tool payload" >&2; exit 1; }
+# Newest message first: the penguin part (added last) precedes the oldest text.
+newest=$(grep -Fn 'brand new penguin discussion' "$fixture/preview.txt" | cut -d: -f1 | head -1)
+oldest=$(grep -Fn 'fix the widget search ranking' "$fixture/preview.txt" | cut -d: -f1 | head -1)
+[ -n "$newest" ] && [ -n "$oldest" ] && [ "$newest" -lt "$oldest" ] \
+  || { echo "preview is not newest-first" >&2; exit 1; }
 "$preview" "$state" '' > "$fixture/empty.txt"
 grep -Fq '(no session selected)' "$fixture/empty.txt"
 

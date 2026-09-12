@@ -31,7 +31,7 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 - **Full-text search.** Type to match against session titles *and* the text of
   the conversation itself. Reasoning and tool output are excluded, so the index
   stays clean.
-- **Transcript preview.** Space shows the tail of the conversation, rendered as
+- **Transcript preview.** Space shows the most recent messages first, rendered as
   Markdown (with `glow` if you have it).
 - **Resume in place.** Enter `exec`s `opencode --session <id>` in the session's
   own directory. Ctrl-F forks instead. Your terminal becomes the session — no
