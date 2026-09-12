@@ -46,3 +46,26 @@ jobs:
         run: |
           npm pack --dry-run
           test -f bin/sesh
+
+  commitlint:
+    name: commitlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint commit messages
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            from=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          else
+            from="${{ github.event.before }}"
+            case "$from" in 0000000*) from="HEAD~1" ;; esac
+          fi
+          npx --no-install commitlint --from "$from" --to HEAD --verbose

@@ -40,18 +40,22 @@
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "husky",
     "test": "bash tests/sesh.sh",
     "typecheck": "tsc -p tsconfig.json",
     "lint:sh": "bash -n bin/*.sh bin/sesh install.sh tests/sesh.sh",
     "prepublishOnly": "npm test && npm run typecheck"
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
     "@opencode-ai/plugin": "1.18.30",
     "@opencode-ai/sdk": "1.18.30",
     "@opentui/core": "^0.5.11",
     "@opentui/keymap": "^0.5.11",
     "@opentui/solid": "^0.5.11",
     "@types/node": "26.5.1",
+    "husky": "^9.1.7",
     "solid-js": "1.9.12",
     "typescript": "7.0.2"
   }
