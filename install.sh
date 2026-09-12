@@ -22,10 +22,18 @@ UNINSTALL=0
 
 # Fallback plugin version for when the opencode CLI is unavailable; the
 # installer prefers the local opencode version so the panel matches its SDK.
-# OpenTUI stays on the tested peer line (bump together with tui/sesh-panel.tsx).
 PLUGIN_VERSION_FALLBACK="1.18.30"
-OPENTUI_RANGE="^0.4.5"
+# Peer line the panel was developed and typechecked against. A checkout's
+# package.json overrides these, so dependency bumps cannot drift the installed
+# config out of sync (solid-js moves with OpenTUI via @opentui/keymap's peer).
+OPENTUI_RANGE="^0.5.11"
 SOLID_VERSION="1.9.12"
+if [ -f "$SOURCE_DIR/package.json" ] && command -v jq >/dev/null 2>&1; then
+  opentui_range=$(jq -r '.devDependencies["@opentui/solid"] // empty' "$SOURCE_DIR/package.json" 2>/dev/null || true)
+  solid_version=$(jq -r '.devDependencies["solid-js"] // empty' "$SOURCE_DIR/package.json" 2>/dev/null || true)
+  if [ -n "$opentui_range" ]; then OPENTUI_RANGE=$opentui_range; fi
+  if [ -n "$solid_version" ]; then SOLID_VERSION=$solid_version; fi
+fi
 
 usage() {
   cat <<'USAGE'
