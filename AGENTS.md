@@ -25,6 +25,7 @@ slot section plus an xlarge modal picker; the terminal UI is fullscreen fzf.
 ```bash
 npm install            # dev deps (TypeScript, opencode/OpenTUI types)
 npm test               # fixture-DB regression suite — must stay green
+npm run test:picker    # PTY picker suite (needs fzf >= 0.73)
 npm run typecheck      # tsc over tui/ and opencode/
 npm run lint:sh        # bash -n on every script
 HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.config)
@@ -113,6 +114,11 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   window, then indexes transcript text for **every** session in batches
   (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
   The header shows indexing progress/coverage. `tests/tui.mjs` locks this.
+- **Durable install:** opencode imports plugins once at startup and never hot
+  reloads, so panel changes need a full quit/reopen. `install.sh --sync-panel`
+  (run by the npm `postinstall`) refreshes an already-installed panel and is a
+  no-op when absent, and `sesh --check` reports when the installed copy differs
+  from the bundled one.
 
 ### Hard-won rules — do not regress
 
@@ -135,6 +141,8 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 ## Verifying
 
 - `npm test` — fixture-DB regression suite, hermetic via `SESH_*` overrides.
+- `npm run test:picker` — PTY suite driving the real fzf picker (needs fzf
+  `>= 0.73` and Python 3).
 - `npm run typecheck` — `tsc` over `tui/` and `opencode/`.
 - `npm run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.

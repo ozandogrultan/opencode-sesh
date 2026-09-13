@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reconciled README, AGENTS.md and SECURITY.md with current behavior: the
+  terminal UI is described as the full set of scripts (including the refresh
+  worker and shortcut help), the extraction cache key documents the latest part
+  timestamp, the PTY picker suite (`npm run test:picker`) is listed, and the
+  npm distribution and supported-version policy are stated.
+
 ## [0.1.7] - 2026-09-13
 
 ### Fixed

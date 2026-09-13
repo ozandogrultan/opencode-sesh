@@ -2,8 +2,10 @@
 
 ## Supported versions
 
-`sesh` is distributed from source. Only the latest `main` branch is supported;
-there are no maintained release branches.
+`sesh` is published to npm (`opencode-sesh`) and developed on `main`. Only the
+latest release and the tip of `main` are supported; there are no maintained
+release branches or backports. Upgrade to the latest version (`npm install -g
+opencode-sesh` or a fresh `git pull`) before reporting an issue.
 
 ## Reporting a vulnerability
 

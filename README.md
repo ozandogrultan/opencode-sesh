@@ -58,7 +58,8 @@ cd opencode-sesh
 bash install.sh
 ```
 
-`sesh install` (or `bash install.sh`) links `sesh` into `~/.local/bin`, copies
+`sesh install` (or `bash install.sh`) links `sesh` into `$XDG_BIN_HOME`
+(default `~/.local/bin`), copies
 the `sesh-list` tool and the TUI panel into
 `${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `tui.json`, and
 declares the plugin dependencies (opencode installs them on next start). The
@@ -162,19 +163,21 @@ All variables are optional.
 
 ## How it works
 
-`bin/sesh-list.sh` is the only place that reads the opencode session store
-(SQLite: `session` / `message` / `part`). Each refresh extracts session metadata
-and text-only parts into a persistent per-session cache keyed on `time_updated`
-and part count, then atomically publishes a `snapshot.jsonl`. Every keystroke
-re-renders that snapshot with `jq` alone, so typing never starts competing
-database scans. Reasoning and tool payloads are never indexed or previewed, and
-session ids are validated before any SQL interpolation.
+`bin/sesh-list.sh` is the only `bin/` script that reads the opencode session
+store (SQLite: `session` / `message` / `part`). Each refresh extracts session
+metadata and text-only parts into a persistent per-session cache keyed on
+`time_updated`, part count and the latest part timestamp, then atomically
+publishes a `snapshot.jsonl`. Every keystroke re-renders that snapshot with `jq`
+alone, so typing never starts competing database scans. Reasoning and tool
+payloads are never indexed or previewed, and session ids are validated before
+any SQL interpolation.
 
-Four flat scripts back the terminal UI — the picker (`sesh.sh`), snapshot
-builder (`sesh-list.sh`), preview renderer (`sesh-preview.sh`) and deleter
-(`sesh-delete.sh`) — with one worker process per picker serializing refreshes.
-The TUI panel (`tui/sesh-panel.tsx`) is a SolidJS OpenTUI plugin that talks to
-the opencode SDK over the same store.
+Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
+(`sesh-list.sh`, driven by a per-picker `sesh-refresh-worker.sh` that serializes
+scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
+shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui/sesh-panel.tsx`) is a
+SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
+`sesh-list` agent tool reads it through `opencode db`.
 
 ## FAQ
 
@@ -204,6 +207,7 @@ checks before opening a PR:
 ```bash
 npm install
 npm test             # fixture-database regression suite
+npm run test:picker  # PTY picker suite (needs fzf >= 0.73)
 npm run typecheck    # tsc over tui/ and opencode/
 npm run lint:sh      # bash -n on every script
 ```
