@@ -159,20 +159,47 @@ function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
 }
 
 type Entry = { id: string; title: string; dir: string; group: string; updated: number }
+type EntryResult = { entries: Entry[]; truncated: boolean }
 
-async function fetchEntries(api: TuiPluginApi): Promise<Entry[]> {
+const SESSION_PAGE_LIMIT = 200
+const SESSION_MAX = 5000
+
+async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
   const home = process.env.HOME ?? ""
-  const [sessionResult, projectResult] = await Promise.all([
-    api.client.experimental.session.list({ limit: 500, roots: true, directory: "" }),
-    api.client.project.list({}),
-  ])
-  const sessions = ((sessionResult?.data ?? sessionResult) as Session[]) ?? []
+  const projectResult = await api.client.project.list({})
   const projects = ((projectResult?.data ?? projectResult) as Project[]) ?? []
-  if (!Array.isArray(sessions)) return []
   const projectName = new Map<string, string>(
     projects.map((p) => [p.id, p.name?.trim() || shortDir(p.worktree ?? "", home)]),
   )
-  return sessions
+  const sessions: Session[] = []
+  let cursor: number | undefined
+  let truncated = false
+  // Page through the global list instead of one fixed window, so sessions in
+  // older directories stay searchable. `cursor` is the previous page's oldest
+  // `time.updated`; a repeated or missing cursor stops the walk.
+  for (;;) {
+    const result = await api.client.experimental.session.list({
+      limit: SESSION_PAGE_LIMIT,
+      roots: true,
+      directory: "",
+      ...(cursor === undefined ? {} : { cursor }),
+    })
+    const page = ((result?.data ?? result) as Session[]) ?? []
+    if (!Array.isArray(page) || page.length === 0) break
+    sessions.push(...page)
+    if (page.length < SESSION_PAGE_LIMIT) break
+    if (sessions.length >= SESSION_MAX) {
+      truncated = true
+      break
+    }
+    const next = page[page.length - 1]?.time?.updated
+    if (typeof next !== "number" || next === cursor) {
+      truncated = true
+      break
+    }
+    cursor = next
+  }
+  const entries = sessions
     .filter((s) => !s.time?.archived && !s.parentID)
     .sort((a, b) => b.time.updated - a.time.updated)
     .map((s) => {
@@ -187,76 +214,118 @@ async function fetchEntries(api: TuiPluginApi): Promise<Entry[]> {
         updated: s.time.updated,
       }
     })
+  return { entries, truncated }
 }
 
-const TRANSCRIPT_INDEX_LIMIT = 150
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/
+const TRANSCRIPT_BATCH = 64
+const REMOTE_CONCURRENCY = 8
 
-async function buildSearchIndex(api: TuiPluginApi, entries: Entry[]): Promise<Map<string, string>> {
-  const index = new Map<string, string>()
-  const targets = entries.slice(0, TRANSCRIPT_INDEX_LIMIT)
-  for (const entry of targets) {
-    index.set(entry.id, `${entry.title.toLowerCase()} ${entry.dir.toLowerCase()}`)
-  }
-  const ids = targets.map((entry) => entry.id).filter((id) => SESSION_ID_PATTERN.test(id))
-  if (ids.length === 0) return index
+type IndexProgress = { indexed: number; total: number; complete: boolean }
+
+const nextTick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+async function openTranscriptDb(): Promise<any | undefined> {
   try {
     const home = process.env.HOME ?? ""
     const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
     // @ts-ignore - bun:sqlite ships with the Bun runtime (verified); no type package installed
     const sqlite: any = await import("bun:sqlite")
-    if (typeof sqlite?.Database !== "function") throw new Error("bun:sqlite unavailable")
-    const db = new sqlite.Database(`${dataHome}/opencode/opencode.db`, { readonly: true })
+    if (typeof sqlite?.Database !== "function") return undefined
+    return new sqlite.Database(`${dataHome}/opencode/opencode.db`, { readonly: true })
+  } catch {
+    return undefined
+  }
+}
+
+function addTranscript(index: Map<string, string>, sid: string, data: string): void {
+  try {
+    const part = JSON.parse(data) as { type?: unknown; text?: unknown }
+    if (part?.type !== "text" || typeof part.text !== "string") return
+    const base = index.get(sid) ?? ""
+    index.set(sid, `${base} ${part.text.toLowerCase()}`.trim())
+  } catch {
+    // ignore malformed parts
+  }
+}
+
+// Index titles/directories immediately, then add transcript text progressively
+// in batches so the render thread can breathe. Covers every entry, not a fixed
+// newest window; `onProgress` lets the picker show coverage.
+async function buildSearchIndex(
+  api: TuiPluginApi,
+  entries: Entry[],
+  onProgress?: (progress: IndexProgress) => void,
+): Promise<Map<string, string>> {
+  const index = new Map<string, string>()
+  for (const entry of entries) {
+    index.set(entry.id, `${entry.title.toLowerCase()} ${entry.dir.toLowerCase()}`)
+  }
+  const ids = entries.map((entry) => entry.id).filter((id) => SESSION_ID_PATTERN.test(id))
+  const remaining = new Set(ids)
+  const total = ids.length
+  let indexed = 0
+  const report = (complete: boolean) => onProgress?.({ indexed, total, complete })
+  report(false)
+
+  const db = await openTranscriptDb()
+  if (db) {
     try {
-      const placeholders = ids.map(() => "?").join(",")
-      const rows = (db
-        .query(
-          `SELECT session_id AS sid, data FROM part WHERE session_id IN (${placeholders}) AND json_extract(data, '$.type') = 'text' ORDER BY time_created`,
-        )
-        .all(...ids) ?? []) as { sid: string; data: string }[]
-      const byId = new Map<string, string[]>()
-      for (const row of rows) {
-        try {
-          const part = JSON.parse(row.data) as { type?: unknown; text?: unknown }
-          if (part?.type === "text" && typeof part.text === "string") {
-            const list = byId.get(row.sid) ?? []
-            list.push(part.text)
-            byId.set(row.sid, list)
-          }
-        } catch {}
+      for (let i = 0; i < ids.length; i += TRANSCRIPT_BATCH) {
+        const batch = ids.slice(i, i + TRANSCRIPT_BATCH)
+        const placeholders = batch.map(() => "?").join(",")
+        const rows = (db
+          .query(
+            `SELECT session_id AS sid, data FROM part WHERE session_id IN (${placeholders}) AND json_extract(data, '$.type') = 'text' ORDER BY time_created`,
+          )
+          .all(...batch) ?? []) as { sid: string; data: string }[]
+        for (const row of rows) addTranscript(index, row.sid, row.data)
+        for (const id of batch) remaining.delete(id)
+        indexed += batch.length
+        report(false)
+        await nextTick()
       }
-      for (const entry of targets) {
-        const text = (byId.get(entry.id) ?? []).join(" ").toLowerCase()
-        if (text) index.set(entry.id, `${index.get(entry.id)} ${text}`)
-      }
+    } catch {
+      // local store unavailable mid-walk; fall back to the remote path below
     } finally {
       db.close()
     }
-  } catch {
-    await buildSearchIndexRemote(api, targets, index)
   }
+
+  if (remaining.size > 0) {
+    await buildSearchIndexRemote(api, [...remaining], index, () => {
+      indexed += 1
+      report(false)
+    })
+  }
+  report(true)
   return index
 }
 
 async function buildSearchIndexRemote(
   api: TuiPluginApi,
-  targets: Entry[],
+  ids: string[],
   index: Map<string, string>,
+  onEach: () => void,
 ): Promise<void> {
   const home = process.env.HOME ?? ""
   const cacheDir = process.env.SESH_CACHE_DIR ?? `${home}/.cache/sesh`
-  await Promise.all(
-    targets.map(async (entry) => {
-      const base = index.get(entry.id) ?? ""
-      if (!SESSION_ID_PATTERN.test(entry.id)) return
+  let cursor = 0
+  // Bounded concurrency: a fixed worker pool instead of one request per session.
+  const worker = async () => {
+    for (;;) {
+      const i = cursor++
+      if (i >= ids.length) return
+      const id = ids[i]
+      const base = index.get(id) ?? ""
       try {
-        const raw = await readFile(`${cacheDir}/extractions/${entry.id}.json`, "utf8")
+        const raw = await readFile(`${cacheDir}/extractions/${id}.json`, "utf8")
         const record = JSON.parse(raw) as { fulltextLower?: unknown }
         const fulltext = typeof record?.fulltextLower === "string" ? record.fulltextLower : ""
-        index.set(entry.id, `${base} ${fulltext}`)
+        index.set(id, `${base} ${fulltext}`.trim())
       } catch {
         try {
-          const result = await api.client.session.messages({ sessionID: entry.id })
+          const result = await api.client.session.messages({ sessionID: id })
           const messages = result.data ?? []
           const text = messages
             .flatMap((message) =>
@@ -266,11 +335,13 @@ async function buildSearchIndexRemote(
             )
             .join(" ")
             .toLowerCase()
-          index.set(entry.id, `${base} ${text}`)
+          index.set(id, `${base} ${text}`.trim())
         } catch {}
       }
-    }),
-  )
+      onEach()
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(REMOTE_CONCURRENCY, ids.length) }, worker))
 }
 
 const TRANSCRIPT_PREVIEW_TURNS = 8
@@ -397,7 +468,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     let alive = true
     const load = async () => {
       try {
-        const all = await fetchEntries(props.api)
+        const { entries: all } = await fetchEntries(props.api)
         if (alive) setEntries(all)
       } catch {
         // leave the previous list in place rather than flashing to blank
@@ -469,7 +540,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
         directory: entry.dir || undefined,
       })
       if (result && "error" in result && result.error) throw result.error
-      const remaining = await fetchEntries(props.api)
+      const { entries: remaining } = await fetchEntries(props.api)
       if (remaining.some((item) => item.id === entry.id)) {
         setEntries(remaining)
         props.api.ui.toast({ message: "Session was not deleted", variant: "error" })
@@ -723,7 +794,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
     let alive = true
     const load = async () => {
       try {
-        const all = await fetchEntries(props.api)
+        const { entries: all } = await fetchEntries(props.api)
         if (alive) setEntries(all)
       } catch {}
     }
@@ -827,13 +898,14 @@ const tui: TuiPlugin = async (api) => {
     if (api.mode.current() !== BASE_MODE) return
     if (api.renderer.currentFocusedEditor === null) return
 
-    let entries: Entry[]
+    let entriesResult: EntryResult
     try {
-      entries = await fetchEntries(api)
+      entriesResult = await fetchEntries(api)
     } catch {
       api.ui.toast({ message: "Could not load sessions", variant: "error" })
       return
     }
+    const entries = entriesResult.entries
     if (entries.length === 0) {
       api.ui.toast({ message: "No sessions found", variant: "warning" })
       return
@@ -844,7 +916,12 @@ const tui: TuiPlugin = async (api) => {
     const [query, setQuery] = createSignal("")
     const [cursor, setCursor] = createSignal(0)
     const [searchIndex, setSearchIndex] = createSignal<Map<string, string>>(new Map())
-    void buildSearchIndex(api, entries).then(setSearchIndex)
+    const [indexProgress, setIndexProgress] = createSignal<IndexProgress>({
+      indexed: 0,
+      total: 0,
+      complete: false,
+    })
+    void buildSearchIndex(api, entries, setIndexProgress).then(setSearchIndex)
     let pickerInput: { value: string; isDestroyed?: boolean } | undefined
 
     type DialogRow = { kind: "group"; label: string; count: number } | { kind: "item"; entry: Entry }
@@ -867,6 +944,22 @@ const tui: TuiPlugin = async (api) => {
     })
 
     const selectableEntries = createMemo(() => matchedGroups().flatMap((g) => g.list))
+
+    // Visible bounding: say how much transcript text search actually covers and
+    // when the metadata walk hit its cap, instead of silently under-reporting.
+    const coverageLabel = createMemo(() => {
+      const progress = indexProgress()
+      const bits: string[] = []
+      if (progress.total > 0) {
+        bits.push(
+          progress.complete
+            ? `transcripts ${progress.total}`
+            : `indexing transcripts ${progress.indexed}/${progress.total}`,
+        )
+      }
+      if (entriesResult.truncated) bits.push(`showing newest ${entries.length}`)
+      return bits.join(" · ")
+    })
 
     createEffect(() => {
       const count = selectableEntries().length
@@ -1041,6 +1134,11 @@ const tui: TuiPlugin = async (api) => {
                 }}
               />
             </box>
+            <Show when={coverageLabel()}>
+              <box paddingTop={1}>
+                <text style={{ fg: api.theme.current.textMuted }}>{coverageLabel()}</text>
+              </box>
+            </Show>
           </box>
           <box
             flexDirection="column"

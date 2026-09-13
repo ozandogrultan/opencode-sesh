@@ -1,0 +1,137 @@
+#!/usr/bin/env node
+// Contract regressions for the TUI data layer (tui/sesh-panel.tsx): global
+// session pagination, full transcript-index coverage, bounded remote
+// concurrency, and progress reporting. The panel is TSX, so the pure data
+// functions are extracted and evaluated with stubbed client/readFile.
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..")
+
+let stripTypeScriptTypes
+try {
+  ;({ stripTypeScriptTypes } = await import("node:module"))
+} catch {}
+if (typeof stripTypeScriptTypes !== "function") {
+  console.log("tui data-layer tests skipped: Node lacks module.stripTypeScriptTypes")
+  process.exit(0)
+}
+
+function loadDataLayer() {
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const start = source.indexOf("function shortDir")
+  const end = source.indexOf("const TRANSCRIPT_PREVIEW_TURNS")
+  assert.ok(start >= 0 && end > start, "could not locate the TUI data layer; update this test")
+  const js = stripTypeScriptTypes(source.slice(start, end))
+  const factory = new Function(
+    "readFile",
+    "process",
+    "setTimeout",
+    `${js}
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH }`,
+  )
+  return factory(
+    async () => {
+      throw new Error("no local cache")
+    },
+    { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache" } },
+    setTimeout,
+  )
+}
+
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY } =
+  loadDataLayer()
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function sessionsFor(count, { spread = 1_000_000 } = {}) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `ses_${String(i).padStart(5, "0")}`,
+    title: `Session ${i}`,
+    directory: `/dir/${i % 7}`,
+    projectID: undefined,
+    parentID: undefined,
+    time: { updated: spread - i },
+  }))
+}
+
+function makeApi(sessions, { latency = 0 } = {}) {
+  const calls = { list: [], messages: 0, inFlight: 0, maxInFlight: 0 }
+  return {
+    calls,
+    client: {
+      project: { list: async () => ({ data: [] }) },
+      experimental: {
+        session: {
+          list: async ({ limit, cursor }) => {
+            calls.list.push({ limit, cursor })
+            const start = cursor === undefined ? 0 : sessions.findIndex((s) => s.time.updated === cursor) + 1
+            return { data: sessions.slice(start, start + limit) }
+          },
+        },
+      },
+      session: {
+        messages: async ({ sessionID }) => {
+          calls.messages += 1
+          calls.inFlight += 1
+          calls.maxInFlight = Math.max(calls.maxInFlight, calls.inFlight)
+          if (latency) await delay(latency)
+          calls.inFlight -= 1
+          return { data: [{ parts: [{ type: "text", text: `needle ${sessionID}` }] }] }
+        },
+      },
+    },
+  }
+}
+
+// Paginates past the old fixed 500-row window and keeps the tail.
+{
+  const api = makeApi(sessionsFor(501))
+  const { entries, truncated } = await fetchEntries(api)
+  assert.equal(entries.length, 501)
+  assert.equal(truncated, false)
+  assert.equal(api.calls.list.length, 3, "expected three pages")
+  assert.equal(api.calls.list[0].limit, SESSION_PAGE_LIMIT)
+  assert.equal(api.calls.list[0].cursor, undefined)
+  assert.equal(api.calls.list[1].cursor, 1_000_000 - (SESSION_PAGE_LIMIT - 1))
+  assert.equal(api.calls.list[2].cursor, 1_000_000 - (2 * SESSION_PAGE_LIMIT - 1))
+  assert.ok(entries.some((entry) => entry.id === "ses_00500"), "the 501st session must survive")
+}
+
+// Indexes transcripts beyond the old 150-session window.
+{
+  const api = makeApi(sessionsFor(200))
+  const progress = []
+  const index = await buildSearchIndex(api, (await fetchEntries(api)).entries, (p) => progress.push(p))
+  for (const id of ["ses_00150", "ses_00199"]) {
+    assert.ok(index.has(id), `${id} must be indexed`)
+    assert.match(index.get(id), new RegExp(`needle ${id}`))
+  }
+  assert.equal(progress.at(-1).complete, true)
+  assert.equal(progress.at(-1).indexed, progress.at(-1).total)
+  assert.equal(progress.at(-1).total, 200)
+}
+
+// Remote transcript fetches run in a bounded pool, not all at once.
+{
+  const api = makeApi(sessionsFor(64), { latency: 2 })
+  await buildSearchIndex(api, (await fetchEntries(api)).entries)
+  assert.ok(api.calls.messages >= 64, "every session should be fetched")
+  assert.ok(
+    api.calls.maxInFlight <= REMOTE_CONCURRENCY,
+    `concurrency ${api.calls.maxInFlight} exceeded ${REMOTE_CONCURRENCY}`,
+  )
+}
+
+// The metadata walk stops at its cap and reports the result as truncated.
+{
+  const huge = sessionsFor(SESSION_MAX + 10_000, { spread: 10_000_000 })
+  const api = makeApi(huge)
+  const { entries, truncated } = await fetchEntries(api)
+  assert.equal(entries.length, SESSION_MAX)
+  assert.equal(truncated, true)
+}
+
+console.log("tui data-layer tests passed")

@@ -108,6 +108,11 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;
   Ctrl-X deletes via the opencode CLI and removes the row only after the server
   confirms the deletion.
+- **Picker search:** pages the global session list (`SESSION_PAGE_LIMIT`, capped
+  at `SESSION_MAX` and reported when truncated) instead of a fixed 500-row
+  window, then indexes transcript text for **every** session in batches
+  (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
+  The header shows indexing progress/coverage. `tests/tui.mjs` locks this.
 
 ### Hard-won rules — do not regress
 

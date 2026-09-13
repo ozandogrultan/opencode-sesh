@@ -137,6 +137,11 @@ read -r id cwd < <(sesh --print --query "auth")
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search.
 
+The full picker pages through your whole global session list (no fixed window)
+and indexes transcript text for every session in the background, showing
+indexing progress under the search box. It only stops at a safety cap of 5,000
+sessions, and says so when it does.
+
 ## Configuration
 
 All variables are optional.

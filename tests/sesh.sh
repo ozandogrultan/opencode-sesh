@@ -277,8 +277,9 @@ HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh"
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then
   node "$PACKAGE_DIR/tests/agent-tool.mjs"
+  node "$PACKAGE_DIR/tests/tui.mjs"
 else
-  echo "sesh tests: node not found; skipping agent tool contract checks" >&2
+  echo "sesh tests: node not found; skipping agent tool and TUI data-layer checks" >&2
 fi
 
 echo "sesh tests passed"

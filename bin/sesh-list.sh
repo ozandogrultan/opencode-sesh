@@ -260,53 +260,71 @@ refresh() {
   "$JQ_BIN" -c '.stale[]?' "$cache_state" > "$needs_extract"
   while IFS= read -r cache; do [ -n "$cache" ] && rm -f "$cache"; done < <("$JQ_BIN" -r '.prune[]?' "$cache_state")
 
-  local sid dir title created updated partCount partMax raw_file text_file record cache
-  local extract_failed=0
+  local stale_ids=() sid chunk j i
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     sid=$(printf '%s' "$row" | "$JQ_BIN" -r '.id')
     valid_session_id "$sid" || continue
-    dir=$(printf '%s' "$row" | "$JQ_BIN" -r '.directory // ""')
-    title=$(printf '%s' "$row" | "$JQ_BIN" -r '.title // ""')
-    created=$(printf '%s' "$row" | "$JQ_BIN" -r '.time_created // 0')
-    updated=$(printf '%s' "$row" | "$JQ_BIN" -r '.time_updated // 0')
-    partCount=$(printf '%s' "$row" | "$JQ_BIN" -r '.partCount // 0')
-    partMax=$(printf '%s' "$row" | "$JQ_BIN" -r '.partMax // 0')
-    cache="$EXTRACTIONS/$sid.json"
-    raw_file="$scratch/$sid.parts.json"
-    text_file="$scratch/$sid.text"
-    # Text parts only: reasoning blobs and tool payloads would bloat the search
-    # index. The transcript travels through files, never argv, so a large
-    # conversation cannot hit ARG_MAX; a failure leaves the session uncached so
-    # the next refresh retries instead of certifying it fresh.
-    if db_json "SELECT data FROM part WHERE session_id = '$sid' AND json_extract(data, '\$.type') = 'text' ORDER BY time_created;" > "$raw_file" 2>/dev/null \
-      && "$JQ_BIN" -r '[.[]? | (.data? // empty) | (try fromjson catch empty) | select(type == "object" and .type == "text") | .text // empty] | join(" ")' "$raw_file" > "$text_file" 2>/dev/null; then
-      :
-    else
+    stale_ids+=("$sid")
+  done < "$needs_extract"
+
+  # Batch the transcript read: one SQL query per chunk of sessions and a single
+  # jq pass to assemble every record, instead of a query plus three jq processes
+  # per session. Text still travels through files, never argv. Any failure leaves
+  # every stale session uncached, so the next refresh retries them.
+  local extract_failed=0 parts_raw="$scratch/parts.jsonl" records="$scratch/records.jsonl"
+  : > "$parts_raw"
+  j=0
+  while [ "$j" -lt "${#stale_ids[@]}" ]; do
+    chunk=''
+    for ((i = j; i < j + 200 && i < ${#stale_ids[@]}; i++)); do
+      chunk="${chunk:+$chunk,}'${stale_ids[$i]}'"
+    done
+    if ! db_json "SELECT session_id, data FROM part WHERE session_id IN ($chunk) AND json_extract(data, '\$.type') = 'text' ORDER BY session_id, time_created;" 2>/dev/null \
+      | "$JQ_BIN" -c '.[]?' >> "$parts_raw"; then
       extract_failed=1
-      continue
+      break
     fi
-    if [ -z "$title" ]; then
-      title=$("$JQ_BIN" -Rrs 'gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end | select(length > 0) // "(untitled)"' "$text_file" 2>/dev/null) || title='(untitled)'
-      [ -n "$title" ] || title='(untitled)'
-    fi
-    record=$("$JQ_BIN" -cn --arg sid "$sid" --arg cwd "$dir" --arg title "$title" \
-      --argjson created "$created" --argjson updated "$updated" --argjson parts "$partCount" --argjson maxpart "$partMax" \
-      --rawfile text "$text_file" '
-      {cacheSchema: 2, cacheSession: $sid, cacheUpdated: $updated, cacheParts: $parts, cacheMax: $maxpart,
-       sessionId: $sid, transcriptPath: "", source: "opencode",
-       cwd: $cwd, title: ($title | gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end),
-       updatedEpoch: (($updated / 1000 | floor) | if . > 0 then . else ($created / 1000 | floor) end),
-       fulltextLower: (($title + " " + $text) | sub("\n$"; "") | ascii_downcase)}') || record=''
-    if [ -n "$record" ]; then
+    j=$((j + 200))
+  done
+
+  if [ "$extract_failed" = 0 ]; then
+    "$JQ_BIN" -cnr --arg extractions "$EXTRACTIONS" --slurpfile stale "$needs_extract" --slurpfile parts "$parts_raw" '
+      ($parts
+       | map({sid: .session_id,
+              text: ((.data | try fromjson catch null)
+                     | if type == "object" and .type == "text" and (.text | type) == "string" then .text else empty end)})
+       | group_by(.sid)
+       | map({key: .[0].sid, value: ([.[].text] | join(" "))})
+       | from_entries) as $bySid
+      | $stale[]
+      | select((.id | type) == "string" and (.id | test("^ses_[A-Za-z0-9]+$")))
+      | . as $s
+      | ($bySid[$s.id] // "") as $text
+      | (if ($s.title // "") == ""
+         then (($text | gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end) | select(length > 0) // "(untitled)")
+         else $s.title end) as $title
+      | {sessionId: $s.id,
+         cachePath: ($extractions + "/" + $s.id + ".json"),
+         record: {cacheSchema: 2, cacheSession: $s.id,
+                  cacheUpdated: ($s.time_updated // 0), cacheParts: ($s.partCount // 0), cacheMax: ($s.partMax // 0),
+                  sessionId: $s.id, transcriptPath: "", source: "opencode",
+                  cwd: ($s.directory // ""),
+                  title: ($title | gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end),
+                  updatedEpoch: ((($s.time_updated // 0) / 1000 | floor) | if . > 0 then . else ((($s.time_created // 0) / 1000) | floor) end),
+                  fulltextLower: (($title + " " + $text) | ascii_downcase)}}
+      | "\(.sessionId)\n\(.cachePath)\n\(.record | tojson)"' > "$records" || extract_failed=1
+  fi
+
+  if [ "$extract_failed" = 0 ]; then
+    while IFS= read -r sid && IFS= read -r cache_path && IFS= read -r record; do
+      [ -n "$sid" ] || continue
       cache_tmp=$(mktemp "$EXTRACTIONS/$sid.json.XXXXXX")
       printf '%s\n' "$record" > "$cache_tmp"
-      mv "$cache_tmp" "$cache"
+      mv "$cache_tmp" "$cache_path"
       printf '%s\n' "$record" >> "$historical"
-    else
-      extract_failed=1
-    fi
-  done < "$needs_extract"
+    done < "$records"
+  fi
 
   if ! "$JQ_BIN" -c --slurpfile hist "$historical" --arg scope "$SCOPE_CWD" --argjson limit "$LIMIT" --argjson archived "$INCLUDE_ARCHIVED" '
     .meta as $meta

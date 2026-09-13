@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-13
+
+### Changed
+
+- The TUI picker pages through the entire global session list instead of a
+  fixed 500-session window, indexes transcript text for every session (not just
+  the newest 150) in batches, bounds remote transcript fetching, and shows
+  indexing progress/coverage in the search header.
+- Transcript extraction reads parts in batches and assembles all records in a
+  single `jq` pass. A 250-session cold index dropped from about 28 s to about
+  7 s locally (warm ~0.3 s).
+
+### Added
+
+- TUI data-layer contract tests (pagination, full index coverage, bounded
+  concurrency, progress, and the truncated cap), run on Node 24 in CI.
+
 ## [0.1.5] - 2026-09-13
 
 ### Fixed
@@ -102,7 +119,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.2...v0.1.3
