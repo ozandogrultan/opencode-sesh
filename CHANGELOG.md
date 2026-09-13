@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-13
+
+### Fixed
+
+- Sidebar and home session titles are capped to a consistent width so long
+  names no longer run into the timestamp. Removed OpenTUI's `truncate` prop,
+  which middle-truncated the already-shortened titles.
+- The TUI picker no longer re-selects a session when the list scrolls under the
+  cursor, and its preview keeps the current transcript visible while the next
+  one loads instead of blanking on every cursor move.
+
+### Changed
+
+- Sidebar rows use muted `├`/`└` tree glyphs and directory headers get a blank
+  line, so sessions are grouped clearly: a gap between directories, tight rows
+  within one.
+- `npm install` and upgrades refresh an already-installed TUI panel
+  (`install.sh --sync-panel`), and `sesh --check` reports when the installed
+  panel is out of date. Because opencode imports plugins once at startup,
+  install now states that a full quit/reopen is required (a window reload reuses
+  the running process).
+
 ## [0.1.6] - 2026-09-13
 
 ### Changed
@@ -119,7 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.3...v0.1.4

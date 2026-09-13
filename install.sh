@@ -19,6 +19,7 @@ BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 INSTALL_TOOL=1
 INSTALL_TUI=1
 UNINSTALL=0
+SYNC_PANEL=0
 
 # Fallback plugin version for when the opencode CLI is unavailable; the
 # installer prefers the local opencode version so the panel matches its SDK.
@@ -43,6 +44,7 @@ Usage: bash install.sh [--bin-dir DIR] [--no-tool] [--no-tui] [--uninstall]
   --no-tool      Skip installing the sesh-list custom tool.
   --no-tui       Skip installing the in-TUI sessions panel plugin.
   --uninstall    Remove everything this script installed.
+  --sync-panel   Refresh an already-installed TUI panel only (used by postinstall).
   --help         Show this help.
 USAGE
 }
@@ -53,6 +55,7 @@ while [ "$#" -gt 0 ]; do
     --no-tool) INSTALL_TOOL=0; shift ;;
     --no-tui) INSTALL_TUI=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --sync-panel) SYNC_PANEL=1; shift ;;
     --help) usage; exit 0 ;;
     *) fail "unknown option: $1" ;;
   esac
@@ -110,6 +113,107 @@ launcher_is_ours() {
   [ -f "$target" ] && grep -qF 'Pick an opencode session' "$target" 2>/dev/null
 }
 
+install_file() {
+  local src=$1 dst=$2
+  mkdir -p "$(dirname "$dst")"
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    note "up to date $dst"
+    return 0
+  fi
+  if [ -f "$dst" ]; then
+    cp -p "$dst" "$dst.bak.$(date +%Y%m%d%H%M%S)"
+    note "backed up existing $(basename "$dst")"
+  fi
+  cp -p "$src" "$dst"
+  note "installed $dst"
+}
+
+install_tui_panel() {
+  install_file "$SOURCE_DIR/tui/sesh-panel.tsx" "$PANEL_DST"
+
+  local opencode_version='' raw_version='' plugin_version=''
+  if command -v opencode >/dev/null 2>&1; then
+    raw_version=$(opencode --version 2>/dev/null || true)
+    if [[ "$raw_version" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then opencode_version="${BASH_REMATCH[1]}"; fi
+  fi
+  plugin_version="${opencode_version:-$PLUGIN_VERSION_FALLBACK}"
+
+  # opencode has no persistent-sidebar API: the panel is an xlarge modal dialog
+  # (see tui/sesh-panel.tsx). Register it idempotently and drop the previous
+  # filename if an older install left it behind.
+  local tui_created=0 tui_tmp=''
+  if [ ! -f "$TUI_JSON" ]; then
+    printf '{\n  "$schema": "https://opencode.ai/tui.json",\n  "plugin": []\n}\n' > "$TUI_JSON"
+    tui_created=1
+    note "created $TUI_JSON"
+  fi
+  tui_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-tui.XXXXXX")
+  if jq '
+    (.plugin // []) as $plugins
+    | ($plugins | map(select(. != "./plugins/sessions-panel.tsx"))) as $clean
+    | .plugin = (if ($clean | index("./plugins/sesh-panel.tsx")) then $clean else $clean + ["./plugins/sesh-panel.tsx"] end)
+  ' "$TUI_JSON" > "$tui_tmp" 2>/dev/null; then
+    if cmp -s "$TUI_JSON" "$tui_tmp"; then
+      note "tui.json already registers the sesh panel"
+      rm -f "$tui_tmp"
+    else
+      [ "$tui_created" = 1 ] || cp -p "$TUI_JSON" "$TUI_JSON.bak.$(date +%Y%m%d%H%M%S)"
+      mv "$tui_tmp" "$TUI_JSON"
+      note "registered ./plugins/sesh-panel.tsx in tui.json"
+    fi
+  else
+    rm -f "$tui_tmp"
+    note "warning: could not update $TUI_JSON; add \"./plugins/sesh-panel.tsx\" to its plugin list by hand"
+  fi
+
+  # Local plugins resolve their imports from the config directory, and opencode
+  # runs `bun install` there at startup. Keep the required packages declared
+  # without clobbering versions the user already pinned.
+  local pkg_created=0 pkg_tmp=''
+  if [ ! -f "$PACKAGE_JSON" ]; then
+    printf '{\n  "dependencies": {}\n}\n' > "$PACKAGE_JSON"
+    pkg_created=1
+    note "created $PACKAGE_JSON"
+  fi
+  pkg_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-pkg.XXXXXX")
+  if jq --arg p "$plugin_version" --arg o "$OPENTUI_RANGE" --arg s "$SOLID_VERSION" '
+    .dependencies = ((.dependencies // {}) as $d
+      | {
+          "@opencode-ai/plugin": ($d["@opencode-ai/plugin"] // $p),
+          "@opentui/core": ($d["@opentui/core"] // $o),
+          "@opentui/keymap": ($d["@opentui/keymap"] // $o),
+          "@opentui/solid": ($d["@opentui/solid"] // $o),
+          "solid-js": ($d["solid-js"] // $s)
+        } + $d)
+  ' "$PACKAGE_JSON" > "$pkg_tmp" 2>/dev/null; then
+    if cmp -s "$PACKAGE_JSON" "$pkg_tmp"; then
+      note "plugin dependencies already present in $PACKAGE_JSON"
+      rm -f "$pkg_tmp"
+    else
+      [ "$pkg_created" = 1 ] || cp -p "$PACKAGE_JSON" "$PACKAGE_JSON.bak.$(date +%Y%m%d%H%M%S)"
+      mv "$pkg_tmp" "$PACKAGE_JSON"
+      note "declared plugin dependencies in $PACKAGE_JSON (opencode installs them on next start)"
+    fi
+  else
+    rm -f "$pkg_tmp"
+    note "warning: could not update $PACKAGE_JSON; the TUI panel may fail to load"
+  fi
+}
+
+# opencode imports plugins once at startup and has no hot reload, so a running
+# instance keeps the old panel until it is fully quit (reloading a window reuses
+# the same process). Say so explicitly and name the processes still holding it.
+note_restart() {
+  note "restart opencode to load the updated panel: quit it completely"
+  note "  (all windows and background processes), then reopen."
+  if command -v pgrep >/dev/null 2>&1; then
+    local pids
+    pids=$(pgrep -x opencode 2>/dev/null | tr '\n' ' ' | sed 's/ $//' || true)
+    [ -n "$pids" ] && note "  still running: opencode PID(s) $pids"
+  fi
+  return 0
+}
+
 if [ "$UNINSTALL" = 1 ]; then
   if [ -L "$LAUNCHER" ]; then
     if launcher_is_ours "$LAUNCHER"; then
@@ -140,6 +244,17 @@ for path in \
   [ -f "$SOURCE_DIR/$path" ] || fail "installer bundle is incomplete: missing $path."
 done
 
+if [ "$SYNC_PANEL" = 1 ]; then
+  # Postinstall path: refresh a panel the user already opted into, without
+  # touching the launcher or requiring fzf/sqlite. No-op when the panel is
+  # absent, so `npm install` never adds a TUI panel on its own.
+  [ -f "$PANEL_DST" ] || { note "sesh sidebar panel is not installed; nothing to sync."; exit 0; }
+  umask 077
+  install_tui_panel
+  note_restart
+  exit 0
+fi
+
 for tool in bash jq fzf; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool '$tool' is unavailable."
 done
@@ -166,103 +281,21 @@ fi
 ln -sfn "$SOURCE_DIR/bin/sesh" "$LAUNCHER"
 note "linked $LAUNCHER -> $SOURCE_DIR/bin/sesh"
 
-install_file() {
-  local src=$1 dst=$2
-  mkdir -p "$(dirname "$dst")"
-  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
-    note "up to date $dst"
-    return 0
-  fi
-  if [ -f "$dst" ]; then
-    cp -p "$dst" "$dst.bak.$(date +%Y%m%d%H%M%S)"
-    note "backed up existing $(basename "$dst")"
-  fi
-  cp -p "$src" "$dst"
-  note "installed $dst"
-}
-
 # Earlier versions shipped a markdown `/sesh` command that could only prompt the
 # agent; the TUI plugin now registers the slash itself. Drop the old file so the
 # two do not collide.
 remove_if_marker "$COMMAND_DST" "rich interactive picker" && note "removed obsolete markdown command $COMMAND_DST"
 [ "$INSTALL_TOOL" = 1 ] && install_file "$SOURCE_DIR/opencode/tools/sesh-list.ts" "$TOOL_DST"
 
-opencode_version=''
-if command -v opencode >/dev/null 2>&1; then
-  raw_version=$(opencode --version 2>/dev/null || true)
-  if [[ "$raw_version" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]]; then opencode_version="${BASH_REMATCH[1]}"; fi
-fi
-plugin_version="${opencode_version:-$PLUGIN_VERSION_FALLBACK}"
-
 if [ "$INSTALL_TUI" = 1 ]; then
-  install_file "$SOURCE_DIR/tui/sesh-panel.tsx" "$PANEL_DST"
-
-  # opencode has no persistent-sidebar API: the panel is an xlarge modal
-  # dialog (see tui/sesh-panel.tsx). Register it idempotently and drop the
-  # previous filename if an older install left it behind.
-  tui_created=0
-  if [ ! -f "$TUI_JSON" ]; then
-    printf '{\n  "$schema": "https://opencode.ai/tui.json",\n  "plugin": []\n}\n' > "$TUI_JSON"
-    tui_created=1
-    note "created $TUI_JSON"
-  fi
-  tui_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-tui.XXXXXX")
-  if jq '
-    (.plugin // []) as $plugins
-    | ($plugins | map(select(. != "./plugins/sessions-panel.tsx"))) as $clean
-    | .plugin = (if ($clean | index("./plugins/sesh-panel.tsx")) then $clean else $clean + ["./plugins/sesh-panel.tsx"] end)
-  ' "$TUI_JSON" > "$tui_tmp" 2>/dev/null; then
-    if cmp -s "$TUI_JSON" "$tui_tmp"; then
-      note "tui.json already registers the sesh panel"
-      rm -f "$tui_tmp"
-    else
-      [ "$tui_created" = 1 ] || cp -p "$TUI_JSON" "$TUI_JSON.bak.$(date +%Y%m%d%H%M%S)"
-      mv "$tui_tmp" "$TUI_JSON"
-      note "registered ./plugins/sesh-panel.tsx in tui.json"
-    fi
-  else
-    rm -f "$tui_tmp"
-    note "warning: could not update $TUI_JSON; add \"./plugins/sesh-panel.tsx\" to its plugin list by hand"
-  fi
-
-  # Local plugins resolve their imports from the config directory, and opencode
-  # runs `bun install` there at startup. Keep the required packages declared
-  # without clobbering versions the user already pinned.
-  pkg_created=0
-  if [ ! -f "$PACKAGE_JSON" ]; then
-    printf '{\n  "dependencies": {}\n}\n' > "$PACKAGE_JSON"
-    pkg_created=1
-    note "created $PACKAGE_JSON"
-  fi
-  pkg_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-pkg.XXXXXX")
-  if jq --arg p "$plugin_version" --arg o "$OPENTUI_RANGE" --arg s "$SOLID_VERSION" '
-    .dependencies = ((.dependencies // {}) as $d
-      | {
-          "@opencode-ai/plugin": ($d["@opencode-ai/plugin"] // $p),
-          "@opentui/core": ($d["@opentui/core"] // $o),
-          "@opentui/keymap": ($d["@opentui/keymap"] // $o),
-          "@opentui/solid": ($d["@opentui/solid"] // $o),
-          "solid-js": ($d["solid-js"] // $s)
-        } + $d)
-  ' "$PACKAGE_JSON" > "$pkg_tmp" 2>/dev/null; then
-    if cmp -s "$PACKAGE_JSON" "$pkg_tmp"; then
-      note "plugin dependencies already present in $PACKAGE_JSON"
-      rm -f "$pkg_tmp"
-    else
-      [ "$pkg_created" = 1 ] || cp -p "$PACKAGE_JSON" "$PACKAGE_JSON.bak.$(date +%Y%m%d%H%M%S)"
-      mv "$pkg_tmp" "$PACKAGE_JSON"
-      note "declared plugin dependencies in $PACKAGE_JSON (opencode installs them on next start)"
-    fi
-  else
-    rm -f "$pkg_tmp"
-    note "warning: could not update $PACKAGE_JSON; the TUI panel may fail to load"
-  fi
+  install_tui_panel
 fi
 
 "$LAUNCHER" --check || fail "post-install check failed."
 note "done"
 note "  picker:  run 'sesh' in any terminal, or '/sesh' inside opencode"
-note "  sidebar: restart opencode to load the panel (ctrl+o opens the full picker)"
+note "  sidebar: ctrl+o opens the full picker"
+note_restart
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) note "  note: $BIN_DIR is not on PATH; add it to use the launcher anywhere." ;;

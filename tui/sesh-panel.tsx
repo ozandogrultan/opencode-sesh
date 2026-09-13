@@ -130,6 +130,13 @@ function truncate(text: string, width: number): string {
   return text.slice(0, width - 1) + "…"
 }
 
+// Sidebar and home rows should read at a similar length. The sidebar title
+// column is ~2 chars narrower than the group column (status dot + timestamp),
+// so cap it a bit lower to guarantee separation.
+const SIDEBAR_TITLE_WIDTH = 27
+const SIDEBAR_GROUP_WIDTH = 30
+const HOME_TITLE_WIDTH = 30
+
 const SEARCH_KEYS = "abcdefghijklmnopqrstuvwxyz0123456789-_.@/+".split("")
 
 function searchBindings(append: (input: string) => void, exit: () => void) {
@@ -445,7 +452,7 @@ function createTranscriptPreview(api: TuiPluginApi) {
 
 type TreeRow =
   | { kind: "group"; dir: string; label: string; count: number }
-  | { kind: "item"; entry: Entry }
+  | { kind: "item"; entry: Entry; last: boolean }
 
 function SidebarSessions(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
@@ -504,7 +511,9 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     for (const group of ordered) {
       rows.push({ kind: "group", dir: group.dir, label: prettyDir(group.dir, home), count: group.list.length })
       if (collapsed()[group.dir]) continue
-      for (const entry of group.list) rows.push({ kind: "item", entry })
+      for (let i = 0; i < group.list.length; i++) {
+        rows.push({ kind: "item", entry: group.list[i], last: i === group.list.length - 1 })
+      }
     }
     return rows
   })
@@ -676,10 +685,10 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
           <For each={tree()}>
           {(row) =>
             row.kind === "group" ? (
-              <box flexDirection="row" onMouseDown={() => toggleGroup(row.dir)}>
+              <box flexDirection="row" paddingTop={1} onMouseDown={() => toggleGroup(row.dir)}>
                 <text flexGrow={1} flexShrink={1} wrapMode="none">
                   <span style={{ fg: theme().textMuted }}>{collapsed()[row.dir] ? "▸ " : "▾ "}</span>
-                  <b>{row.label}</b>
+                  <b>{truncate(row.label, SIDEBAR_GROUP_WIDTH)}</b>
                 </text>
                 <text flexShrink={0} style={{ fg: theme().textMuted }}>
                   {" "}({row.count})
@@ -700,14 +709,16 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
                 onMouseOut={() => setHovered(undefined)}
                 onMouseDown={() => props.api.route.navigate("session", { sessionID: row.entry.id })}
               >
-                <text
-                  flexShrink={0}
-                  style={{ fg: row.entry.id === currentID() ? theme().accent : statusColor(row.entry.id) }}
-                >
-                  {row.entry.id === currentID() ? "●" : "○"}
+                <text flexShrink={0}>
+                  <span style={{ fg: theme().textMuted }}>{row.last ? "└" : "├"}</span>
+                  <span
+                    style={{ fg: row.entry.id === currentID() ? theme().accent : statusColor(row.entry.id) }}
+                  >
+                    {row.entry.id === currentID() ? "●" : "○"}
+                  </span>
                 </text>
                 <text flexGrow={1} flexShrink={1} overflow="hidden" wrapMode="none" style={{ fg: theme().text }}>
-                  {row.entry.title}
+                  {truncate(row.entry.title, SIDEBAR_TITLE_WIDTH)}
                 </text>
                 <text flexShrink={0} style={{ fg: theme().textMuted }}>
                   {ago(row.entry.updated)}
@@ -865,7 +876,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
                 ○
               </text>
               <text flexGrow={1} flexShrink={1} overflow="hidden" wrapMode="none" style={{ fg: theme().text }}>
-                {truncate(entry.title, 52)}
+                {truncate(entry.title, HOME_TITLE_WIDTH)}
               </text>
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 {prettyDir(entry.dir, home)} · {ago(entry.updated)}
@@ -1032,7 +1043,8 @@ const tui: TuiPlugin = async (api) => {
         setPreviewText(cached)
         return
       }
-      setPreviewText("")
+      // Keep the previous transcript visible while the next one loads so the
+      // preview does not blink away on every cursor move.
       previewTimer = setTimeout(() => void loadPreview(id), 120)
     })
 
@@ -1167,10 +1179,6 @@ const tui: TuiPlugin = async (api) => {
                           ? api.theme.current.primary
                           : RGBA.fromInts(0, 0, 0, 0)
                       }
-                      onMouseOver={() => {
-                        const i = selectableEntries().findIndex((entry) => entry.id === row.entry.id)
-                        if (i >= 0 && i !== cursor()) setCursor(i)
-                      }}
                       onMouseDown={() => choose(row.entry)}
                     >
                       <Show when={row.entry.id === currentSessionID()}>

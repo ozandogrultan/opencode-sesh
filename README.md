@@ -68,7 +68,12 @@ file it would overwrite is backed up first.
 The npm package ships the same scripts and installer; the runtime tools below
 are still required.
 
-Restart opencode to load the panel, then:
+Fully quit opencode and reopen it to load the panel — opencode imports plugins
+once at startup, so reloading a window reuses the running process. Upgrades
+refresh an already-installed panel automatically (the npm `postinstall` syncs
+it), and `sesh --check` reports when the installed panel is out of date.
+
+Then:
 
 ```bash
 sesh              # terminal picker

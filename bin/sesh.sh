@@ -38,6 +38,18 @@ fi
 if [ "${1:-}" = --check ]; then
   "$SESH_JQ" -en '"2026-01-01T00:00:00Z" | fromdateiso8601 | type == "number"' >/dev/null || { echo 'jq capability check failed' >&2; exit 1; }
   command -v sqlite3 >/dev/null 2>&1 || command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'neither sqlite3 nor opencode is available' >&2; exit 1; }
+  # The TUI panel is a copied file that opencode imports once at startup. Report
+  # when the installed copy has fallen behind this package so upgrades are not
+  # silently stale.
+  panel_bundled="$SCRIPT_DIR/../tui/sesh-panel.tsx"
+  panel_installed="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/sesh-panel.tsx"
+  if [ -f "$panel_installed" ] && [ -f "$panel_bundled" ]; then
+    if cmp -s "$panel_bundled" "$panel_installed"; then
+      echo 'sesh: sidebar panel is current'
+    else
+      echo 'sesh: sidebar panel is out of date; run `sesh install`, then fully quit and reopen opencode' >&2
+    fi
+  fi
   echo 'sesh: dependencies ready'
   exit 0
 fi
