@@ -50,9 +50,12 @@ the schema below. Keystrokes never touch the database:
 
 - `--refresh` (expensive): bulk-reads session metadata and per-session text
   parts, validates the persistent extraction cache
-  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`) against `time_updated` + part
-  count, re-extracts only changed sessions, prunes vanished ones, and atomically
-  publishes `STATE_DIR/snapshot.jsonl` with `status = fresh`. Scope
+  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`, schema 2) against `time_updated`,
+  part count and the latest part timestamp, re-extracts only changed sessions,
+  prunes vanished ones, and atomically publishes `STATE_DIR/snapshot.jsonl`.
+  Extraction moves transcripts through files, never argv (no ARG_MAX limit); if
+  any session fails, the published status is `stale` and that session stays
+  uncached so the next refresh retries, otherwise `status = fresh`. Scope
   (`--cwd`/toggle) and `--limit` apply at assembly, so metadata always covers
   the whole DB and pruning is always safe.
 - render (cheap, pure `jq`): reads the snapshot only. Filters on `searchText`
@@ -78,7 +81,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - **Text parts only** in search/preview; reasoning and tool payloads are
   excluded (asserted in tests).
 - Validate session ids (`^ses_[A-Za-z0-9]+$`) before SQL interpolation — never
-  interpolate unvalidated input.
+  interpolate unvalidated input. Open SQLite read-only (`sqlite3 -readonly`).
 - Prefer direct `sqlite3` over `opencode db` (startup latency). Never parse
   `sqlite3 -json` in `-R` mode; it pretty-prints — parse as JSON.
 - `jq -R` output stays JSON-quoted: use `-Rr` when a shell variable needs the

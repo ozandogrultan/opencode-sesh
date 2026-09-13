@@ -177,6 +177,103 @@ missing="$fixture/missing"
 "$list" --refresh --state-dir "$missing" > "$fixture/missing.tsv"
 [ "$(cat "$missing/status")" = 'unavailable: opencode database is unavailable' ]
 
+# --- P2 regressions -------------------------------------------------------
+
+# Step 10 repointed SESH_DB at a missing file; the P2 checks use the fixture.
+export SESH_DB="$fixture/opencode.db"
+
+# 11. Transcript indexing is not bounded by ARG_MAX (P2): a >1 MB text part must
+# be searchable rather than silently dropped.
+p2_state="$fixture/p2-state"
+{
+  printf '{"type":"text","text":"p2_large_needle '
+  head -c 1100000 /dev/zero | tr '\000' 'x'
+  printf '"}'
+} > "$fixture/big-part.json"
+{
+  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_big', '$one', 'Big', 1900000000000, 1900000000000, NULL);"
+  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-big', 'ses_big', 1900000000000, 1900000000000, '{\"role\":\"user\"}');"
+  printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-big', 'm-big', 'ses_big', 1900000000000, 1900000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/big-part.json"
+} > "$fixture/big.sql"
+sqlite3 "$SESH_DB" < "$fixture/big.sql"
+"$list" --refresh --state-dir "$p2_state" > /dev/null
+[ "$(cat "$p2_state/status")" = fresh ]
+"$list" --state-dir "$p2_state" --query "p2_large_needle" > "$fixture/big.tsv"
+grep -Fq 'ses_big' "$fixture/big.tsv"
+
+# 12. A part-only update (text + part timestamp, same session timestamp and part
+# count) invalidates the warm cache (P2).
+sqlite3 "$SESH_DB" "UPDATE part SET data = json_set(data, '\$.text', 'p2_updated_text'), time_updated = 1950000000000 WHERE id = 'p-msg_a2';"
+"$list" --refresh --state-dir "$p2_state" > /dev/null
+[ "$(cat "$p2_state/status")" = fresh ]
+"$list" --state-dir "$p2_state" --query "p2_updated_text" > "$fixture/upd.tsv"
+grep -Fq 'ses_alpha' "$fixture/upd.tsv"
+"$list" --state-dir "$p2_state" --query "ranking fixed and tested" > "$fixture/oldpart.tsv"
+grep -Fq 'ses_alpha' "$fixture/oldpart.tsv" && { echo "stale cache kept old part text" >&2; exit 1; }
+
+# 13. Preview filters text parts before its row limit (P2): an old text part
+# behind 201 newer tool parts must still render.
+{
+  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_toolheavy', '$one', 'Tool heavy', 2000000000000, 2000000000000, NULL);"
+  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"role\":\"assistant\"}');"
+  echo "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th', 'm-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"type\":\"text\",\"text\":\"preview_text_before_limit\"}');"
+  i=0
+  while [ "$i" -lt 201 ]; do
+    i=$((i + 1))
+    printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th-%s', 'm-th', 'ses_toolheavy', %s, %s, '{\"type\":\"tool\",\"text\":\"ignored\"}');\n" "$i" "$((2000000000000 + i))" "$((2000000000000 + i))"
+  done
+} > "$fixture/toolheavy.sql"
+sqlite3 "$SESH_DB" < "$fixture/toolheavy.sql"
+"$list" --refresh --state-dir "$p2_state" > /dev/null
+"$preview" "$p2_state" 'ses_toolheavy' > "$fixture/toolheavy.preview"
+grep -Fq 'preview_text_before_limit' "$fixture/toolheavy.preview"
+
+# 14. A long single message renders without a SIGPIPE-blanked preview (P2).
+seq 1 1000 | sed 's/^/longline /' > "$fixture/long.txt"
+jq -Rn --rawfile t "$fixture/long.txt" '{type:"text",text:$t}' > "$fixture/long-part.json"
+{
+  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_long', '$two', 'Long', 2100000000000, 2100000000000, NULL);"
+  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-long', 'ses_long', 2100000000000, 2100000000000, '{\"role\":\"user\"}');"
+  printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-long', 'm-long', 'ses_long', 2100000000000, 2100000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/long-part.json"
+} > "$fixture/long.sql"
+sqlite3 "$SESH_DB" < "$fixture/long.sql"
+"$list" --refresh --state-dir "$p2_state" > /dev/null
+"$preview" "$p2_state" 'ses_long' > "$fixture/long.preview"
+grep -Fq 'longline 1000' "$fixture/long.preview"
+
+# 15. A malformed session id never reaches SQL (P2).
+inj_state="$fixture/inj-state"; mkdir -p "$inj_state"
+bad_sid="ses_x' OR 1=1 --"
+jq -cn --arg sid "$bad_sid" '{sessionId:$sid,cwd:"/tmp",title:"x"}' > "$inj_state/snapshot.jsonl"
+"$preview" "$inj_state" "$bad_sid" > "$fixture/inj.preview"
+[ "$(cat "$fixture/inj.preview")" = "(no transcript for this row)" ]
+
+# 16. An empty store publishes an empty fresh snapshot and prunes caches (P2).
+export SESH_DB="$fixture/opencode.db"
+sqlite3 "$SESH_DB" "DELETE FROM part; DELETE FROM message; DELETE FROM session;"
+empty_state="$fixture/empty-state"
+"$list" --refresh --state-dir "$empty_state" > /dev/null
+[ "$(cat "$empty_state/status")" = fresh ]
+[ ! -s "$empty_state/snapshot.jsonl" ]
+[ ! -e "$SESH_CACHE_DIR/extractions/ses_alpha.json" ]
+
+# 17. The installer never replaces or removes a foreign launcher symlink (P2).
+inst_home="$fixture/inst-home"; mkdir -p "$inst_home/bin" "$inst_home/fakebin"
+printf '#!/bin/bash\n[ "${1:-}" = --version ] && echo 0.74.3\n' > "$inst_home/fakebin/fzf"
+chmod +x "$inst_home/fakebin/fzf"
+ln -s /bin/ls "$inst_home/bin/sesh"
+if HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > "$fixture/inst.out" 2>&1; then
+  echo "installer replaced a foreign launcher" >&2; exit 1
+fi
+grep -Fq 'not a sesh install' "$fixture/inst.out"
+[ "$(readlink "$inst_home/bin/sesh")" = /bin/ls ]
+rm -f "$inst_home/bin/sesh"
+HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > /dev/null 2>&1
+[ "$(readlink "$inst_home/bin/sesh")" = "$PACKAGE_DIR/bin/sesh" ]
+rm -f "$inst_home/bin/sesh"; ln -s /bin/ls "$inst_home/bin/sesh"
+HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --uninstall > /dev/null 2>&1
+[ -L "$inst_home/bin/sesh" ] && [ "$(readlink "$inst_home/bin/sesh")" = /bin/ls ] || { echo "uninstall removed a foreign launcher" >&2; exit 1; }
+
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then
   node "$PACKAGE_DIR/tests/agent-tool.mjs"

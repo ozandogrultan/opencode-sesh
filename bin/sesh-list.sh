@@ -95,7 +95,9 @@ fi
 # would make every preview keystroke laggy.
 db_json() {
   if [ -n "$SQLITE_BIN" ]; then
-    "$SQLITE_BIN" -json "$DB_PATH" "$1"
+    # Read-only: sesh never writes the store directly (deletes go through
+    # `opencode session delete`).
+    "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"
   else
     "$OPENCODE_BIN" db "$1" --format json
   fi
@@ -243,11 +245,11 @@ refresh() {
     | ($parts[0] | map({key:.session_id, value:.}) | from_entries) as $stats
     | [$sessions[0][] | . + {partCount: ($stats[.id].n // 0), partMax: ($stats[.id].m // 0)}] as $meta
     | ($meta | map({key:.id, value:.}) | from_entries) as $byId
-    | [$caches[0][]? | select(.cacheSchema == 1 and (.sessionId | type) == "string")
-       | select($byId[.sessionId] as $m | $m != null and .cacheUpdated == $m.time_updated and .cacheParts == $m.partCount)] as $cached
-    | ($cached | map({key:.sessionId, value:true}) | from_entries) as $cachedIds
+    | [$caches[0][]? | select(.cacheSchema == 2 and (.sessionId | type) == "string")
+       | select($byId[.sessionId] as $m | $m != null and .cacheUpdated == $m.time_updated and .cacheParts == $m.partCount and .cacheMax == $m.partMax)] as $cached
+    | ($cached | map({key: .sessionId, value:true}) | from_entries) as $cachedIds
     | {cached: $cached,
-       stale: [$meta[] | select($cachedIds[.id] != true) | {id, directory, title, time_created, time_updated, archived, partCount}],
+       stale: [$meta[] | select($cachedIds[.id] != true) | {id, directory, title, time_created, time_updated, archived, partCount, partMax}],
        prune: [$caches[0][]? | select(.sessionId? as $s | $byId[$s] == null) | .cachePath],
        meta: $meta}
   ' "$cache_records" > "$cache_state" || {
@@ -258,7 +260,8 @@ refresh() {
   "$JQ_BIN" -c '.stale[]?' "$cache_state" > "$needs_extract"
   while IFS= read -r cache; do [ -n "$cache" ] && rm -f "$cache"; done < <("$JQ_BIN" -r '.prune[]?' "$cache_state")
 
-  local sid dir title created updated archived partCount text fulltext record cache
+  local sid dir title created updated partCount partMax raw_file text_file record cache
+  local extract_failed=0
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     sid=$(printf '%s' "$row" | "$JQ_BIN" -r '.id')
@@ -268,28 +271,40 @@ refresh() {
     created=$(printf '%s' "$row" | "$JQ_BIN" -r '.time_created // 0')
     updated=$(printf '%s' "$row" | "$JQ_BIN" -r '.time_updated // 0')
     partCount=$(printf '%s' "$row" | "$JQ_BIN" -r '.partCount // 0')
+    partMax=$(printf '%s' "$row" | "$JQ_BIN" -r '.partMax // 0')
     cache="$EXTRACTIONS/$sid.json"
-    # Text parts only: reasoning blobs and tool payloads would bloat the
-    # search index without helping anyone find a session.
-    text=$(db_json "SELECT data FROM part WHERE session_id = '$sid' AND json_extract(data, '\$.type') = 'text' ORDER BY time_created;" 2>/dev/null \
-      | "$JQ_BIN" -r '[.[]? | (.data? // empty) | (try fromjson catch empty) | select(type == "object" and .type == "text") | .text // empty] | join(" ")' 2>/dev/null) || text=''
-    fulltext=$(printf '%s' "$title $text" | "$JQ_BIN" -Rrs 'ascii_downcase' 2>/dev/null) || fulltext=''
+    raw_file="$scratch/$sid.parts.json"
+    text_file="$scratch/$sid.text"
+    # Text parts only: reasoning blobs and tool payloads would bloat the search
+    # index. The transcript travels through files, never argv, so a large
+    # conversation cannot hit ARG_MAX; a failure leaves the session uncached so
+    # the next refresh retries instead of certifying it fresh.
+    if db_json "SELECT data FROM part WHERE session_id = '$sid' AND json_extract(data, '\$.type') = 'text' ORDER BY time_created;" > "$raw_file" 2>/dev/null \
+      && "$JQ_BIN" -r '[.[]? | (.data? // empty) | (try fromjson catch empty) | select(type == "object" and .type == "text") | .text // empty] | join(" ")' "$raw_file" > "$text_file" 2>/dev/null; then
+      :
+    else
+      extract_failed=1
+      continue
+    fi
     if [ -z "$title" ]; then
-      title=$(printf '%s' "$text" | "$JQ_BIN" -Rrs 'gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end | select(length > 0) // "(untitled)"' 2>/dev/null) || title='(untitled)'
+      title=$("$JQ_BIN" -Rrs 'gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end | select(length > 0) // "(untitled)"' "$text_file" 2>/dev/null) || title='(untitled)'
       [ -n "$title" ] || title='(untitled)'
     fi
     record=$("$JQ_BIN" -cn --arg sid "$sid" --arg cwd "$dir" --arg title "$title" \
-      --argjson created "$created" --argjson updated "$updated" --argjson parts "$partCount" --arg fulltext "$fulltext" '
-      {cacheSchema: 1, cacheSession: $sid, cacheUpdated: $updated, cacheParts: $parts,
+      --argjson created "$created" --argjson updated "$updated" --argjson parts "$partCount" --argjson maxpart "$partMax" \
+      --rawfile text "$text_file" '
+      {cacheSchema: 2, cacheSession: $sid, cacheUpdated: $updated, cacheParts: $parts, cacheMax: $maxpart,
        sessionId: $sid, transcriptPath: "", source: "opencode",
        cwd: $cwd, title: ($title | gsub("[\r\n]+"; " ") | if length > 70 then .[0:67] + "..." else . end),
        updatedEpoch: (($updated / 1000 | floor) | if . > 0 then . else ($created / 1000 | floor) end),
-       fulltextLower: $fulltext}') || record=''
+       fulltextLower: (($title + " " + $text) | sub("\n$"; "") | ascii_downcase)}') || record=''
     if [ -n "$record" ]; then
       cache_tmp=$(mktemp "$EXTRACTIONS/$sid.json.XXXXXX")
       printf '%s\n' "$record" > "$cache_tmp"
       mv "$cache_tmp" "$cache"
       printf '%s\n' "$record" >> "$historical"
+    else
+      extract_failed=1
     fi
   done < "$needs_extract"
 
@@ -297,6 +312,7 @@ refresh() {
     .meta as $meta
     | ($hist | map({key: .sessionId, value: .}) | from_entries) as $histById
     | [$meta[]
+       | select((.id | type) == "string" and (.id | test("^ses_[A-Za-z0-9]+$")))
        | select($archived == 1 or .archived == 0)
        | select($scope == "" or .directory == $scope)
        | . as $m | ($histById[$m.id] // {}) as $h
@@ -313,7 +329,13 @@ refresh() {
     return 1
   fi
   mv -f "$out" "$SNAPSHOT"
-  set_status fresh || true
+  if [ "$extract_failed" = 1 ]; then
+    # Publish what we have, but say the index is incomplete and keep the
+    # failed sessions uncached so the next refresh retries them.
+    set_status 'stale: transcript extraction incomplete; refresh to retry' || true
+  else
+    set_status fresh || true
+  fi
 }
 
 if [ "$REFRESH" = 1 ] || [ "$TOGGLE_SCOPE" = 1 ]; then refresh; fi

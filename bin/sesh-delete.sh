@@ -37,7 +37,7 @@ acquire_lock() {
 # fzf passes an empty second field for headers and notices. They are never
 # actions, and should not surface a misleading failure prompt.
 [ -n "$session_id" ] || exit 0
-case "$session_id" in ses_[A-Za-z0-9]*) ;; *) echo "Invalid session identity."; pause; exit 0;; esac
+[[ "$session_id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Invalid session identity."; pause; exit 0; }
 [ -n "$state_dir" ] && [ -f "$snapshot" ] || { echo "No session snapshot available."; pause; exit 0; }
 
 # Serialize this action with the sole snapshot publisher. A short collision

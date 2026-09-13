@@ -10,7 +10,7 @@ JQ_BIN=${SESH_JQ:-jq}
 
 [ -n "$state_dir" ] && [ -n "$session_id" ] || { echo "(no session selected)"; exit 0; }
 [ -f "$snapshot" ] || { echo "(no session snapshot available)"; exit 0; }
-case "$session_id" in ses_[A-Za-z0-9]*) ;; *) echo "(no transcript for this row)"; exit 0;; esac
+[[ "$session_id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "(no transcript for this row)"; exit 0; }
 "$JQ_BIN" -se --arg sid "$session_id" 'any(.sessionId == $sid)' "$snapshot" >/dev/null 2>&1 \
   || { echo "(selected session is no longer in this snapshot)"; exit 0; }
 
@@ -26,26 +26,31 @@ fi
 
 SQLITE_BIN=${SESH_SQLITE:-}
 if [ -z "$SQLITE_BIN" ] && command -v sqlite3 >/dev/null 2>&1; then SQLITE_BIN=sqlite3; fi
-SQL="SELECT m.data AS msg, p.data AS part FROM part p JOIN message m ON m.id = p.message_id WHERE p.session_id = '$session_id' ORDER BY p.time_created DESC LIMIT 200;"
+SQL="SELECT m.data AS msg, p.data AS part FROM part p JOIN message m ON m.id = p.message_id WHERE p.session_id = '$session_id' AND json_extract(p.data, '\$.type') = 'text' ORDER BY p.time_created DESC LIMIT 200;"
 if [ -n "$SQLITE_BIN" ]; then
-  rows=$("$SQLITE_BIN" -json "$DB_PATH" "$SQL" 2>/dev/null) || rows=''
+  rows=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$SQL" 2>/dev/null) || rows=''
 else
   OPENCODE_BIN=${SESH_OPENCODE:-opencode}
   rows=$("$OPENCODE_BIN" db "$SQL" --format json 2>/dev/null) || rows=''
 fi
 [ -n "$rows" ] || { echo "(no displayable transcript messages)"; exit 0; }
 
-# Text parts only, newest first, with role headers. Control bytes are stripped
-# with tr (byte-safe for UTF-8: only 0x00-0x1F and 0x7F are removed).
+# Text parts only, newest first, with role headers. The 120-block cap is applied
+# inside jq so nothing closes the pipe early (a `head` here would trip pipefail
+# with SIGPIPE and blank the preview). Control bytes are stripped with tr
+# (byte-safe for UTF-8: only 0x00-0x1F and 0x7F are removed).
 rendered=$(printf '%s' "$rows" | "$JQ_BIN" -r '
   (if type == "array" then . else [] end)
+  | map(
+      ((.msg | try fromjson catch {}) | .role? // "") as $role
+      | (.part | try fromjson catch {}) as $p
+      | select(($p.type? // "") == "text")
+      | ($p.text? // "") | select(type == "string" and length > 0)
+      | (if $role == "user" then "# You" elif $role == "assistant" then "# Opencode" else "# Message" end) + "\n\n" + .
+    )
+  | .[0:120]
   | .[]
-  | ((.msg | try fromjson catch {}) | .role? // "") as $role
-  | (.part | try fromjson catch {}) as $p
-  | select(($p.type? // "") == "text")
-  | ($p.text? // "") | select(type == "string" and length > 0)
-  | (if $role == "user" then "# You" elif $role == "assistant" then "# Opencode" else "# Message" end) + "\n\n" + .
-' 2>/dev/null | tr -d '\000-\010\013\014\016-\037\177' | head -120) || rendered=''
+' 2>/dev/null | tr -d '\000-\010\013\014\016-\037\177') || rendered=''
 [ -n "$rendered" ] || { echo "(no displayable transcript messages)"; exit 0; }
 
 resolve_glow() {

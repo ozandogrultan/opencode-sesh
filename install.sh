@@ -91,8 +91,33 @@ remove_tui_entry() {
   fi
 }
 
+# The launcher is a symlink we create. Treat it as ours only when it resolves to
+# a sesh launcher, so a foreign symlink is never replaced on install nor deleted
+# on uninstall. Recognized by the exact source path, a `.../bin/sesh` target, or
+# the marker in the target file (covers npm upgrades and a moved checkout).
+launcher_is_ours() {
+  local link=$1 target
+  [ -L "$link" ] || return 1
+  target=$(readlink "$link" 2>/dev/null) || return 1
+  [ -n "$target" ] || return 1
+  case "$target" in
+    /*) ;;
+    *) target="$(cd "$(dirname "$link")" && pwd -P)/$target" ;;
+  esac
+  case "$target" in
+    "$SOURCE_DIR/bin/sesh"|*/bin/sesh) return 0 ;;
+  esac
+  [ -f "$target" ] && grep -qF 'Pick an opencode session' "$target" 2>/dev/null
+}
+
 if [ "$UNINSTALL" = 1 ]; then
-  [ -L "$LAUNCHER" ] && rm -f "$LAUNCHER" && note "removed $LAUNCHER"
+  if [ -L "$LAUNCHER" ]; then
+    if launcher_is_ours "$LAUNCHER"; then
+      rm -f "$LAUNCHER" && note "removed $LAUNCHER"
+    else
+      note "left $LAUNCHER untouched (not a sesh launcher: $(readlink "$LAUNCHER" 2>/dev/null))"
+    fi
+  fi
   remove_if_marker "$COMMAND_DST" "rich interactive picker" && note "removed $COMMAND_DST"
   remove_if_marker "$TOOL_DST" "list opencode sessions for the agent" && note "removed $TOOL_DST"
   remove_if_marker "$PANEL_DST" "@jsxImportSource @opentui/solid" && note "removed $PANEL_DST"
@@ -134,6 +159,9 @@ umask 077
 mkdir -p "$BIN_DIR"
 if [ -e "$LAUNCHER" ] && [ ! -L "$LAUNCHER" ]; then
   fail "$LAUNCHER already exists and is not a symlink. Move it aside, then retry."
+fi
+if [ -L "$LAUNCHER" ] && ! launcher_is_ours "$LAUNCHER"; then
+  fail "$LAUNCHER is a symlink to $(readlink "$LAUNCHER" 2>/dev/null), which is not a sesh install. Move it aside, then retry."
 fi
 ln -sfn "$SOURCE_DIR/bin/sesh" "$LAUNCHER"
 note "linked $LAUNCHER -> $SOURCE_DIR/bin/sesh"

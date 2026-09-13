@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-13
+
+### Fixed
+
+- Transcript indexing no longer puts the whole conversation on the command line,
+  so large sessions (over a megabyte of text) are indexed instead of silently
+  dropped. A failed extraction now reports the snapshot as `stale` and retries
+  on the next refresh rather than certifying an incomplete index as fresh.
+- Transcript preview renders text parts even when newer tool parts outnumber
+  them, and a long message no longer blanks the preview when the output pipe
+  closes early.
+- Warm extraction caches are invalidated on any part change (text or timestamp),
+  not only when the session timestamp or part count moves.
+- The installer refuses to replace a symlinked `sesh` launcher that is not a
+  sesh install, and uninstall leaves foreign launcher symlinks untouched.
+
+### Security
+
+- Session ids are validated with the anchored `^ses_[A-Za-z0-9]+$` pattern at
+  the preview and deletion boundaries before any SQL, and the local SQLite store
+  is opened read-only.
+
+### Added
+
+- Regression coverage for large transcripts, part-only cache invalidation,
+  preview text/tool ordering and long previews, malformed session ids, empty
+  stores, and installer launcher ownership.
+
 ## [0.1.4] - 2026-09-13
 
 ### Fixed
@@ -74,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.1...v0.1.2
