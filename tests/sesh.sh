@@ -262,25 +262,25 @@ inst_home="$fixture/inst-home"; mkdir -p "$inst_home/bin" "$inst_home/fakebin"
 printf '#!/bin/bash\n[ "${1:-}" = --version ] && echo 0.74.3\n' > "$inst_home/fakebin/fzf"
 chmod +x "$inst_home/fakebin/fzf"
 ln -s /bin/ls "$inst_home/bin/sesh"
-if HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > "$fixture/inst.out" 2>&1; then
+if XDG_CONFIG_HOME="$inst_home/.config" HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > "$fixture/inst.out" 2>&1; then
   echo "installer replaced a foreign launcher" >&2; exit 1
 fi
 grep -Fq 'not a sesh install' "$fixture/inst.out"
 [ "$(readlink "$inst_home/bin/sesh")" = /bin/ls ]
 rm -f "$inst_home/bin/sesh"
-HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > /dev/null 2>&1
+XDG_CONFIG_HOME="$inst_home/.config" HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --no-tool --no-tui > /dev/null 2>&1
 [ "$(readlink "$inst_home/bin/sesh")" = "$PACKAGE_DIR/bin/sesh" ]
 rm -f "$inst_home/bin/sesh"; ln -s /bin/ls "$inst_home/bin/sesh"
-HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --uninstall > /dev/null 2>&1
+XDG_CONFIG_HOME="$inst_home/.config" HOME="$inst_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$inst_home/bin" --uninstall > /dev/null 2>&1
 [ -L "$inst_home/bin/sesh" ] && [ "$(readlink "$inst_home/bin/sesh")" = /bin/ls ] || { echo "uninstall removed a foreign launcher" >&2; exit 1; }
 
 # 18. postinstall `--sync-panel` refreshes an existing panel (so npm upgrades
 # are not stale) and is a no-op when no panel is installed.
 sync_home="$fixture/sync-home"; mkdir -p "$sync_home"
-HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --sync-panel > "$fixture/sync-noop.out" 2>&1
+XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --sync-panel > "$fixture/sync-noop.out" 2>&1
 grep -Fq 'not installed' "$fixture/sync-noop.out"
 [ ! -e "$sync_home/.config/opencode/plugins/sesh-panel.tsx" ]
-HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
+XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
 panel="$sync_home/.config/opencode/plugins/sesh-panel.tsx"
 [ -f "$panel" ]
 cp "$panel" "$fixture/panel.orig"
@@ -288,7 +288,7 @@ printf '\n// stale marker\n' >> "$panel"
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" SESH_FZF="$inst_home/fakebin/fzf" SESH_JQ="$SESH_JQ" SESH_SQLITE="$SESH_SQLITE" \
   bash "$PACKAGE_DIR/bin/sesh.sh" --check > "$fixture/check-stale.out" 2>&1 || true
 grep -Fq 'out of date' "$fixture/check-stale.out"
-HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --sync-panel > "$fixture/sync.out" 2>&1
+XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --sync-panel > "$fixture/sync.out" 2>&1
 cmp -s "$panel" "$fixture/panel.orig" || { echo "sync-panel did not restore the panel" >&2; exit 1; }
 grep -Fq 'restart opencode' "$fixture/sync.out"
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" SESH_FZF="$inst_home/fakebin/fzf" SESH_JQ="$SESH_JQ" SESH_SQLITE="$SESH_SQLITE" \
