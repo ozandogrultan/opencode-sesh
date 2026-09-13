@@ -82,7 +82,7 @@ ctrl+o            # inside opencode — picker
 ### Requirements
 
 - [opencode](https://opencode.ai), used at least once
-- `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) `>= 0.52`
+- `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) `>= 0.73`
 - `sqlite3` recommended — the picker queries the session DB directly in
   milliseconds and falls back to the slower `opencode db` CLI without it
 - [`glow`](https://github.com/charmbracelet/glow) optional — styles the
@@ -104,7 +104,7 @@ bash install.sh --uninstall   # from source
 | --- | --- |
 | Type | Search titles and transcript text across all directories |
 | Enter | Resume the selected session in this terminal |
-| Ctrl-F Enter | Resume as a fork (the original is untouched) |
+| Ctrl-F       | Resume as a fork (the original is untouched) |
 | Ctrl-G | Toggle current-directory scope / all sessions |
 | Space (empty query) | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |

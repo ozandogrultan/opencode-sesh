@@ -2,6 +2,7 @@
 # A short-lived worker owned by one picker.  It serializes expensive refreshes;
 # fzf only ever asks the list script to render the last published snapshot.
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The list script can be overridden for reuse; default is the opencode list.
@@ -14,6 +15,7 @@ SCOPE=''
 LIMIT=60
 TARGET=''
 TIMEOUT=12
+SELECTED_ID=''
 
 usage() { echo "usage: ${0##*/} init|worker|render|request|wait --state-dir DIR [options]" >&2; exit 2; }
 while [ "$#" -gt 0 ]; do
@@ -22,6 +24,7 @@ while [ "$#" -gt 0 ]; do
     --scope) [ "$#" -ge 2 ] || usage; SCOPE=$2; shift ;;
     --limit) [ "$#" -ge 2 ] || usage; LIMIT=$2; shift ;;
     --query) [ "$#" -ge 2 ] || usage; QUERY=$2; shift ;;
+    --selected-id) [ "$#" -ge 2 ] || usage; SELECTED_ID=$2; shift ;;
     --target) [ "$#" -ge 2 ] || usage; TARGET=$2; shift ;;
     --timeout) [ "$#" -ge 2 ] || usage; TIMEOUT=$2; shift ;;
     *) usage ;;
@@ -49,7 +52,7 @@ case "$MODE" in
     atomic_text "$STATE_DIR/worker-complete" 0
     ;;
   render)
-    "$LIST" --state-dir "$STATE_DIR" --query "${QUERY:-}"
+    "$LIST" --state-dir "$STATE_DIR" --query "${QUERY:-}" --selected-id "$SELECTED_ID"
     # An empty, first snapshot should not look like a broken picker.
     if [ ! -f "$STATE_DIR/status" ] && [ -f "$STATE_DIR/worker.pid" ]; then
       printf '\t\tunknown\tLoading sessions…\t\tnotice:loading\n'

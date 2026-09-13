@@ -12,7 +12,10 @@ export default tool({
   args: {
     limit: tool.schema
       .number()
-      .describe("Maximum sessions to return")
+      .int()
+      .min(0)
+      .max(1000)
+      .describe("Maximum sessions to return (0–1000; 0 returns none)")
       .default(50),
     directory: tool.schema
       .string()
@@ -20,23 +23,29 @@ export default tool({
       .optional(),
   },
   async execute(args) {
+    // Validate here as well as in the schema for direct/programmatic callers.
+    if (!Number.isInteger(args.limit) || args.limit < 0 || args.limit > 1000) {
+      throw new Error("limit must be an integer between 0 and 1000")
+    }
     const bun = (globalThis as any).Bun
     if (!bun || typeof bun.$ !== "function") {
       throw new Error("This tool requires the Bun runtime (globalThis.Bun.$)")
     }
 
-    const out = await bun.$`opencode session list -n ${args.limit} --format json`.json()
-    const sessions = (Array.isArray(out) ? out : []).filter(
-      (s) => !args.directory || s.directory === args.directory,
-    )
-    return JSON.stringify(
-      sessions.map((s) => ({
-        id: s.id,
-        title: s.title,
-        directory: s.directory,
-        updated: s.updated,
-        created: s.created,
-      })),
-    )
+    // `session list` is project-scoped and hides only children of forks. The
+    // global store has no project instance, so query the SQLite session table
+    // directly (OpenCode 1.18.30). Match `Session.listGlobal`/the picker: roots
+    // only, non-archived. Bun quotes the SQL as one shell argument; SQL string
+    // literals need their own escaping as well.
+    const where = args.directory === undefined
+      ? ""
+      : ` AND directory = '${args.directory.replaceAll("'", "''")}'`
+    const query = `SELECT id, title, directory, time_updated AS updated, time_created AS created
+      FROM session WHERE parent_id IS NULL AND time_archived IS NULL${where}
+      ORDER BY time_updated DESC, id DESC LIMIT ${args.limit}`
+    const text = await bun.$`opencode db ${query} --format json`.text()
+    const sessions = JSON.parse(text.trim() || "[]")
+    if (!Array.isArray(sessions)) throw new Error("Unexpected opencode db result: expected an array")
+    return JSON.stringify(sessions)
   },
 })

@@ -144,10 +144,44 @@ printf '\n' | "$PACKAGE_DIR/bin/sesh-delete.sh" "$state" 'ses_beta'
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_beta") | not)' "$state/snapshot.jsonl" >/dev/null
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_beta';")" = 0 ]
 
-# 8. A missing database reports unavailable instead of crashing.
+# 8. fzf version gate: reject below 0.73, accept exactly 0.73 (P1).
+fzf_stub="$fixture/fzf-stub"
+write_fzf_version() {
+  printf '#!/bin/bash\n[ "${1:-}" = --version ] && { echo "%s"; exit 0; }\nexit 1\n' "$1" > "$fzf_stub"
+  chmod +x "$fzf_stub"
+}
+write_fzf_version 0.72.0
+if SESH_FZF="$fzf_stub" "$PACKAGE_DIR/bin/sesh" --check > "$fixture/old-fzf.out" 2>&1; then
+  echo "sesh accepted fzf below 0.73" >&2; exit 1
+fi
+grep -Fq '>= 0.73.0' "$fixture/old-fzf.out"
+write_fzf_version 0.73.0
+SESH_FZF="$fzf_stub" "$PACKAGE_DIR/bin/sesh" --check > "$fixture/min-fzf.out"
+grep -Fq 'dependencies ready' "$fixture/min-fzf.out"
+
+# 9. Runtime caches are private even under a permissive umask (P1). Both a
+# fresh cache and a world-readable warm cache must end up 0700/0600.
+mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
+perm_state="$fixture/perm-state"; perm_cache="$fixture/perm-cache"
+( umask 022; SESH_CACHE_DIR="$perm_cache" "$list" --refresh --state-dir "$perm_state" > /dev/null )
+[ "$(mode "$perm_cache")" = 700 ]
+[ "$(mode "$perm_cache/extractions")" = 700 ]
+[ "$(mode "$perm_cache/extractions/ses_alpha.json")" = 600 ]
+chmod 644 "$perm_cache/extractions/ses_alpha.json"
+( umask 022; SESH_CACHE_DIR="$perm_cache" "$list" --refresh --state-dir "$perm_state" > /dev/null )
+[ "$(mode "$perm_cache/extractions/ses_alpha.json")" = 600 ]
+
+# 10. A missing database reports unavailable instead of crashing.
 export SESH_DB="$fixture/nonexistent.db"
 missing="$fixture/missing"
 "$list" --refresh --state-dir "$missing" > "$fixture/missing.tsv"
 [ "$(cat "$missing/status")" = 'unavailable: opencode database is unavailable' ]
+
+# Agent tool contract checks (global store, filter-before-limit) need Node.
+if command -v node >/dev/null 2>&1; then
+  node "$PACKAGE_DIR/tests/agent-tool.mjs"
+else
+  echo "sesh tests: node not found; skipping agent tool contract checks" >&2
+fi
 
 echo "sesh tests passed"

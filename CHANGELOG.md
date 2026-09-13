@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-13
+
+### Fixed
+
+- The picker keeps the selected session across automatic refreshes and no
+  longer retargets Enter, Ctrl-F, or Ctrl-X when the selected session
+  disappears (`--track`/`--id-nth` plus a non-actionable placeholder row).
+- Ctrl-F now forks: fzf's `--print-query`/`--expect` output (query, key, row)
+  was parsed as key, query, row, so forking resumed the original session.
+- Require fzf >= 0.73 in the launcher, installer, README, and AGENTS — the
+  `every()` refresh event the picker relies on was added in 0.73.
+- Transcript extraction caches are written 0700/0600 regardless of the caller's
+  umask, and existing caches are tightened on refresh.
+
+### Changed
+
+- The `sesh-list` agent tool queries the global session store, so it lists
+  every project directory (roots, non-archived) instead of only the current
+  project; directory filtering now happens before the limit.
+
+### Added
+
+- Real-fzf PTY regressions for selection tracking and fork parsing
+  (`npm run test:picker`), an agent-tool contract/SQL suite, and fzf
+  version-gate and cache-permission regressions.
+
 ## [0.1.3] - 2026-09-12
 
 ### Added
@@ -48,7 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.0...v0.1.1

@@ -4,6 +4,7 @@
 # Refreshes publish one state-dir snapshot; fzf query changes render that
 # snapshot only, so typing never starts competing scans.
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -25,8 +26,8 @@ version=$("$SESH_FZF" --version 2>/dev/null || true)
 if [[ "$version" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))? ]]; then
   fzf_major=$((10#${BASH_REMATCH[1]}))
   fzf_minor=$((10#${BASH_REMATCH[2]}))
-  if [ "$fzf_major" -eq 0 ] && [ "$fzf_minor" -lt 52 ]; then
-    echo "sesh: fzf >= 0.52.0 is required (found $version)" >&2
+  if [ "$fzf_major" -eq 0 ] && [ "$fzf_minor" -lt 73 ]; then
+    echo "sesh: fzf >= 0.73.0 is required (found $version)" >&2
     exit 1
   fi
 else
@@ -92,7 +93,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-cache_cmd="$q_worker render --state-dir $q_state --query {q}"
+cache_cmd="$q_worker render --state-dir $q_state --query {q} --selected-id {6}"
 preview_cmd="if [ -f $q_state/help ]; then $q_shortcuts; else $q_preview $q_state {2}; fi"
 help_bind="?:transform:[ -z {q} ] && ( [ -f $q_state/help ] && rm -f $q_state/help && echo hide-preview || ( : > $q_state/help && echo show-preview+refresh-preview ) ) || echo 'put(?)'"
 toggle_cmd="$q_list --toggle-scope --state-dir $q_state >/dev/null"
@@ -102,7 +103,7 @@ query="$picker_query"
 while :; do
 selection=''
 set +e
-selection=$(FZF_DEFAULT_COMMAND='printf ""' FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' "$SESH_FZF" --print-query --expect=ctrl-f --query="$query" --ansi --delimiter=$'\t' --with-nth=4 --disabled --layout=reverse --info=hidden --prompt='❯ ' \
+selection=$(FZF_DEFAULT_COMMAND='printf ""' FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' "$SESH_FZF" --print-query --expect=ctrl-f --query="$query" --ansi --delimiter=$'\t' --with-nth=4 --track --id-nth=6 --disabled --layout=reverse --info=hidden --prompt='❯ ' \
   --preview="$preview_cmd" --preview-window='right,50%,wrap,hidden' \
   --bind='space:transform:[ -z {q} ] && echo toggle-preview || echo "put( )"' \
   --bind="$help_bind" \
@@ -113,9 +114,10 @@ selection=$(FZF_DEFAULT_COMMAND='printf ""' FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS
 status=$?
 set -e
 case "$status" in 0) ;; 1|130) exit 0;; *) echo "sesh: picker failed ($status)" >&2; exit "$status";; esac
-key=${selection%%$'\n'*}
-selection=${selection#*$'\n'}
+# --print-query precedes the --expect key (empty for Enter), then the row.
 query=${selection%%$'\n'*}
+selection=${selection#*$'\n'}
+key=${selection%%$'\n'*}
 selection=${selection#*$'\n'}
 session_id=$(printf '%s\n' "$selection" | cut -f2)
 [ -n "$session_id" ] || continue

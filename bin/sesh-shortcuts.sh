@@ -5,7 +5,7 @@ sesh shortcuts
 
   Type              Search session titles and transcript text
   Enter             Resume the selected session here
-  Ctrl-F Enter      Resume the selected session as a fork
+  Ctrl-F            Resume the selected session as a fork
   Ctrl-G            Toggle current-directory scope / all sessions
   Space             Toggle transcript preview
   ?                 Toggle this help

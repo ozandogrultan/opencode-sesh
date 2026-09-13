@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install sesh for the current user.
 # Terminal- and OS-agnostic: macOS and Linux, any terminal. No administrator
-# privileges, downloads, or shell-rc edits. Runtime requires jq, fzf >= 0.52
+# privileges, downloads, or shell-rc edits. Runtime requires jq, fzf >= 0.73
 # and sqlite3 or the opencode CLI; the in-TUI panel additionally needs the
 # packages opencode installs for local plugins (handled below).
 set -euo pipefail
@@ -120,8 +120,8 @@ for tool in bash jq fzf; do
 done
 fzf_version=$(fzf --version 2>/dev/null || true)
 if [[ "$fzf_version" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))? ]]; then
-  if [ "$((10#${BASH_REMATCH[1]}))" -eq 0 ] && [ "$((10#${BASH_REMATCH[2]}))" -lt 52 ]; then
-    fail "fzf >= 0.52.0 is required (found $fzf_version)."
+  if [ "$((10#${BASH_REMATCH[1]}))" -eq 0 ] && [ "$((10#${BASH_REMATCH[2]}))" -lt 73 ]; then
+    fail "fzf >= 0.73.0 is required (found $fzf_version)."
   fi
 else
   fail "cannot parse fzf version from: $fzf_version."

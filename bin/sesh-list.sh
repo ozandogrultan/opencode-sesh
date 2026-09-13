@@ -6,6 +6,7 @@
 # TSV: agentId, sessionId, liveState, display, cwd, trackingId.
 # Every row, including headers/notices, requires a unique nonempty trackingId.
 set -euo pipefail
+umask 077
 
 LIMIT=0
 LIMIT_SET=0
@@ -17,6 +18,7 @@ INCLUDE_ARCHIVED=0
 ARCHIVED_SET=0
 STATE_DIR=''
 QUERY=''
+SELECTED_ID=''
 SCOPE_CWD=''
 usage() { echo "usage: ${0##*/} [--refresh] [--wait-lock SECONDS] --state-dir DIR [--cwd] [--limit N] [--archived] [--toggle-scope] [--query TEXT]" >&2; }
 while [ "$#" -gt 0 ]; do
@@ -29,6 +31,7 @@ while [ "$#" -gt 0 ]; do
     --archived) INCLUDE_ARCHIVED=1; ARCHIVED_SET=1 ;;
     --toggle-scope) TOGGLE_SCOPE=1 ;;
     --query) QUERY=${2:-}; shift ;;
+    --selected-id) SELECTED_ID=${2:-}; shift ;;
     --help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -111,18 +114,24 @@ set_status() { atomic_text "$STATUS" "$1"; }
 render() {
   local state=''
   [ -f "$STATUS" ] && state=$(cat "$STATUS" 2>/dev/null || true)
-  if [ ! -s "$SNAPSHOT" ]; then
+  if [ ! -f "$SNAPSHOT" ]; then
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
     return 0
   fi
   {
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
-    "$JQ_BIN" -sr --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" '
+    "$JQ_BIN" -sr --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg selected "$SELECTED_ID" '
       def ago($epoch):
         ((now - ($epoch | tonumber)) | floor) as $s
         | if $s < 60 then "now" elif $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
       def homepath:
         . as $p | if $p == "" then "?" elif $p == $home then "~" elif ($home != "" and startswith($home + "/")) then "~" + .[($home|length):] else . end;
+      # Preserve a vanished selection as a non-actionable row with its original
+      # tracking key. Otherwise fzf falls back to a different session. Keep it
+      # until the user moves away; empty field 2 makes Enter/Ctrl-F/Ctrl-X no-ops.
+      (if ($selected | test("^ses_[A-Za-z0-9]+$")) and (any(.sessionId == $selected) | not)
+       then (["", "", "unknown", ($yellow + "Selected session is no longer available; choose another session" + $reset), "", $selected] | @tsv)
+       else empty end),
       (($query | ascii_downcase) as $q
       | map(select($q == "" or (.searchText | contains($q))))
       | group_by(.cwd)
@@ -159,8 +168,22 @@ acquire_lock_wait() {
   done
 }
 
+private_dir() {
+  # These are dedicated sesh directories, never the shared XDG parent. Refuse
+  # symlinks/foreign ownership rather than changing permissions on their target.
+  [ ! -L "$1" ] || { echo "sesh: private directory is a symlink: $1" >&2; return 1; }
+  mkdir -p "$1"
+  [ -O "$1" ] || { echo "sesh: private directory is not owned by this user: $1" >&2; return 1; }
+  chmod 700 "$1"
+}
+
 refresh() {
-  mkdir -p "$STATE_DIR"
+  private_dir "$STATE_DIR"
+  private_dir "$CACHE_DIR"
+  private_dir "$EXTRACTIONS"
+  # Migrate warm caches too, including temporary files left by older versions.
+  # Do not follow symlinks or chmod unrelated files outside our extraction store.
+  find "$EXTRACTIONS" -maxdepth 1 -type f -user "$(id -u)" \( -name 'ses_*.json' -o -name 'ses_*.json.tmp' \) -exec chmod 600 {} +
   if [ "${SESH_LOCK_HELD:-}" != "$STATE_DIR" ]; then
     if [ "$WAIT_LOCK" -gt 0 ]; then acquire_lock_wait || return $?; else acquire_lock || return 0; fi
   fi
@@ -180,7 +203,6 @@ refresh() {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: neither sqlite3 nor opencode is available; showing last good snapshot'; else set_status 'unavailable: neither sqlite3 nor opencode is available'; fi
     return 0
   fi
-  mkdir -p "$EXTRACTIONS"
   local scratch sessions parts cache_records cache_state historical needs_extract out
   scratch=$(mktemp -d "$STATE_DIR/.refresh.XXXXXX")
   refresh_scratch=$scratch
@@ -199,6 +221,9 @@ refresh() {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
     return 0
   }
+  # sqlite3 emits no bytes for zero rows. Publish an empty snapshot so removal
+  # of the final session also produces the non-actionable selection notice.
+  [ -s "$sessions" ] || printf '[]\n' > "$sessions"
   "$JQ_BIN" -e 'type == "array"' "$sessions" >/dev/null 2>&1 || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
     return 0
@@ -261,8 +286,9 @@ refresh() {
        updatedEpoch: (($updated / 1000 | floor) | if . > 0 then . else ($created / 1000 | floor) end),
        fulltextLower: $fulltext}') || record=''
     if [ -n "$record" ]; then
-      printf '%s\n' "$record" > "$cache.tmp"
-      mv "$cache.tmp" "$cache"
+      cache_tmp=$(mktemp "$EXTRACTIONS/$sid.json.XXXXXX")
+      printf '%s\n' "$record" > "$cache_tmp"
+      mv "$cache_tmp" "$cache"
       printf '%s\n' "$record" >> "$historical"
     fi
   done < "$needs_extract"

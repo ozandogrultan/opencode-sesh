@@ -13,8 +13,8 @@ territory: read this first, then the specific file you need.
 2. **`tui/sesh-panel.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
    recent-sessions section in the sidebar plus a `ctrl+o` / `/sesh` picker.
 3. **`opencode/tools/sesh-list.ts`** — the `sesh-list` custom tool, so the agent
-   can list sessions across every directory (the native `opencode session list`
-   is project-scoped).
+   can list sessions across every directory by querying the global `opencode
+   db` store (the native `opencode session list` is project-scoped).
 
 No iTerm2, no AppleScript, no panes, no window management — **never add any.**
 opencode has no persistent-sidebar API, so the "sidebar" is a `sidebar_content`
@@ -43,9 +43,10 @@ The **filename becomes the tool name** in opencode, so `sesh-list.ts` is the
 
 ## Data flow (fzf picker)
 
-`bin/sesh-list.sh` is the only place that knows the session store (opencode
-SQLite DB: `session` / `message` / `part` tables). Keystrokes never touch the
-database:
+`bin/sesh-list.sh` owns the fzf picker's session store access (opencode SQLite
+DB: `session` / `message` / `part` tables); the `sesh-list` agent tool queries
+the same store through `opencode db`. Keep its SQL column names in sync with
+the schema below. Keystrokes never touch the database:
 
 - `--refresh` (expensive): bulk-reads session metadata and per-session text
   parts, validates the persistent extraction cache
@@ -67,7 +68,7 @@ One worker (`sesh-refresh-worker.sh`, per picker, TERMed on exit) serializes
 scans; fzf's `start`/`every(3)`/`change` bindings render only. Selection requests
 a fresh poll (`request`/`wait`, ≤12 s) before dispatch. opencode has no
 live-agent API, so `liveState` is always `unknown` and rows render gray;
-dispatch is always `opencode --session <id>` (`--fork` with Ctrl-F/Enter).
+dispatch is always `opencode --session <id>` (`--fork` with Ctrl-F or --fork).
 Resume happens in place (`exec` after `cd` to the session's cwd).
 
 ## Conventions
@@ -82,7 +83,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   `sqlite3 -json` in `-R` mode; it pretty-prints — parse as JSON.
 - `jq -R` output stays JSON-quoted: use `-Rr` when a shell variable needs the
   raw string.
-- fzf: stock only, `>= 0.52` (`transform:`, `every():`). `{q}` in binds is
+- fzf: stock only, `>= 0.73` (`transform:`, `every():`). `{q}` in binds is
   shell-quoted by fzf — don't add quoting. Ctrl-G is bind-only (stays open);
   Ctrl-F is `--expect` (accepts with fork).
 - The installer prefers the local opencode version for `@opencode-ai/*` and
