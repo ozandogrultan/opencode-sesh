@@ -36,6 +36,7 @@
   "publishConfig": {
     "access": "public"
   },
+  "packageManager": "bun@1.4.2",
   "engines": {
     "node": ">=20"
   },
@@ -46,7 +47,7 @@
     "test:picker": "python3 tests/picker.py",
     "typecheck": "tsc -p tsconfig.json",
     "lint:sh": "for script in bin/*.sh bin/sesh install.sh tests/*.sh; do bash -n \"$script\" || exit; done",
-    "prepublishOnly": "npm test && npm run typecheck"
+    "prepublishOnly": "bun run test && bun run typecheck"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",

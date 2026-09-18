@@ -4,6 +4,11 @@
 job: run tests, publish to npm with provenance, and create the GitHub release.
 There are two ways to trigger it.
 
+Development uses [bun](https://bun.sh) (`bun install`, `bun run test`). Publishing
+still uses the npm CLI: npm trusted publishing (OIDC) and provenance
+attestations are only supported through `npm publish`, so `bun publish` is not
+used here.
+
 ## One-click (recommended)
 
 From the Actions tab (**Release → Run workflow**) or:

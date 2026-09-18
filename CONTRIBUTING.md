@@ -8,7 +8,7 @@ pull requests are welcome.
 ```bash
 git clone https://github.com/ozandogrultan/opencode-sesh.git
 cd opencode-sesh
-npm install
+bun install
 ```
 
 There is no build step. `bin/` holds flat shell scripts, `tui/sesh-panel.tsx`
@@ -19,9 +19,9 @@ is the OpenTUI plugin, and `opencode/tools/sesh-list.ts` is the agent tool.
 Run the full check suite and make sure it passes:
 
 ```bash
-npm test             # fixture-database regression suite
-npm run typecheck    # tsc over tui/ and opencode/
-npm run lint:sh      # bash -n on every script
+bun run test         # fixture-database regression suite
+bun run typecheck    # tsc over tui/ and opencode/
+bun run lint:sh      # bash -n on every script
 ```
 
 Also smoke-test the installer without touching your real config:
@@ -83,10 +83,10 @@ feat!: drop support for opencode < 1.18
 The type maps to the next version bump (`feat` → minor, `fix`/`perf` → patch,
 `!`/`BREAKING CHANGE` → major), so keep subjects accurate.
 
-This is enforced locally by Git hooks that `npm install` installs (via husky):
+This is enforced locally by Git hooks that `bun install` installs (via husky):
 
 - `commit-msg` runs commitlint over your message.
-- `pre-commit` runs `npm run lint:sh`, `npm run typecheck`, and `npm test`.
+- `pre-commit` runs `bun run lint:sh`, `bun run typecheck`, and `bun run test`.
 
 Bypass a hook for one commit with `git commit --no-verify` (or `HUSKY=0`), but
 CI lints the commits in a pull request regardless.

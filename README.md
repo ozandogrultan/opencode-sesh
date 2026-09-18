@@ -205,11 +205,11 @@ guide; this project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Run the
 checks before opening a PR:
 
 ```bash
-npm install
-npm test             # fixture-database regression suite
-npm run test:picker  # PTY picker suite (needs fzf >= 0.73)
-npm run typecheck    # tsc over tui/ and opencode/
-npm run lint:sh      # bash -n on every script
+bun install
+bun run test         # fixture-database regression suite
+bun run test:picker  # PTY picker suite (needs fzf >= 0.73)
+bun run typecheck    # tsc over tui/ and opencode/
+bun run lint:sh      # bash -n on every script
 ```
 
 `HOME=/tmp/fakehome bash install.sh` smoke-tests the installer without touching
