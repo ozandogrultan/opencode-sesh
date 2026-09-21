@@ -137,7 +137,14 @@ const SIDEBAR_TITLE_WIDTH = 27
 const SIDEBAR_GROUP_WIDTH = 30
 const HOME_TITLE_WIDTH = 30
 
-const SEARCH_KEYS = "abcdefghijklmnopqrstuvwxyz0123456789-_.@/+".split("")
+// The sidebar is a glanceable recent list, not a second picker: cap it so the
+// section cannot grow into a scrolling wall (the docs promise "most recent"),
+// and point at the picker for everything else.
+const SIDEBAR_LIMIT = 15
+
+// Uppercase is included deliberately: a search box that silently drops shifted
+// letters cannot be used for acronyms or paths like README.
+const SEARCH_KEYS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.@/+:,?!()[]".split("")
 
 function searchBindings(append: (input: string) => void, exit: () => void) {
   return [
@@ -354,6 +361,45 @@ async function buildSearchIndexRemote(
 const TRANSCRIPT_PREVIEW_TURNS = 8
 const TRANSCRIPT_PREVIEW_CHARS = 2000
 
+// Case-insensitive range of `query` inside `text`, so a matched row can show
+// which part of it the search hit instead of only filtering invisibly. Kept
+// below the data-layer markers that tests/tui.mjs evaluates: JSX must not enter
+// that extraction window.
+function matchRange(text: string, query: string): [number, number] | undefined {
+  const q = query.trim().toLowerCase()
+  if (!q) return undefined
+  const at = text.toLowerCase().indexOf(q)
+  return at < 0 ? undefined : [at, at + q.length]
+}
+
+function Highlighted(props: {
+  text: string
+  query: string
+  color: RGBA
+  matchColor: RGBA
+  bold?: boolean
+}) {
+  const parts = createMemo(() => {
+    const range = matchRange(props.text, props.query)
+    if (!range) return [props.text, "", ""] as const
+    return [props.text.slice(0, range[0]), props.text.slice(range[0], range[1]), props.text.slice(range[1])] as const
+  })
+  return (
+    <text
+      flexGrow={1}
+      flexShrink={1}
+      overflow="hidden"
+      wrapMode="none"
+      attributes={props.bold ? TextAttributes.BOLD : undefined}
+      style={{ fg: props.color }}
+    >
+      {parts()[0]}
+      <span style={{ fg: props.matchColor }}>{parts()[1]}</span>
+      {parts()[2]}
+    </text>
+  )
+}
+
 async function fetchTranscriptText(api: TuiPluginApi, sessionID: string): Promise<string> {
   try {
     const result = await api.client.session.messages({ sessionID })
@@ -464,6 +510,11 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
   const [query, setQuery] = createSignal("")
   const [deleting, setDeleting] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
+  const [loadFailed, setLoadFailed] = createSignal(false)
+  const [navActive, setNavActive] = createSignal(false)
+  const [cursor, setCursor] = createSignal(0)
+  const [pendingDelete, setPendingDelete] = createSignal<string>()
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
     if (route.name !== "session") return undefined
@@ -476,9 +527,14 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     const load = async () => {
       try {
         const { entries: all } = await fetchEntries(props.api)
-        if (alive) setEntries(all)
+        if (alive) {
+          setEntries(all)
+          setLoadFailed(false)
+        }
       } catch {
-        // leave the previous list in place rather than flashing to blank
+        // leave the previous list in place rather than flashing to blank, but
+        // say so when there is nothing at all to show
+        if (alive && entries().length === 0) setLoadFailed(true)
       }
     }
     void load()
@@ -497,9 +553,12 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     )
   })
 
+  const shownEntries = createMemo(() => filteredEntries().slice(0, SIDEBAR_LIMIT))
+  const remaining = createMemo(() => Math.max(0, filteredEntries().length - shownEntries().length))
+
   const tree = createMemo<TreeRow[]>(() => {
     const groups = new Map<string, Entry[]>()
-    for (const entry of filteredEntries()) {
+    for (const entry of shownEntries()) {
       const list = groups.get(entry.dir) ?? []
       list.push(entry)
       groups.set(entry.dir, list)
@@ -522,6 +581,21 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     setCollapsed((prev) => ({ ...prev, [dir]: !prev[dir] }))
   }
 
+  // Flat order of the rows a cursor can land on, so keyboard navigation and
+  // mouse hover resolve to the same row.
+  const itemRows = createMemo(() => tree().flatMap((row) => (row.kind === "item" ? [row.entry] : [])))
+  const isActive = (id: string) => (navActive() ? itemRows()[cursor()]?.id === id : hovered() === id)
+  const isPendingDelete = (id: string) => pendingDelete() === id
+  const moveCursor = (delta: number) => {
+    const count = itemRows().length
+    if (count === 0) return
+    setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
+  }
+  createEffect(() => {
+    const count = itemRows().length
+    if (cursor() >= count) setCursor(Math.max(0, count - 1))
+  })
+
   const sessionStatus = (id: string): "running" | "waiting" | "idle" => {
     try {
       const permissions = props.api.state.session.permission(id)
@@ -540,7 +614,28 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     return theme().textMuted
   }
 
+  const cancelDelete = () => {
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = undefined
+    setPendingDelete(undefined)
+  }
+
+  // Deleting is irreversible, so ctrl+x arms the row and a second ctrl+x (or y)
+  // commits it. Anything else — another row, five seconds, a keypress elsewhere
+  // — lets it go. The old behaviour deleted whatever was hovered outright.
+  const requestDelete = (entry: Entry) => {
+    if (deleting()) return
+    if (pendingDelete() === entry.id) {
+      void deleteEntry(entry)
+      return
+    }
+    setPendingDelete(entry.id)
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = setTimeout(() => setPendingDelete(undefined), 5000)
+  }
+
   const deleteEntry = async (entry: Entry) => {
+    cancelDelete()
     if (deleting()) return
     setDeleting(entry.id)
     try {
@@ -568,6 +663,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
+  let disposeNav: (() => void) | undefined
   let insideSearchBox = false
 
   const onRootMouseDown = () => {
@@ -623,7 +719,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
           key: "ctrl+x",
           desc: "Delete session",
           preventDefault: true,
-          cmd: () => void deleteEntry(entry),
+          cmd: () => requestDelete(entry),
         },
         {
           key: "/",
@@ -635,22 +731,111 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     })
   })
 
+  // Mouse hover must not commit a keyboard-initiated confirm (and vice versa):
+  // leaving the armed row abandons the pending delete.
+  createEffect(() => {
+    const pending = pendingDelete()
+    if (pending && !navActive() && pending !== hovered()) cancelDelete()
+  })
+
+  // Keyboard navigation is opt-in (click the "Sessions" heading or the search
+  // box) so the sidebar never steals the arrow keys from the main prompt.
+  createEffect(() => {
+    disposeNav?.()
+    disposeNav = undefined
+    if (!navActive()) return
+    const bindings = [
+      { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
+      { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
+      { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => moveCursor(-5) },
+      { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => moveCursor(5) },
+      { key: "home", desc: "First session", preventDefault: true, cmd: () => setCursor(0) },
+      {
+        key: "end",
+        desc: "Last session",
+        preventDefault: true,
+        cmd: () => setCursor(Math.max(0, itemRows().length - 1)),
+      },
+      {
+        key: "space",
+        desc: "Preview session transcript",
+        preventDefault: true,
+        cmd: () => {
+          const entry = itemRows()[cursor()]
+          if (entry) openSidebarPreview(entry)
+        },
+      },
+      {
+        key: "ctrl+x",
+        desc: "Delete session",
+        preventDefault: true,
+        cmd: () => {
+          const entry = itemRows()[cursor()]
+          if (entry) requestDelete(entry)
+        },
+      },
+      {
+        key: "enter",
+        desc: "Open session",
+        preventDefault: true,
+        cmd: () => {
+          const entry = itemRows()[cursor()]
+          if (entry) props.api.route.navigate("session", { sessionID: entry.id })
+        },
+      },
+      {
+        key: "escape",
+        desc: "Leave the session list",
+        preventDefault: true,
+        cmd: () => {
+          cancelDelete()
+          setNavActive(false)
+        },
+      },
+      ...(pendingDelete()
+        ? [
+            {
+              key: "y",
+              desc: "Confirm delete",
+              preventDefault: true,
+              cmd: () => {
+                const entry = itemRows()[cursor()]
+                if (entry && pendingDelete() === entry.id) void deleteEntry(entry)
+              },
+            },
+            { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+          ]
+        : []),
+    ]
+    disposeNav = props.api.keymap.registerLayer({ mode: "base", priority: 20, bindings })
+  })
+
   onCleanup(() => {
     disposeHoverSpace?.()
     disposeSearch?.()
+    disposeNav?.()
+    if (confirmTimer) clearTimeout(confirmTimer)
   })
 
   return (
     <box flexDirection="column" paddingRight={1}>
-      <Show when={entries().length > 0}>
-        <box flexDirection="row" gap={1}>
-          <text>
-            <b>Sessions</b>
-            <span style={{ fg: theme().textMuted }}>
-              {query().trim() ? ` (${filteredEntries().length}/${entries().length})` : ` (${entries().length})`}
-            </span>
+      <box flexDirection="row" gap={1} onMouseDown={() => setNavActive((value) => !value)}>
+        <text>
+          <b>Sessions</b>
+          <span style={{ fg: theme().textMuted }}>
+            {query().trim() ? ` (${filteredEntries().length}/${entries().length})` : ` (${entries().length})`}
+          </span>
+          <span style={{ fg: navActive() ? theme().accent : theme().textMuted }}>{navActive() ? "  ▸ nav" : "  ▸"}</span>
+        </text>
+      </box>
+      <Show
+        when={entries().length > 0}
+        fallback={
+          <text style={{ fg: theme().textMuted }}>
+            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · ctrl+o to browse"}
           </text>
-        </box>
+        }
+      >
         <box
           flexDirection="row"
           gap={1}
@@ -701,7 +886,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
                 paddingLeft={1}
                 paddingRight={1}
                 backgroundColor={
-                  row.entry.id === hovered() && row.entry.id !== currentID()
+                  isActive(row.entry.id) && row.entry.id !== currentID()
                     ? theme().backgroundElement
                     : RGBA.fromInts(0, 0, 0, 0)
                 }
@@ -712,22 +897,39 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
                 <text flexShrink={0}>
                   <span style={{ fg: theme().textMuted }}>{row.last ? "└" : "├"}</span>
                   <span
-                    style={{ fg: row.entry.id === currentID() ? theme().accent : statusColor(row.entry.id) }}
+                    style={{
+                      fg: isPendingDelete(row.entry.id)
+                        ? theme().error
+                        : row.entry.id === currentID()
+                          ? theme().accent
+                          : statusColor(row.entry.id),
+                    }}
                   >
-                    {row.entry.id === currentID() ? "●" : "○"}
+                    {row.entry.id === currentID() ? "●" : isActive(row.entry.id) ? "▸" : "○"}
                   </span>
                 </text>
-                <text flexGrow={1} flexShrink={1} overflow="hidden" wrapMode="none" style={{ fg: theme().text }}>
-                  {truncate(row.entry.title, SIDEBAR_TITLE_WIDTH)}
-                </text>
-                <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                  {ago(row.entry.updated)}
+                <Highlighted
+                  text={truncate(row.entry.title, SIDEBAR_TITLE_WIDTH)}
+                  query={query()}
+                  color={isPendingDelete(row.entry.id) ? theme().error : theme().text}
+                  matchColor={theme().warning}
+                />
+                <text flexShrink={0} style={{ fg: isPendingDelete(row.entry.id) ? theme().error : theme().textMuted }}>
+                  {isPendingDelete(row.entry.id) ? "ctrl+x again" : ago(row.entry.updated)}
                 </text>
               </box>
             )
           }
         </For>
         </scrollbox>
+        <Show when={remaining() > 0}>
+          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · ctrl+o for all`}</text>
+        </Show>
+        <Show when={navActive()}>
+          <box paddingTop={1}>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · space preview · ctrl+x delete · esc done</text>
+          </box>
+        </Show>
       </Show>
     </box>
   )
@@ -742,6 +944,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
   const [query, setQuery] = createSignal("")
   const [hovered, setHovered] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
+  const [loadFailed, setLoadFailed] = createSignal(false)
   const preview = createTranscriptPreview(props.api)
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
@@ -806,8 +1009,13 @@ function HomeSessions(props: { api: TuiPluginApi }) {
     const load = async () => {
       try {
         const { entries: all } = await fetchEntries(props.api)
-        if (alive) setEntries(all)
-      } catch {}
+        if (alive) {
+          setEntries(all)
+          setLoadFailed(false)
+        }
+      } catch {
+        if (alive && entries().length === 0) setLoadFailed(true)
+      }
     }
     void load()
     const clock = setInterval(() => void load(), POLL_MS)
@@ -829,9 +1037,22 @@ function HomeSessions(props: { api: TuiPluginApi }) {
 
   return (
     <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={1} gap={1}>
-      <Show when={entries().length > 0}>
+      <Show
+        when={entries().length > 0}
+        fallback={
+          <box flexDirection="row" gap={1}>
+            <text style={{ fg: theme().textMuted }}>Recent sessions</text>
+            <text style={{ fg: theme().textMuted }}>
+              {loadFailed() ? "· list unavailable, will retry" : "· none yet, ctrl+o to browse"}
+            </text>
+          </box>
+        }
+      >
         <box flexDirection="row" justifyContent="space-between" gap={2}>
-          <text style={{ fg: theme().textMuted }}>Recent sessions</text>
+          <box flexDirection="row" gap={1}>
+            <text style={{ fg: theme().textMuted }}>Recent sessions</text>
+            <text style={{ fg: theme().textMuted }}>· ctrl+o for all</text>
+          </box>
           <box
             flexDirection="row"
             gap={1}
@@ -875,9 +1096,12 @@ function HomeSessions(props: { api: TuiPluginApi }) {
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 ○
               </text>
-              <text flexGrow={1} flexShrink={1} overflow="hidden" wrapMode="none" style={{ fg: theme().text }}>
-                {truncate(entry.title, HOME_TITLE_WIDTH)}
-              </text>
+              <Highlighted
+                text={truncate(entry.title, HOME_TITLE_WIDTH)}
+                query={query()}
+                color={theme().text}
+                matchColor={theme().warning}
+              />
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 {prettyDir(entry.dir, home)} · {ago(entry.updated)}
               </text>
@@ -922,10 +1146,13 @@ const tui: TuiPlugin = async (api) => {
       return
     }
 
+    const [allEntries, setAllEntries] = createSignal<Entry[]>(entries)
     const [previewText, setPreviewText] = createSignal("")
     const [showPreview, setShowPreview] = createSignal(false)
     const [query, setQuery] = createSignal("")
     const [cursor, setCursor] = createSignal(0)
+    const [scope, setScope] = createSignal<string>()
+    const [pendingDelete, setPendingDelete] = createSignal<Entry>()
     const [searchIndex, setSearchIndex] = createSignal<Map<string, string>>(new Map())
     const [indexProgress, setIndexProgress] = createSignal<IndexProgress>({
       indexed: 0,
@@ -940,7 +1167,9 @@ const tui: TuiPlugin = async (api) => {
     const matchedGroups = createMemo(() => {
       const q = query().trim().toLowerCase()
       const index = searchIndex()
-      const matched = entries.filter((entry) => {
+      const group = scope()
+      const matched = allEntries().filter((entry) => {
+        if (group && entry.group !== group) return false
         if (!q) return true
         const haystack = index.get(entry.id) ?? `${entry.title} ${entry.dir}`.toLowerCase()
         return haystack.includes(q)
@@ -961,6 +1190,7 @@ const tui: TuiPlugin = async (api) => {
     const coverageLabel = createMemo(() => {
       const progress = indexProgress()
       const bits: string[] = []
+      if (scope()) bits.push(`scope ${scope()}`)
       if (progress.total > 0) {
         bits.push(
           progress.complete
@@ -968,7 +1198,7 @@ const tui: TuiPlugin = async (api) => {
             : `indexing transcripts ${progress.indexed}/${progress.total}`,
         )
       }
-      if (entriesResult.truncated) bits.push(`showing newest ${entries.length}`)
+      if (entriesResult.truncated) bits.push(`showing newest ${allEntries().length}`)
       return bits.join(" · ")
     })
 
@@ -1053,7 +1283,74 @@ const tui: TuiPlugin = async (api) => {
     const moveCursor = (delta: number) => {
       const count = selectableEntries().length
       if (count === 0) return
+      cancelDelete()
       setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
+    }
+
+    // Delete confirmation lives in its own layer, registered only while a row
+    // is armed, so y/n never shadow the search box's typing.
+    let disposeConfirm: (() => void) | undefined
+    const cancelDelete = () => {
+      disposeConfirm?.()
+      disposeConfirm = undefined
+      setPendingDelete(undefined)
+    }
+
+    const deleteEntry = async (entry: Entry) => {
+      cancelDelete()
+      try {
+        const result = await api.client.session.delete({
+          sessionID: entry.id,
+          directory: entry.dir || undefined,
+        })
+        if (result && "error" in result && result.error) throw result.error
+        const { entries: remaining } = await fetchEntries(api)
+        if (remaining.some((item) => item.id === entry.id)) {
+          setAllEntries(remaining)
+          api.ui.toast({ message: "Session was not deleted", variant: "error" })
+          return
+        }
+        setAllEntries(remaining)
+        api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
+      } catch {
+        api.ui.toast({ message: "Could not delete session", variant: "error" })
+      }
+    }
+
+    const armDelete = (entry: Entry) => {
+      setPendingDelete(entry)
+      disposeConfirm?.()
+      disposeConfirm = api.keymap.registerLayer({
+        bindings: [
+          {
+            key: "y",
+            desc: "Confirm delete",
+            preventDefault: true,
+            cmd: () => {
+              const armed = pendingDelete()
+              if (armed) void deleteEntry(armed)
+            },
+          },
+          { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+        ],
+      })
+    }
+
+    const forkEntry = async (entry: Entry) => {
+      try {
+        const result = await api.client.session.fork({
+          sessionID: entry.id,
+          directory: entry.dir || undefined,
+        })
+        const created = (result?.data ?? result) as Session | undefined
+        if (!created?.id) throw new Error("fork returned no session")
+        cleanup()
+        api.ui.dialog.clear()
+        api.route.navigate("session", { sessionID: created.id })
+        api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
+      } catch {
+        api.ui.toast({ message: "Could not fork session", variant: "error" })
+      }
     }
 
     const choose = (entry?: Entry) => {
@@ -1079,21 +1376,43 @@ const tui: TuiPlugin = async (api) => {
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
         {
-          key: "escape",
-          desc: "Close",
+          key: "ctrl+x",
+          desc: "Delete session",
           preventDefault: true,
           cmd: () => {
-            cleanup()
-            api.ui.dialog.clear()
+            const target = selectableEntries()[cursor()]
+            if (!target) return
+            const armed = pendingDelete()
+            if (armed && armed.id === target.id) void deleteEntry(target)
+            else armDelete(target)
+          },
+        },
+        {
+          key: "ctrl+f",
+          desc: "Fork session",
+          preventDefault: true,
+          cmd: () => {
+            const target = selectableEntries()[cursor()]
+            if (target) void forkEntry(target)
           },
         },
         {
           key: "ctrl+g",
+          desc: "Toggle project scope",
+          preventDefault: true,
+          cmd: () => {
+            const target = selectableEntries()[cursor()]
+            if (scope()) setScope(undefined)
+            else if (target) setScope(target.group)
+          },
+        },
+        {
+          key: "escape",
           desc: "Close",
           preventDefault: true,
           cmd: () => {
-            cleanup()
-            api.ui.dialog.clear()
+            cancelDelete()
+            close()
           },
         },
       ],
@@ -1101,6 +1420,8 @@ const tui: TuiPlugin = async (api) => {
 
     const cleanup = () => {
       disposeNav()
+      disposeConfirm?.()
+      disposeConfirm = undefined
       if (previewTimer) clearTimeout(previewTimer)
     }
 
@@ -1194,38 +1515,47 @@ const tui: TuiPlugin = async (api) => {
                           ●
                         </text>
                       </Show>
-                      <text
-                        flexGrow={1}
-                        flexShrink={1}
-                        overflow="hidden"
-                        wrapMode="none"
-                        attributes={
-                          row.entry.id === selectableEntries()[cursor()]?.id ? TextAttributes.BOLD : undefined
+                      <Highlighted
+                        text={truncate(row.entry.title, 61)}
+                        query={query()}
+                        bold={row.entry.id === selectableEntries()[cursor()]?.id}
+                        color={
+                          row.entry.id === selectableEntries()[cursor()]?.id
+                            ? api.theme.current.selectedListItemText
+                            : api.theme.current.text
                         }
-                        style={{
-                          fg:
-                            row.entry.id === selectableEntries()[cursor()]?.id
-                              ? api.theme.current.selectedListItemText
-                              : api.theme.current.text,
-                        }}
-                      >
-                        {truncate(row.entry.title, 61)}
-                      </text>
+                        matchColor={
+                          row.entry.id === selectableEntries()[cursor()]?.id
+                            ? api.theme.current.selectedListItemText
+                            : api.theme.current.warning
+                        }
+                      />
                       <text
                         flexShrink={0}
                         style={{
                           fg:
-                            row.entry.id === selectableEntries()[cursor()]?.id
-                              ? api.theme.current.selectedListItemText
-                              : api.theme.current.textMuted,
+                            pendingDelete()?.id === row.entry.id
+                              ? api.theme.current.error
+                              : row.entry.id === selectableEntries()[cursor()]?.id
+                                ? api.theme.current.selectedListItemText
+                                : api.theme.current.textMuted,
                         }}
                       >
-                        {prettyDir(row.entry.dir, process.env.HOME ?? "")} · {ago(row.entry.updated)}
+                        {pendingDelete()?.id === row.entry.id
+                          ? "press y to delete"
+                          : `${prettyDir(row.entry.dir, process.env.HOME ?? "")} · ${ago(row.entry.updated)}`}
                       </text>
                     </box>
                   )
                 }
               </For>
+              <Show when={selectableEntries().length === 0}>
+                <box paddingLeft={4} paddingRight={4}>
+                  <text style={{ fg: api.theme.current.textMuted }}>
+                    {scope() ? `No sessions in ${scope()}` : "No sessions match this search"}
+                  </text>
+                </box>
+              </Show>
             </box>
           <Show when={showPreview()}>
             <box flexShrink={0} flexDirection="column" paddingLeft={4} paddingRight={4} height={12}>
@@ -1249,8 +1579,14 @@ const tui: TuiPlugin = async (api) => {
             </box>
           </Show>
           <box paddingLeft={4} paddingRight={4} flexShrink={0}>
-            <text style={{ fg: api.theme.current.textMuted }}>
-              ↑↓ navigate · enter open · space preview · esc close
+            <text
+              style={{
+                fg: pendingDelete() ? api.theme.current.warning : api.theme.current.textMuted,
+              }}
+            >
+              {pendingDelete()
+                ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
+                : "↑↓ navigate · enter open · ctrl+x delete · ctrl+f fork · ctrl+g project · space preview · esc close"}
             </text>
           </box>
         </box>
