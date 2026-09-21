@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-21
+
 ### Added
 
 - The picker header always names the effective scope, the session count and
@@ -42,7 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker and shortcut help), the extraction cache key documents the latest part
   timestamp, the PTY picker suite (`npm run test:picker`) is listed, and the
   npm distribution and supported-version policy are stated.
-
 ## [0.1.7] - 2026-09-13
 
 ### Fixed
@@ -177,7 +178,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.4...v0.1.5
