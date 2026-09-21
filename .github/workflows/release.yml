@@ -38,13 +38,31 @@ jobs:
         # id-token and attaches provenance automatically (package Trusted
         # Publisher settings). No token is stored in the repo.
         run: npm publish --provenance --access public
+      - name: Prepare release notes
+        id: notes
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if bash scripts/changelog.sh notes "$tag" > "$RUNNER_TEMP/notes.md"; then
+            echo "have=1" >> "$GITHUB_OUTPUT"
+            echo "::notice::using the CHANGELOG.md section for $tag"
+          else
+            echo "have=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::CHANGELOG.md has no usable section for $tag; falling back to generated notes"
+          fi
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME}"
+          have="${{ steps.notes.outputs.have }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "$tag"
+            if [ "$have" = "1" ]; then
+              gh release edit "$tag" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+            else
+              gh release edit "$tag" --title "$tag"
+            fi
+          elif [ "$have" = "1" ]; then
+            gh release create "$tag" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
           else
             gh release create "$tag" --title "$tag" --generate-notes --verify-tag
           fi
@@ -72,11 +90,25 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Bump version and tag
+      - name: Bump version, promote the changelog and tag
         id: version
         run: |
-          npm version "${{ inputs.bump }}" -m "v%s"
-          echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+          # npm only writes the version fields: the release commit has to carry
+          # the promoted changelog section too, so the commit is made here.
+          version="$(npm version "${{ inputs.bump }}" --no-git-tag-version | tail -n 1)"
+          case "$version" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "unexpected npm version output: $version"; exit 1 ;;
+          esac
+          bash scripts/changelog.sh promote "${version#v}"
+          bash scripts/changelog.sh check
+          # The release body is the section just promoted, so fail before
+          # pushing or publishing when there is nothing to announce.
+          bash scripts/changelog.sh notes "$version" > /dev/null
+          git add -A
+          git commit -m "$version"
+          git tag -a "$version" -m "$version"
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
       - name: Push commit and tag
         # Tags pushed with GITHUB_TOKEN do not re-trigger this workflow, so the
         # publish below is the only one for this release.
@@ -86,4 +118,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ steps.version.outputs.tag }}" --title "${{ steps.version.outputs.tag }}" --generate-notes --verify-tag
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          bash scripts/changelog.sh notes "$tag" > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" --title "$tag" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

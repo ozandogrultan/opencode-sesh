@@ -91,6 +91,39 @@ This is enforced locally by Git hooks that `bun install` installs (via husky):
 Bypass a hook for one commit with `git commit --no-verify` (or `HUSKY=0`), but
 CI lints the commits in a pull request regardless.
 
+## Releases
+
+Releases are cut from the **Release** workflow (`workflow_dispatch`), which asks
+for a `patch`, `minor` or `major` bump and then:
+
+1. bumps `package.json` and the lockfile to the next version,
+2. promotes `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md) to
+   `## [X.Y.Z] - <date>`, opens a fresh `[Unreleased]`, and moves the compare
+   links,
+3. commits and tags `vX.Y.Z`, publishes to npm with provenance, and creates the
+   GitHub release with the promoted section as its body.
+
+So write changelog entries as you go instead of at release time: add bullets to
+`[Unreleased]`, grouped as Keep a Changelog's `Added` / `Changed` / `Fixed` /
+`Removed` / `Security`. Cutting a release with an empty `[Unreleased]` fails
+before anything is pushed or published, because that section *is* the release
+body. (Pushing a tag by hand still works: with no matching section the release
+falls back to GitHub-generated notes and warns.)
+
+`scripts/changelog.sh` performs the same steps locally:
+
+```bash
+scripts/changelog.sh draft          # classify commits since the last tag (prints only)
+scripts/changelog.sh draft --write  # fill an empty [Unreleased]; --force overwrites
+scripts/changelog.sh promote 0.2.0  # promote, date and relink [Unreleased]
+scripts/changelog.sh notes 0.2.0    # the release-notes body for a version
+scripts/changelog.sh check          # structure: headings and compare links
+```
+
+`bun run test:changelog` covers the tooling, and `check` also runs in CI: every
+released heading needs its link definition and `[Unreleased]` must point at
+`...HEAD`.
+
 ## Reporting bugs and requesting features
 
 Use the issue templates. For bugs, include your OS, `opencode` and `fzf`

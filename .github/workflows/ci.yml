@@ -14,11 +14,15 @@ jobs:
       - name: Install test tools
         run: sudo apt-get update && sudo apt-get install -y jq sqlite3 shellcheck
       - name: Syntax check
-        run: for script in bin/*.sh bin/sesh install.sh tests/*.sh; do bash -n "$script"; done
+        run: for script in bin/*.sh bin/sesh install.sh tests/*.sh scripts/*.sh; do bash -n "$script"; done
       - name: ShellCheck (errors)
-        run: shellcheck -x --severity=error bin/*.sh bin/sesh install.sh tests/sesh.sh
+        run: shellcheck -x --severity=error bin/*.sh bin/sesh install.sh tests/sesh.sh tests/changelog.sh scripts/changelog.sh
       - name: Regression suite
         run: ./tests/sesh.sh
+      - name: Changelog tooling
+        run: ./tests/changelog.sh
+      - name: CHANGELOG structure
+        run: bash scripts/changelog.sh check
 
   typecheck:
     name: tui typecheck
