@@ -183,11 +183,28 @@ exec {shlex.quote(FZF)} "$@"
         self.start()
         self.reorder()
         self.key(b"\x18")
+        # Deletion is irreversible, so the picker asks before dispatching it.
+        self.until(lambda: b"[y/N]" in self.screen)
+        self.assertFalse(self.actions())
+        self.key(b"y")
         self.until(lambda: bool(self.actions()))
         self.assertEqual(self.actions()[0]["args"], ["session", "delete", "ses_beta"])
         self.until(lambda: b"Selected session is no longer available" in self.screen)
         with sqlite3.connect(self.db) as db:
             self.assertEqual(db.execute("SELECT id FROM session ORDER BY id").fetchall(), [("ses_alpha",), ("ses_gamma",)])
+
+    def test_delete_can_be_cancelled(self):
+        self.start()
+        self.key(b"\x18")
+        self.until(lambda: b"[y/N]" in self.screen)
+        self.key(b"n")
+        self.settle(0.5)
+        self.assertEqual(self.actions(), [])
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(
+                db.execute("SELECT id FROM session ORDER BY id").fetchall(),
+                [("ses_alpha",), ("ses_beta",)],
+            )
 
     def disappearance(self, final=False):
         self.start("--query", "auth")
@@ -228,6 +245,19 @@ exec {shlex.quote(FZF)} "$@"
         self.key(b"\r")
         self.until(lambda: "ses_beta" in self.contents("stdout"))
         self.assertEqual(self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\n")
+
+    def test_header_reports_scope_and_status(self):
+        self.start()
+        self.until(lambda: b"all dirs" in self.screen and b"sessions" in self.screen)
+
+    def test_print_json_reports_identity_and_fork(self):
+        self.start("--query", "auth", "--print", "--json")
+        self.key(b"\x06")
+        self.until(lambda: "ses_beta" in self.contents("stdout"))
+        self.assertEqual(
+            json.loads(self.contents("stdout")),
+            {"sessionId": "ses_beta", "cwd": str(self.root / "project"), "fork": True},
+        )
 
 
 if __name__ == "__main__":

@@ -130,7 +130,9 @@ oldest=$(grep -Fn 'fix the widget search ranking' "$fixture/preview.txt" | cut -
 "$preview" "$state" '' > "$fixture/empty.txt"
 grep -Fq '(no session selected)' "$fixture/empty.txt"
 
-# 7. Delete goes through the opencode CLI, then refreshes under the lock.
+# 7. Delete goes through the opencode CLI, then refreshes under the lock. A
+# non-interactive delete must opt in with --yes, so a piped stdin can never
+# silently authorize an irreversible removal.
 mkdir -p "$fixture/stubbin"
 cat > "$fixture/stubbin/opencode" <<STUB
 #!/bin/bash
@@ -140,7 +142,11 @@ STUB
 chmod +x "$fixture/stubbin/opencode"
 export SESH_OPENCODE="$fixture/stubbin/opencode"
 PATH="$fixture/stubbin:$PATH"
-printf '\n' | "$PACKAGE_DIR/bin/sesh-delete.sh" "$state" 'ses_beta'
+if printf '\n' | "$PACKAGE_DIR/bin/sesh-delete.sh" "$state" 'ses_beta' >/dev/null 2>&1; then
+  echo "delete without --yes was not refused" >&2; exit 1
+fi
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_beta';")" = 1 ]
+"$PACKAGE_DIR/bin/sesh-delete.sh" --yes "$state" 'ses_beta'
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_beta") | not)' "$state/snapshot.jsonl" >/dev/null
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_beta';")" = 0 ]
 
@@ -256,6 +262,8 @@ empty_state="$fixture/empty-state"
 [ "$(cat "$empty_state/status")" = fresh ]
 [ ! -s "$empty_state/snapshot.jsonl" ]
 [ ! -e "$SESH_CACHE_DIR/extractions/ses_alpha.json" ]
+# An empty store must explain itself rather than render a blank screen.
+"$list" --state-dir "$empty_state" | grep -Fq 'No sessions in this store'
 
 # 17. The installer never replaces or removes a foreign launcher symlink (P2).
 inst_home="$fixture/inst-home"; mkdir -p "$inst_home/bin" "$inst_home/fakebin"
@@ -294,6 +302,44 @@ grep -Fq 'restart opencode' "$fixture/sync.out"
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" SESH_FZF="$inst_home/fakebin/fzf" SESH_JQ="$SESH_JQ" SESH_SQLITE="$SESH_SQLITE" \
   bash "$PACKAGE_DIR/bin/sesh.sh" --check > "$fixture/check-ok.out" 2>&1
 grep -Fq 'sidebar panel is current' "$fixture/check-ok.out"
+
+# --- UX regressions -------------------------------------------------------
+
+# 19. The picker header names the effective scope, the session count and the
+# snapshot status, so a scope toggle or a stale index is never silent.
+add_session 'ses_h1' "$one" 'Header one' 2200000000000 2200000000000
+add_part 'ses_h1' 'msg_h1' 'user' 'text' 'header body one' 2200000000000
+add_session 'ses_h2' "$two" 'Header two' 2210000000000 2210000000000
+add_part 'ses_h2' 'msg_h2' 'user' 'text' 'header body two' 2210000000000
+add_session 'ses_harch' "$one" 'Header archived' 1600000000000 1600000100000 1600000200000
+hdr_state="$fixture/hdr-state"
+"$list" --refresh --state-dir "$hdr_state" > /dev/null
+hdr=$("$list" --header --state-dir "$hdr_state")
+case "$hdr" in *'all dirs'*) ;; *) echo "header omitted the global scope: $hdr" >&2; exit 1;; esac
+case "$hdr" in *'2 sessions'*) ;; *) echo "header omitted the session count: $hdr" >&2; exit 1;; esac
+case "$hdr" in *stale*|*unavailable*) echo "a fresh header claimed stale state: $hdr" >&2; exit 1;; esac
+( cd "$one"; "$list" --refresh --state-dir "$hdr_state" --cwd > /dev/null )
+case "$("$list" --header --state-dir "$hdr_state")" in *"$one"*) ;; *) echo "header omitted the scoped directory" >&2; exit 1;; esac
+case "$("$list" --header --state-dir "$hdr_state" --archived)" in *'archived shown'*) ;; *) echo "header omitted the archived opt-in" >&2; exit 1;; esac
+
+# 20. Archived rows are tagged in the list, and a query that matches nothing
+# says so instead of rendering an empty screen.
+"$list" --refresh --state-dir "$hdr_state" --archived > "$fixture/arch.tsv"
+grep -Fq '· archived' "$fixture/arch.tsv"
+"$list" --state-dir "$hdr_state" --query 'no-such-session-anywhere' > "$fixture/nomatch.tsv"
+grep -Fq 'No sessions match' "$fixture/nomatch.tsv"
+awk -F'\t' '$2 != "" { exit 1 }' "$fixture/nomatch.tsv"
+
+# 21. A non-actionable selection leaves a one-shot notice that the reopened
+# picker renders once and then clears.
+notice_state="$fixture/notice-state"
+"$list" --refresh --state-dir "$notice_state" > /dev/null
+printf '%s' 'That row is a directory header, not a session.' > "$notice_state/action-notice"
+"$list" --state-dir "$notice_state" > "$fixture/notice.tsv"
+grep -Fq 'directory header, not a session' "$fixture/notice.tsv"
+[ ! -e "$notice_state/action-notice" ]
+"$list" --state-dir "$notice_state" > "$fixture/notice2.tsv"
+grep -Fq 'directory header' "$fixture/notice2.tsv" && { echo "action notice was not consumed" >&2; exit 1; }
 
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then

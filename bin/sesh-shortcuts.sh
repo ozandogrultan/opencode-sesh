@@ -9,9 +9,10 @@ sesh shortcuts
   Ctrl-G            Toggle current-directory scope / all sessions
   Space             Toggle transcript preview
   ?                 Toggle this help
-  Ctrl-X            Delete the selected session
+  Ctrl-X            Delete the selected session (asks to confirm)
   Escape            Exit the picker
 
 Flags: --cwd (current directory only), --limit N (default: all),
-       --archived (include archived), --print (print id instead of resuming)
+       --archived (include archived), --print (print id instead of resuming),
+       --json (with --print, emit JSON)
 HELP

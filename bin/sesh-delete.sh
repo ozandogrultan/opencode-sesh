@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
-# Usage: sesh-delete.sh STATE_DIR SESSION_ID
+# Usage: sesh-delete.sh [--yes] STATE_DIR SESSION_ID
 # Ctrl-X deletes through the opencode CLI so its own safeguards apply.
-# There is no confirmation prompt, matching the Claude picker.
+# Deletion is irreversible, so this confirms first: an interactive run asks for
+# a y, and a non-interactive run must pass --yes rather than inherit whatever
+# stdin happens to be. Rows with no session id (headers, notices) stay silent
+# no-ops.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-state_dir=${1:-}
-session_id=${2:-}
+assume_yes=0
+positional=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --yes|-y) assume_yes=1 ;;
+    --help) echo "usage: ${0##*/} [--yes] STATE_DIR SESSION_ID"; exit 0 ;;
+    *) positional+=("$1") ;;
+  esac
+  shift
+done
+state_dir=${positional[0]:-}
+session_id=${positional[1]:-}
 snapshot="$state_dir/snapshot.jsonl"
 lock="$state_dir/refresh.lock"
 OPENCODE_BIN=${SESH_OPENCODE:-opencode}
@@ -39,6 +52,27 @@ acquire_lock() {
 [ -n "$session_id" ] || exit 0
 [[ "$session_id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Invalid session identity."; pause; exit 0; }
 [ -n "$state_dir" ] && [ -f "$snapshot" ] || { echo "No session snapshot available."; pause; exit 0; }
+
+# Confirm before taking the lock: a human can sit on the prompt for as long as
+# they like without blocking the snapshot publisher. The row is re-checked
+# against the snapshot below, so a session that vanishes meanwhile still loses.
+if [ "$assume_yes" = 0 ]; then
+  if [ -t 0 ]; then
+    title=$("$JQ_BIN" -r --arg sid "$session_id" 'select(.sessionId == $sid) | .title // ""' "$snapshot" 2>/dev/null || true)
+    [ -n "$title" ] || title='untitled'
+    printf '%s' "Delete \"$title\" ($session_id)? [y/N] "
+    reply=''
+    IFS= read -r -n 1 reply || reply=''
+    printf '\n'
+    case "$reply" in
+      y|Y) ;;
+      *) echo "Cancelled; nothing was deleted."; pause; exit 0 ;;
+    esac
+  else
+    echo "Refusing to delete $session_id: pass --yes when stdin is not a terminal." >&2
+    exit 2
+  fi
+fi
 
 # Serialize this action with the sole snapshot publisher. A short collision
 # is safer than deleting against a moving snapshot.

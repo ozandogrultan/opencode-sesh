@@ -12,6 +12,7 @@ LIMIT=0
 LIMIT_SET=0
 SCOPE_SET=0
 REFRESH=0
+HEADER=0
 WAIT_LOCK=0
 TOGGLE_SCOPE=0
 INCLUDE_ARCHIVED=0
@@ -20,10 +21,11 @@ STATE_DIR=''
 QUERY=''
 SELECTED_ID=''
 SCOPE_CWD=''
-usage() { echo "usage: ${0##*/} [--refresh] [--wait-lock SECONDS] --state-dir DIR [--cwd] [--limit N] [--archived] [--toggle-scope] [--query TEXT]" >&2; }
+usage() { echo "usage: ${0##*/} [--refresh] [--header] [--wait-lock SECONDS] --state-dir DIR [--cwd] [--limit N] [--archived] [--toggle-scope] [--query TEXT]" >&2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --refresh) REFRESH=1 ;;
+    --header) HEADER=1 ;;
     --wait-lock) WAIT_LOCK=${2:-}; shift ;;
     --state-dir) STATE_DIR=${2:-}; shift ;;
     --cwd) SCOPE_CWD=$PWD; SCOPE_SET=1 ;;
@@ -113,14 +115,47 @@ atomic_text() {
 }
 set_status() { atomic_text "$STATUS" "$1"; }
 
-render() {
-  local state=''
+# One-line fzf --header: the effective scope, how many sessions the snapshot
+# holds and whether it is fresh. Reads published state only, so it stays cheap
+# enough to run on fzf's 3s poll without touching the database.
+header() {
+  local state='' count=0 scope='all dirs' line=''
   [ -f "$STATUS" ] && state=$(cat "$STATUS" 2>/dev/null || true)
+  if [ -f "$SNAPSHOT" ]; then
+    count=$(wc -l < "$SNAPSHOT" 2>/dev/null || printf '0')
+    count=${count//[!0-9]/}
+    [ -n "$count" ] || count=0
+  fi
+  if [ -n "$SCOPE_CWD" ]; then
+    case "$SCOPE_CWD" in
+      "$HOME") scope='~' ;;
+      "$HOME"/*) scope="~${SCOPE_CWD#"$HOME"}" ;;
+      *) scope=$SCOPE_CWD ;;
+    esac
+  fi
+  line="${CYAN}${scope}${RESET}  ${GRAY}·${RESET}  ${GRAY}${count} sessions${RESET}"
+  [ "$INCLUDE_ARCHIVED" = 1 ] && line="${line}  ${GRAY}·${RESET}  ${YELLOW}archived shown${RESET}"
+  [ -n "$state" ] && [ "$state" != fresh ] && line="${line}  ${GRAY}·${RESET}  ${YELLOW}${state}${RESET}"
+  printf '%s' "$line"
+}
+
+render() {
+  local state='' notice=''
+  [ -f "$STATUS" ] && state=$(cat "$STATUS" 2>/dev/null || true)
+  # A non-actionable selection (a directory header, a stale notice) leaves a
+  # one-shot message here so the reopened picker explains itself instead of
+  # repainting the same list as if the key had been ignored.
+  if [ -f "$STATE_DIR/action-notice" ]; then
+    notice=$(cat "$STATE_DIR/action-notice" 2>/dev/null || true)
+    rm -f "$STATE_DIR/action-notice" 2>/dev/null || true
+  fi
   if [ ! -f "$SNAPSHOT" ]; then
+    [ -n "$notice" ] && printf '\t\tunknown\t%s%s%s\t\tnotice:action\n' "$YELLOW" "$notice" "$RESET"
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
     return 0
   fi
   {
+    [ -n "$notice" ] && printf '\t\tunknown\t%s%s%s\t\tnotice:action\n' "$YELLOW" "$notice" "$RESET"
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
     "$JQ_BIN" -sr --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg selected "$SELECTED_ID" '
       def ago($epoch):
@@ -128,23 +163,34 @@ render() {
         | if $s < 60 then "now" elif $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
       def homepath:
         . as $p | if $p == "" then "?" elif $p == $home then "~" elif ($home != "" and startswith($home + "/")) then "~" + .[($home|length):] else . end;
-      # Preserve a vanished selection as a non-actionable row with its original
-      # tracking key. Otherwise fzf falls back to a different session. Keep it
-      # until the user moves away; empty field 2 makes Enter/Ctrl-F/Ctrl-X no-ops.
+      # Non-actionable rows: an empty field 2 makes Enter/Ctrl-F/Ctrl-X no-ops,
+      # and the unique id keeps fzf from falling back to a neighbouring session.
+      def notice_row($msg; $id): (["", "", "unknown", ($yellow + $msg + $reset), "", $id] | @tsv);
+      # Preserve a vanished selection so the picker keeps its identity instead
+      # of jumping to a different session; keep it until the user moves away.
       (if ($selected | test("^ses_[A-Za-z0-9]+$")) and (any(.sessionId == $selected) | not)
-       then (["", "", "unknown", ($yellow + "Selected session is no longer available; choose another session" + $reset), "", $selected] | @tsv)
+       then notice_row("Selected session is no longer available; choose another session"; $selected)
        else empty end),
+      # An empty result set must say so: with the info line hidden and an empty
+      # preview, a filtered-to-nothing list is otherwise an indistinguishable
+      # blank screen.
       (($query | ascii_downcase) as $q
-      | map(select($q == "" or (.searchText | contains($q))))
+      | [.[] | select($q == "" or (.searchText | contains($q)))] as $matched
+      | (if ($matched | length) == 0
+         then notice_row(if $q == "" then "No sessions in this store" else "No sessions match \"" + $query + "\"" end; "notice:no-match")
+         else empty end),
+        ($matched
       | group_by(.cwd)
       | map({cwd: .[0].cwd, updated: (map(.updatedEpoch) | max), items: (sort_by(.updatedEpoch) | reverse)})
       | sort_by(.updated) | reverse
       | .[] as $g
       | (["", "", "unknown", ($magenta + ($g.cwd | homepath | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + $reset), $g.cwd, ("hdr:" + $g.cwd)] | @tsv),
         ($g.items | to_entries[] | .key as $i | .value as $s
-         | (if $s.liveState == "running" then ($bold + $green) elif $s.agentId != "" and $s.agentState == "failed" then $red elif $s.agentId != "" then $cyan else $gray end) as $c
+         # Archived rows are opt-in and need to look like it; nothing else about
+         # a row is knowable here (live agent state is not exposed by opencode).
+         | (if $s.archived == 1 then $yellow else $gray end) as $c
          | ($gray + (if $i == (($g.items|length)-1) then "└" else "├" end) + $reset) as $branch
-         | [$s.agentId, $s.sessionId, $s.liveState, ($branch + " " + $c + ($s.title | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + $reset + "  " + $gray + ago($s.updatedEpoch) + $reset), $s.cwd, $s.sessionId] | @tsv))
+         | [$s.agentId, $s.sessionId, $s.liveState, ($branch + " " + $c + ($s.title | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + (if $s.archived == 1 then " · archived" else "" end) + $reset + "  " + $gray + ago($s.updatedEpoch) + $reset), $s.cwd, $s.sessionId] | @tsv)))
     ' "$SNAPSHOT"
   } || printf '\t\tunknown\t%sSnapshot rendering failed; retry refresh%s\t\tnotice:render-error\n' "$YELLOW" "$RESET"
 }
@@ -336,6 +382,7 @@ refresh() {
        | . as $m | ($histById[$m.id] // {}) as $h
        | {sessionId: $m.id, malformedRecords: 0, agentId: "", agentState: "",
           liveState: "unknown", transcriptPath: "", source: "opencode",
+          archived: (if (($m.archived // 0) | tonumber) == 0 then 0 else 1 end),
           cwd: (if ($h.cwd // "") != "" then $h.cwd else $m.directory end),
           updatedEpoch: ($h.updatedEpoch // (($m.time_updated / 1000 | floor))),
           title: (if ($h.title // "") != "" then $h.title else ($m.title // "(untitled)") end)}
@@ -356,5 +403,6 @@ refresh() {
   fi
 }
 
+if [ "$HEADER" = 1 ]; then header; exit 0; fi
 if [ "$REFRESH" = 1 ] || [ "$TOGGLE_SCOPE" = 1 ]; then refresh; fi
 render
