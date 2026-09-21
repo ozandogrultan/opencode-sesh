@@ -7,8 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The picker header always names the effective scope, the session count and
+  whether the index is fresh or stale (`sesh-list.sh --header`), so a `Ctrl-G`
+  scope toggle or a degraded snapshot is no longer invisible.
+- `sesh --print --json` emits `{"sessionId","cwd","fork"}` for scripting.
+- Archived sessions are tagged `· archived` when included with `--archived`,
+  replacing the agent-state colours that could never fire (opencode exposes no
+  live agent state, so every row rendered grey either way).
+- The TUI picker takes `Ctrl-X` (delete), `Ctrl-F` (fork) and `Ctrl-G` (scope to
+  the selected session's project), so both UIs now agree on the same keys.
+- The TUI sidebar is capped at the 15 most recent sessions with
+  `… N more · ctrl+o for all`, and clicking the **Sessions** heading drives it
+  from the keyboard (`↑`/`↓`, Enter, Space, `Ctrl-X`, Esc).
+- Empty stores, queries that match nothing, vanished selections and an
+  unavailable session list now say so instead of rendering a blank screen.
+- Session titles highlight the part of the row the search matched, and the
+  sidebar search accepts uppercase and punctuation.
+
 ### Changed
 
+- Deleting a session asks first. The picker prompts `[y/N]` before dispatching,
+  the TUI arms on the first `Ctrl-X` and commits on a second `Ctrl-X` (or `y`;
+  `n`, Esc or moving cancels), and `sesh-delete.sh` refuses a non-terminal stdin
+  unless given `--yes` — a piped newline can no longer authorize an irreversible
+  delete.
+- Resuming no longer stalls silently while the picker waits for a fresh scan: it
+  prints a progress line first, and `--print` lookups skip that poll entirely.
+- Selecting a directory header or a notice row explains itself with a one-shot
+  notice row instead of repainting the same list as if the key had been ignored.
 - Reconciled README, AGENTS.md and SECURITY.md with current behavior: the
   terminal UI is described as the full set of scripts (including the refresh
   worker and shortcut help), the extraction cache key documents the latest part

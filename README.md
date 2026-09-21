@@ -114,19 +114,27 @@ bash install.sh --uninstall   # from source
 | Ctrl-G | Toggle current-directory scope / all sessions |
 | Space (empty query) | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |
-| Ctrl-X | Delete the selected session |
+| Ctrl-X | Delete the selected session (asks to confirm) |
 | Escape | Exit |
+
+The header line always shows the effective scope, the session count and whether
+the index is fresh or stale, so a `Ctrl-G` toggle is never silent. A query that
+matches nothing says so instead of showing an empty screen.
 
 Flags: `--cwd` (current directory only), `--limit N` (default: all),
 `--archived`, `--print` (print `id<TAB>cwd` instead of resuming), `--fork`,
-`--query TEXT`, `--check`.
+`--json` (with `--print`, emit JSON), `--query TEXT`, `--check`.
 
 Because `--print` just emits the id and directory, `sesh` doubles as a scriptable
 session lookup:
 
 ```bash
 read -r id cwd < <(sesh --print --query "auth")
+sesh --print --json --query "auth" | jq -r .cwd
 ```
+
+Deleting is irreversible, so the picker asks before dispatching it, and a
+non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 
 ### TUI panel
 
@@ -138,10 +146,16 @@ read -r id cwd < <(sesh --print --query "auth")
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
 | Space | Toggle the transcript preview |
 | Enter | Open the selected session |
+| Ctrl-X | Delete the selected session (asks to confirm) |
+| Ctrl-F | Fork the selected session |
+| Ctrl-G | Toggle scope: the selected session's project, or every project |
 | Esc | Close |
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
-elsewhere or press Esc to leave search.
+elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
+the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
+Space to preview, Ctrl-X to delete, Esc to leave). The sidebar shows the 15 most
+recent sessions — the full picker is one keystroke away.
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing

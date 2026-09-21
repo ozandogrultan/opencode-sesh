@@ -25,6 +25,7 @@ slot section plus an xlarge modal picker; the terminal UI is fullscreen fzf.
 ```bash
 bun install            # dev deps (TypeScript, opencode/OpenTUI types)
 bun run test           # fixture-DB regression suite — must stay green
+bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite (needs fzf >= 0.73)
 bun run typecheck      # tsc over tui/ and opencode/
 bun run lint:sh        # bash -n on every script
@@ -37,6 +38,9 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
   Never hardcode install paths.
 - `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
 - `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
+- `scripts/changelog.sh` — release tooling: drafts `[Unreleased]` from
+  conventional commits, promotes it to a dated version, prints release notes and
+  checks the compare links. `tests/changelog.sh` covers it in a throwaway repo.
 - `themes/`, `tests/`, `install.sh`, `README.md`.
 
 The **filename becomes the tool name** in opencode, so `sesh-list.ts` is the
@@ -61,7 +65,13 @@ the schema below. Keystrokes never touch the database:
   the whole DB and pruning is always safe.
 - render (cheap, pure `jq`): reads the snapshot only. Filters on `searchText`
   (title + `fulltextLower`, both lowercased at extraction), groups by `cwd`,
-  sorts groups/items by recency, renders the TSV.
+  sorts groups/items by recency, renders the TSV. Notice rows (headers, a
+  vanished selection, an empty store, a query matching nothing) carry an empty
+  `sessionId` and a unique `trackingId`. `--header` prints the one-line
+  scope/count/status that the picker uses as fzf's header, and a non-actionable
+  selection leaves a one-shot `STATE_DIR/action-notice` the next render shows
+  and consumes. Snapshot records carry `archived` as 0/1 (the DB column is an
+  epoch, not a boolean).
 
 **Output contract** (TSV, 6 fields):
 `agentId  sessionId  liveState  display  cwd  trackingId`. `display` is the only
@@ -70,8 +80,11 @@ empty `sessionId` and are a selection no-op — keep that guard.
 
 One worker (`sesh-refresh-worker.sh`, per picker, TERMed on exit) serializes
 scans; fzf's `start`/`every(3)`/`change` bindings render only. Selection requests
-a fresh poll (`request`/`wait`, ≤12 s) before dispatch. opencode has no
-live-agent API, so `liveState` is always `unknown` and rows render gray;
+a fresh poll (`request`/`wait`, ≤12 s) before dispatch — skipped for `--print`,
+which is a pure snapshot lookup — and prints a progress line to stderr while it
+waits, because fzf has already exited and the terminal is idle. opencode has no
+live-agent API, so `liveState` is always `unknown` and rows render gray unless
+they are archived (opt-in, tagged `· archived`);
 dispatch is always `opencode --session <id>` (`--fork` with Ctrl-F or --fork).
 Resume happens in place (`exec` after `cd` to the session's cwd).
 
@@ -89,7 +102,12 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   raw string.
 - fzf: stock only, `>= 0.73` (`transform:`, `every():`). `{q}` in binds is
   shell-quoted by fzf — don't add quoting. Ctrl-G is bind-only (stays open);
-  Ctrl-F is `--expect` (accepts with fork).
+  Ctrl-F is `--expect` (accepts with fork). A `transform-header` inside a chained
+  action must come **before** `reload`/`reload-sync`: placed after, fzf silently
+  publishes an empty list (verified on 0.74.3).
+- Destructive actions confirm. `sesh-delete.sh` prompts on a TTY and refuses
+  without `--yes` when stdin is not one; the TUI arms on the first Ctrl-X and
+  commits on the second (or `y`).
 - The installer prefers the local opencode version for `@opencode-ai/*` and
   merges (never clobbers) the config `package.json`; opencode runs `bun install`
   at startup.
@@ -97,18 +115,27 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   (`feat`, `fix`, `docs`, `ci`, …). See
   [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages) for the types and the
   version mapping.
+- `CHANGELOG.md` follows Keep a Changelog: notable changes are written under
+  `[Unreleased]` as the work lands, and the Release workflow promotes that
+  section (dated, relinked) into the published version, using it verbatim as the
+  GitHub release body. `scripts/changelog.sh draft` can seed entries from
+  conventional commits, but hand-written prose is the expected form — never let
+  a draft overwrite curated entries.
 
 ## TUI panel (`tui/sesh-panel.tsx`)
 
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
-  sidebar content stays). Renders the most recent unarchived sessions with the
-  current one highlighted, polled every 15 s. Display-only; the picker does
-  actions.
+  sidebar content stays). Renders the newest `SIDEBAR_LIMIT` unarchived sessions
+  with the current one highlighted, polled every 15 s; space previews a row and
+  ctrl+x deletes one (armed, then confirmed). Anything bulkier belongs to the
+  picker.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;
-  Ctrl-X deletes via the opencode CLI and removes the row only after the server
-  confirms the deletion.
+  Ctrl-X arms and then confirms a delete through `api.client.session.delete` and
+  removes the row only after the server confirms; Ctrl-F forks through
+  `api.client.session.fork`; Ctrl-G scopes the list to the selected session's
+  project.
 - **Picker search:** pages the global session list (`SESSION_PAGE_LIMIT`, capped
   at `SESSION_MAX` and reported when truncated) instead of a fixed 500-row
   window, then indexes transcript text for **every** session in batches
@@ -137,10 +164,28 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   removes any leftover `commands/sesh.md`.
 - Do not bind `<leader>l` (native `session_list`) or shadow the native
   `/sessions` command.
+- **The sidebar never binds arrow keys globally.** Keyboard navigation is
+  opt-in: clicking the *Sessions* heading (or its search box) activates a
+  priority-20 layer, because a global `↑`/`↓` would hijack the main prompt.
+  Cursor state is derived from `itemRows()`, so hover and cursor resolve to the
+  same row, and the section is capped at `SIDEBAR_LIMIT` (`… N more · ctrl+o for
+  all` is the escape hatch) — it must stay a glanceable recent list.
+- **Delete in the TUI is two-step.** The first `ctrl+x` arms `pendingDelete`,
+  the second (or `y`, or Enter in the picker footer) commits, and `n`/Esc/moving
+  cancels. The `y`/`n` layer is registered *only while armed*, so it can never
+  shadow the search box's typing.
+- **Picker `ctrl+g` is project scope**, not close (parity with the fzf picker's
+  `Ctrl-G`); Esc is the only close key. `ctrl+f` forks through
+  `api.client.session.fork` and navigates to the returned session.
+- Row titles render through `<Highlighted>`, and JSX must stay out of the
+  `function shortDir` … `const TRANSCRIPT_PREVIEW_TURNS` window that
+  `tests/tui.mjs` extracts and evaluates as the data layer.
 
 ## Verifying
 
 - `bun run test` — fixture-DB regression suite, hermetic via `SESH_*` overrides.
+- `bun run test:changelog` — release-tooling regressions; builds its own git
+  history in a temp dir (included in `bun run test`).
 - `bun run test:picker` — PTY suite driving the real fzf picker (needs fzf
   `>= 0.73` and Python 3).
 - `bun run typecheck` — `tsc` over `tui/` and `opencode/`.
