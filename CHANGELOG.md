@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-24
+
 ### Added
 
 - The TUI picker shows a highlighted excerpt for matching transcript text,
@@ -14,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the query and filters when reopened during the same opencode run.
 - `/sesh-needs` shows how long each session has waited, puts the longest-waiting
   first, and can open the next waiting session with `n`.
-
 ## [0.8.0] - 2026-09-24
 
 ### Changed
@@ -341,7 +342,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.1...v0.7.2
