@@ -437,6 +437,18 @@ async function cmuxSurfaces(): Promise<CmuxSurface[]> {
   return surfaces
 }
 
+// The bridge walks `cmux tree` plus one `surface resume show` per surface, and
+// switching sessions is frequent while the surface set changes rarely, so reuse
+// a recent scan for a moment instead of re-walking cmux on every open.
+let cmuxSurfacesCache: { at: number; surfaces: CmuxSurface[] } | undefined
+async function cmuxSurfacesCached(): Promise<CmuxSurface[]> {
+  const now = Date.now()
+  if (cmuxSurfacesCache && now - cmuxSurfacesCache.at < 1500) return cmuxSurfacesCache.surfaces
+  const surfaces = await cmuxSurfaces()
+  cmuxSurfacesCache = { at: now, surfaces }
+  return surfaces
+}
+
 // Pure selection: the workspace to focus for a session, or undefined to open
 // locally. Prefers a live surface in a different workspace; ignores the
 // caller's own surface and workspace (focusing where you already are is a
@@ -450,6 +462,26 @@ function pickFocusWorkspace(surfaces: CmuxSurface[], sessionID: string): string 
     return surface.workspaceRef
   }
   return undefined
+}
+
+// Open a session from anywhere in the panel, cmux-aware: if another cmux
+// workspace is already running it, focus that workspace instead of opening a
+// duplicate here; otherwise open it locally. Every switch path (sidebar, home
+// list, picker, needs-input picker) goes through here so none of them silently
+// skips the bridge. cmux calls only run inside cmux.
+async function openSessionEntry(api: TuiPluginApi, entry: Entry): Promise<void> {
+  if (process.env.CMUX_WORKSPACE_ID) {
+    const target = pickFocusWorkspace(await cmuxSurfacesCached(), entry.id)
+    if (target) {
+      try {
+        await promisify(execFile)("cmux", ["workspace", "select", target])
+        return
+      } catch {
+        // cmux unavailable; fall through to a local open
+      }
+    }
+  }
+  api.route.navigate("session", { sessionID: entry.id })
 }
 
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
@@ -853,23 +885,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setSectionCollapsed((value) => !value)
   }
 
-  // Open a session. If a cmux surface is already running it in another
-  // workspace, focus that workspace instead of opening a duplicate here;
-  // otherwise open it locally. `cmux` calls only run inside cmux.
-  const openSession = async (entry: Entry) => {
-    if (process.env.CMUX_WORKSPACE_ID) {
-      const target = pickFocusWorkspace(await cmuxSurfaces(), entry.id)
-      if (target) {
-        try {
-          await promisify(execFile)("cmux", ["workspace", "select", target])
-          return
-        } catch {
-          // cmux unavailable; fall through to a local open
-        }
-      }
-    }
-    props.api.route.navigate("session", { sessionID: entry.id })
-  }
+  // Sidebar rows open through the shared cmux-aware path, so they focus the
+  // workspace already running the session instead of opening a duplicate.
+  const openSession = (entry: Entry) => openSessionEntry(props.api, entry)
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
   // mouse hover resolve to the same row.
@@ -1449,7 +1467,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
               backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
               onMouseOver={() => setHovered(entry.id)}
               onMouseOut={() => setHovered(undefined)}
-              onMouseDown={() => props.api.route.navigate("session", { sessionID: entry.id })}
+              onMouseDown={() => void openSessionEntry(props.api, entry)}
             >
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 ○
@@ -1753,7 +1771,7 @@ const tui: TuiPlugin = async (api) => {
       if (!target) return
       cleanup()
       api.ui.dialog.clear()
-      api.route.navigate("session", { sessionID: target.id })
+      void openSessionEntry(api, target)
     }
 
     const disposeNav = api.keymap.registerLayer({
@@ -2154,7 +2172,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       if (!target) return
       disposeNav()
       api.ui.dialog.clear()
-      api.route.navigate("session", { sessionID: target.entry.id })
+      void openSessionEntry(api, target.entry)
     }
     const disposeNav = api.keymap.registerLayer({
       bindings: [

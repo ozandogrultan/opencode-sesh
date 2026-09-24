@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Switching to a session from the picker (`ctrl+o` / `/sesh`), the home
+  "Recent sessions" list, or the needs-input picker now runs the cmux
+  click-to-focus bridge: a session already live in another cmux workspace
+  focuses that workspace instead of opening a duplicate here. Previously only
+  sidebar rows did this.
+
+### Changed
+
+- Every open path shares one cmux-aware handler, and the cmux surface scan is
+  cached briefly so the additional paths add no noticeable delay. Terminals
+  outside cmux are unaffected — with no `CMUX_WORKSPACE_ID` no cmux call is
+  made, now asserted by a test.
+
 ## [0.7.1] - 2026-09-24
 
 ### Fixed
