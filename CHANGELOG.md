@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
 ### Changed
 
 - Sidebar and picker sessions within each directory now sort by last update,
   newest first, even when a session is pinned. Sidebar titles and labels make
   waiting, running, and currently open idle sessions distinguishable at a glance.
-
 ## [0.7.3] - 2026-09-24
 
 ### Removed
@@ -332,7 +333,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.3...v0.8.0
 [0.7.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.0...v0.7.1

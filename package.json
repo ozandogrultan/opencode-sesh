@@ -1,6 +1,6 @@
 {
   "name": "opencode-sesh",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "type": "module",
   "description": "Browse, search, preview and resume opencode sessions from the terminal and the TUI.",
   "license": "MIT",
