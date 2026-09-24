@@ -39,9 +39,11 @@ Pick the bump from the [Conventional Commits](CONTRIBUTING.md#commit-messages)
 since the last release — the highest impact wins: `feat` → minor,
 `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
 
-Move the `## [Unreleased]` entries in [CHANGELOG.md](CHANGELOG.md) into a new
-`## [x.y.z] - YYYY-MM-DD` section and update the compare links. The one-click
-workflow does not edit the changelog for you.
+Keep releasable entries under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md)
+and do not promote them yourself: the workflow runs
+`scripts/changelog.sh promote` during the release commit, and promoting
+beforehand makes it fail (`0.x.y already has a section`). `changelog.sh check`
+validates the structure; `changelog.sh notes` previews the release body.
 
 ## One-time setup
 
