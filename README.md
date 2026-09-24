@@ -116,7 +116,7 @@ bash install.sh --uninstall   # from source
 | Ctrl-F       | Resume as a fork (the original is untouched) |
 | Ctrl-G | Toggle current-directory scope / all sessions |
 | Alt-S / Alt-D | Pin or unpin the selected session / directory |
-| Space (empty query) | Toggle the transcript preview |
+| Ctrl-P | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |
 | Ctrl-X | Delete the selected session (asks to confirm) |
 | Escape | Exit |
@@ -159,7 +159,7 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Space to preview, Alt-S/Alt-D to pin, Ctrl-X to delete, Esc to leave). Pinned
+Ctrl-P to preview, Alt-S/Alt-D to pin, Ctrl-X to delete, Esc to leave). Pinned
 sessions appear ahead of recent ones in the 15-row sidebar; click **▾ hide**
 to collapse the section. Hovering a row while keyboard navigation is active
 selects it for the next shortcut. The full picker is one keystroke away.

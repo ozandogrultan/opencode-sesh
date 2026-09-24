@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Session previews now use Ctrl-P rather than Space in the terminal picker,
+  sidebar and home list, so typing cannot accidentally open a preview.
 - Hovering a sidebar session while keyboard navigation is active now moves the
   selection to that row, so Alt-S/Alt-D pin the row under the pointer rather
   than the previously selected (often currently open) session.

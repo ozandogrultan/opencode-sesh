@@ -132,7 +132,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
   sidebar content stays). Renders pinned sessions before the newest
   `SIDEBAR_LIMIT` unarchived sessions
-  with the current one highlighted, polled every 15 s; space previews a row and
+  with the current one highlighted, polled every 15 s; Ctrl-P previews a row and
   ctrl+x deletes one (armed, then confirmed). Anything bulkier belongs to the
   picker.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by

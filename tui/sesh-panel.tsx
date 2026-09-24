@@ -816,7 +816,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "space",
+          key: "ctrl+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => openSidebarPreview(entry),
@@ -865,7 +865,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         cmd: () => setCursor(Math.max(0, itemRows().length - 1)),
       },
       {
-        key: "space",
+        key: "ctrl+p",
         desc: "Preview session transcript",
         preventDefault: true,
         cmd: () => {
@@ -1071,7 +1071,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · space preview · alt+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · alt+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1137,7 +1137,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "space",
+          key: "ctrl+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => preview.open(entry),

@@ -179,6 +179,14 @@ exec {shlex.quote(FZF)} "$@"
         self.assertEqual(self.actions(), [dict(args=["--session", "ses_beta"], cwd=os.path.realpath(str(self.root / "project")))])
         self.assertIn("--query=auth ", self.contents("invocations").splitlines()[1])
 
+    def test_space_enters_query_instead_of_opening_preview(self):
+        self.start("--query", "auth")
+        self.key(b" ")
+        self.settle()
+        self.key(b"\r")
+        self.until(lambda: len(self.contents("invocations").splitlines()) == 2)
+        self.assertIn("--query=auth  ", self.contents("invocations").splitlines()[1])
+
     def test_delete_tracks_identity(self):
         self.start()
         self.reorder()

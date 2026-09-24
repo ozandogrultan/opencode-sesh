@@ -54,6 +54,16 @@ const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// Space must remain available to both search boxes and the main prompt even
+// when a session row is hovered or selected in the sidebar.
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const previewKeys = [...source.matchAll(/key: "([^"]+)",\s*desc: "Preview session transcript"/g)]
+  assert.equal(previewKeys.length, 3, "expected hover and sidebar navigation preview bindings")
+  assert.ok(previewKeys.every((match) => match[1] === "ctrl+p"), "Space must not open a preview")
+  assert.match(source, /key: "space", preventDefault: true, cmd: \(\) => append\(" "\)/)
+}
+
 // An old pinned session remains visible ahead of a capped recent list, even
 // when another directory is pinned as a group.
 {

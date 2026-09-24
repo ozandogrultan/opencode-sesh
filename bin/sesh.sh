@@ -131,7 +131,7 @@ while :; do
   selection=$(FZF_DEFAULT_COMMAND='printf ""' FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' "$SESH_FZF" --print-query --expect=ctrl-f --query="$query" --ansi --delimiter=$'\t' --with-nth=4 --track --id-nth=6 --disabled --layout=reverse --info=hidden --prompt='❯ ' \
     --preview="$preview_cmd" --preview-window='right,50%,wrap,hidden' \
     --header-first --header="$header_line" \
-    --bind='space:transform:[ -z {q} ] && echo toggle-preview || echo "put( )"' \
+    --bind='ctrl-p:toggle-preview' \
     --bind="$help_bind" \
     --bind="ctrl-x:execute($delete_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
     --bind="ctrl-g:execute($toggle_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
