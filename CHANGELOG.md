@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-24
+
 ### Fixed
 
 - Switching to a session from the picker (`ctrl+o` / `/sesh`), the home
@@ -21,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cached briefly so the additional paths add no noticeable delay. Terminals
   outside cmux are unaffected — with no `CMUX_WORKSPACE_ID` no cmux call is
   made, now asserted by a test.
-
 ## [0.7.1] - 2026-09-24
 
 ### Fixed
@@ -317,7 +318,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.5.0...v0.6.0
