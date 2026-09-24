@@ -165,6 +165,8 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Key | Action |
 | --- | --- |
 | `/sesh` | Open the full picker |
+| `/sesh-costs` | Per-project cost digest (24h beside lifetime) |
+| `/sesh-needs` | Sessions waiting on you (Enter opens) |
 | `ctrl+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |

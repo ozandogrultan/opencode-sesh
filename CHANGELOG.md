@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/sesh-costs` opens the per-project cost digest inside the TUI (24h beside
+  lifetime, same message-level sums as `sesh costs`).
+- `/sesh-needs` opens the sessions waiting on you as an openable list (Enter
+  opens, Esc closes). Both new slashes are read-only; prune and retitle stay
+  CLI-only.
+
 ## [0.4.0] - 2026-09-24
 
 ### Added

@@ -71,6 +71,17 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /const confirmArmed = /)
 }
 
+// Slash subcommands exist as separate registrations (the command API never
+// passes arguments), each read-only: costs renders a digest, needs opens the
+// waiting set. Destructive actions stay CLI-only.
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  assert.match(source, /slash: \{ name: "sesh-costs" \}/)
+  assert.match(source, /slash: \{ name: "sesh-needs" \}/)
+  assert.match(source, /const openCosts = /)
+  assert.match(source, /const openNeeds = /)
+}
+
 // The sidebar surfaces needs-input triage: a virtual group above the
 // directory groups, fed by the shared NEEDS_INPUT_SQL heuristic.
 {

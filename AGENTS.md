@@ -179,7 +179,9 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   `slash: { name: "sesh" }` on the `api.command.register` entry — that is the
   only way to open the dialog. A markdown command under `commands/` cannot drive
   the picker (it just prompts the model), so never ship one; the installer
-  removes any leftover `commands/sesh.md`.
+  removes any leftover `commands/sesh.md`. The command API never passes slash
+  arguments, so subcommands are separate registrations (`/sesh-costs`,
+  `/sesh-needs`) — all read-only. Destructive actions stay CLI-only.
 - Do not bind `<leader>l` (native `session_list`) or shadow the native
   `/sessions` command.
 - **The sidebar never binds arrow keys globally.** Keyboard navigation is

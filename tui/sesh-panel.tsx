@@ -1906,6 +1906,249 @@ const tui: TuiPlugin = async (api) => {
     api.ui.dialog.setSize("xlarge")
   }
 
+  // Read-only digest dialog: spend per project, last day beside lifetime.
+  // Same message-level sums as `sesh costs`; the dialog just renders them.
+  const openCosts = async () => {
+    if (api.mode.current() !== BASE_MODE) return
+    if (api.renderer.currentFocusedEditor === null) return
+    type CostRow = { directory: string; window: number; lifetime: number; sessions: number }
+    let rows: CostRow[] = []
+    let failed = false
+    try {
+      const db = await openTranscriptDb()
+      if (!db) failed = true
+      else {
+        try {
+          const cutoff = Date.now() - 86400000
+          const raw = (db.query(`
+SELECT s.directory AS directory,
+  ROUND(SUM(CASE WHEN m.time_created >= ${cutoff} THEN COALESCE(json_extract(m.data, '$.cost'), 0) ELSE 0 END), 4) AS window_cost,
+  ROUND(SUM(COALESCE(json_extract(m.data, '$.cost'), 0)), 4) AS lifetime_cost,
+  COUNT(DISTINCT s.id) AS sessions
+FROM message m
+JOIN session s ON s.id = m.session_id
+WHERE json_extract(m.data, '$.role') = 'assistant'
+  AND json_extract(m.data, '$.cost') IS NOT NULL
+GROUP BY s.directory
+ORDER BY lifetime_cost DESC`).all() ?? []) as {
+            directory: unknown
+            window_cost: unknown
+            lifetime_cost: unknown
+            sessions: unknown
+          }[]
+          rows = raw
+            .filter(
+              (
+                row,
+              ): row is {
+                directory: string
+                window_cost: number
+                lifetime_cost: number
+                sessions: number
+              } =>
+                typeof row?.directory === "string" &&
+                typeof row?.window_cost === "number" &&
+                typeof row?.lifetime_cost === "number" &&
+                typeof row?.sessions === "number" &&
+                row.lifetime_cost > 0,
+            )
+            .map((row) => ({
+              directory: row.directory,
+              window: row.window_cost,
+              lifetime: row.lifetime_cost,
+              sessions: row.sessions,
+            }))
+        } finally {
+          db.close()
+        }
+      }
+    } catch {
+      failed = true
+    }
+    const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
+    const home = process.env.HOME ?? ""
+    const disposeKeys = api.keymap.registerLayer({
+      bindings: [
+        { key: "escape", desc: "Close", preventDefault: true, cmd: () => api.ui.dialog.clear() },
+      ],
+    })
+    api.ui.dialog.replace(
+      () => (
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1}>
+          <text attributes={TextAttributes.BOLD}>
+            Cost digest{" "}
+            <span style={{ fg: api.theme.current.textMuted }}>(24h · lifetime)</span>
+          </text>
+          <Show
+            when={!failed && rows.length > 0}
+            fallback={
+              <text style={{ fg: api.theme.current.textMuted }}>
+                {failed ? "Cost data unavailable." : "No assistant cost recorded."}
+              </text>
+            }
+          >
+            <For each={rows}>
+              {(row) => (
+                <box flexDirection="row" gap={2}>
+                  <text flexShrink={0} style={{ fg: api.theme.current.success }}>
+                    {money(row.window)}
+                  </text>
+                  <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
+                    {money(row.lifetime)}
+                  </text>
+                  <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
+                    ({row.sessions})
+                  </text>
+                  <text flexGrow={1} flexShrink={1} wrapMode="none">
+                    {prettyDir(row.directory, home)}
+                  </text>
+                </box>
+              )}
+            </For>
+          </Show>
+          <box flexShrink={0}>
+            <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
+          </box>
+        </box>
+      ),
+      () => {
+        disposeKeys()
+      },
+    )
+    api.ui.dialog.setSize("large")
+  }
+
+  // Triage dialog: the waiting set as an openable list. Enter opens the
+  // highlighted session; the sidebar section stays the always-visible view.
+  const openNeeds = async () => {
+    if (api.mode.current() !== BASE_MODE) return
+    if (api.renderer.currentFocusedEditor === null) return
+    let items: { entry: Entry; reason: string }[] = []
+    try {
+      const { entries } = await fetchEntries(api)
+      const db = await openTranscriptDb()
+      let waiting = new Map<string, string>()
+      if (db) {
+        try {
+          waiting = await queryWaitingIds(db)
+        } finally {
+          db.close()
+        }
+      }
+      items = entries
+        .filter((entry) => waiting.has(entry.id))
+        .map((entry) => ({
+          entry,
+          reason: waiting.get(entry.id) === "question" ? "awaiting answer" : "run stuck",
+        }))
+    } catch {
+      api.ui.toast({ message: "Could not load sessions", variant: "error" })
+      return
+    }
+    if (items.length === 0) {
+      api.ui.toast({ message: "No sessions are waiting on you.", variant: "info" })
+      return
+    }
+    const [cursor, setCursor] = createSignal(0)
+    const moveCursor = (delta: number) =>
+      setCursor((value) => Math.max(0, Math.min(items.length - 1, value + delta)))
+    const choose = () => {
+      const target = items[cursor()]
+      if (!target) return
+      disposeNav()
+      api.ui.dialog.clear()
+      api.route.navigate("session", { sessionID: target.entry.id })
+    }
+    const disposeNav = api.keymap.registerLayer({
+      bindings: [
+        { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
+        { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
+        { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
+        {
+          key: "escape",
+          desc: "Close",
+          preventDefault: true,
+          cmd: () => api.ui.dialog.clear(),
+        },
+      ],
+    })
+    const home = process.env.HOME ?? ""
+    api.ui.dialog.replace(
+      () => (
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1}>
+          <text attributes={TextAttributes.BOLD}>
+            Needs input{" "}
+            <span style={{ fg: api.theme.current.textMuted }}>({items.length})</span>
+          </text>
+          <box flexDirection="column">
+            <For each={items}>
+              {(item, index) => (
+                <box
+                  flexDirection="row"
+                  gap={2}
+                  paddingLeft={1}
+                  paddingRight={1}
+                  backgroundColor={
+                    index() === cursor()
+                      ? api.theme.current.primary
+                      : RGBA.fromInts(0, 0, 0, 0)
+                  }
+                  onMouseDown={() => {
+                    setCursor(index())
+                    choose()
+                  }}
+                >
+                  <text
+                    flexGrow={1}
+                    flexShrink={1}
+                    wrapMode="none"
+                    style={{
+                      fg:
+                        index() === cursor()
+                          ? api.theme.current.selectedListItemText
+                          : api.theme.current.text,
+                    }}
+                  >
+                    {truncate(item.entry.title, 48)}
+                  </text>
+                  <text
+                    flexShrink={0}
+                    style={{
+                      fg:
+                        index() === cursor()
+                          ? api.theme.current.selectedListItemText
+                          : api.theme.current.warning,
+                    }}
+                  >
+                    {item.reason}
+                  </text>
+                  <text
+                    flexShrink={0}
+                    style={{
+                      fg:
+                        index() === cursor()
+                          ? api.theme.current.selectedListItemText
+                          : api.theme.current.textMuted,
+                    }}
+                  >
+                    {prettyDir(item.entry.dir, home)} · {ago(item.entry.updated)}
+                  </text>
+                </box>
+              )}
+            </For>
+          </box>
+          <box flexShrink={0}>
+            <text style={{ fg: api.theme.current.textMuted }}>↑↓ navigate · enter open · esc close</text>
+          </box>
+        </box>
+      ),
+      () => {
+        disposeNav()
+      },
+    )
+    api.ui.dialog.setSize("large")
+  }
+
   api.command?.register(() => [
     {
       title: "Pick session (all directories)",
@@ -1915,6 +2158,26 @@ const tui: TuiPlugin = async (api) => {
       slash: { name: "sesh" },
       onSelect: () => {
         void openPicker()
+      },
+    },
+    {
+      title: "Cost digest (per project)",
+      value: "sesh.costs",
+      description: "Spend per project, last day and lifetime",
+      category: "Sessions",
+      slash: { name: "sesh-costs" },
+      onSelect: () => {
+        void openCosts()
+      },
+    },
+    {
+      title: "Sessions waiting on you",
+      value: "sesh.needs",
+      description: "Unanswered questions and stuck runs",
+      category: "Sessions",
+      slash: { name: "sesh-needs" },
+      onSelect: () => {
+        void openNeeds()
       },
     },
   ])
