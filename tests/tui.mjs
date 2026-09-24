@@ -71,6 +71,15 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /const confirmArmed = /)
 }
 
+// The sidebar surfaces needs-input triage: a virtual group above the
+// directory groups, fed by the shared NEEDS_INPUT_SQL heuristic.
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  assert.match(source, /__needs_input__/)
+  assert.match(source, /NEEDS_INPUT_SQL/)
+  assert.match(source, /need input/)
+}
+
 // Space must remain available to both search boxes and the main prompt even
 // when a session row is hovered or selected in the sidebar.
 {

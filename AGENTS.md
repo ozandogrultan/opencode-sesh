@@ -35,7 +35,12 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 ## Layout
 
 - `bin/` — flat; no subdirs. Scripts resolve siblings from their own location.
-  Never hardcode install paths.
+  Never hardcode install paths. `sesh-waiting.sh` owns the needs-input query
+  (shared heuristic with the TUI sidebar copy, marked `NEEDS_INPUT_SQL` in
+  both); `sesh-prune.sh` archives stale sessions. Reads go through
+  `sqlite3 -readonly` (or `opencode db`); the single archive `UPDATE` in
+  `sesh-prune.sh` is the only sanctioned direct write (no archive endpoint
+  exists — deletes stay on `opencode session delete`).
 - `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
 - `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
 - `scripts/changelog.sh` — release tooling: drafts `[Unreleased]` from
@@ -135,6 +140,9 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   a row and ctrl+x deletes one (armed, then confirmed). The section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
+  Sessions waiting on the user (unanswered questions, stuck runs) pin a
+  **Needs input** group above the directories, with the count in the heading —
+  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;

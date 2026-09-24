@@ -54,6 +54,17 @@ if [ "${1:-}" = --check ]; then
   exit 0
 fi
 
+# Triage listing, not the picker: sessions with unanswered agent questions
+# or runs stuck mid-tool. Never starts fzf or the refresh worker.
+if [ "${1:-}" = --needs-input ]; then
+  shift
+  case "${1:-}" in
+    '') exec bash "$SCRIPT_DIR/sesh-waiting.sh" ;;
+    --json) exec bash "$SCRIPT_DIR/sesh-waiting.sh" --json ;;
+    *) echo "usage: sesh --needs-input [--json]" >&2; exit 2 ;;
+  esac
+fi
+
 scope_value=''
 picker_limit=0
 picker_archived=0

@@ -326,6 +326,68 @@ async function openTranscriptDb(): Promise<any | undefined> {
   }
 }
 
+// NEEDS_INPUT_SQL: sessions waiting on the user (shared heuristic — keep in
+// sync with bin/sesh-waiting.sh). A session waits when it is not archived,
+// is not a fork child, and either has an unanswered `question` tool part or
+// a `tool` part still marked running older than STUCK_AFTER_MS (awaiting
+// approval, or orphaned by a dead server). Server-independent on purpose:
+// the TUI sync layer only sees permission/question state for sessions owned
+// by the current server, which is invisible cross-project.
+const STUCK_AFTER_MS = 600000
+const NEEDS_INPUT_SQL = (stuckBefore: number) => `
+SELECT s.id AS id,
+  CASE WHEN EXISTS (
+    SELECT 1 FROM part p
+    WHERE p.session_id = s.id
+      AND json_extract(p.data, '$.type') = 'tool'
+      AND json_extract(p.data, '$.tool') = 'question'
+      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
+      AND NOT EXISTS (
+        SELECT 1 FROM message m
+        WHERE m.session_id = s.id
+          AND json_extract(m.data, '$.role') = 'user'
+          AND m.time_created > p.time_created)
+  ) THEN 'question' ELSE 'stuck' END AS reason
+FROM session s
+WHERE COALESCE(s.time_archived, 0) = 0
+  AND s.parent_id IS NULL
+  AND (EXISTS (
+    SELECT 1 FROM part p
+    WHERE p.session_id = s.id
+      AND json_extract(p.data, '$.type') = 'tool'
+      AND json_extract(p.data, '$.tool') = 'question'
+      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
+      AND NOT EXISTS (
+        SELECT 1 FROM message m
+        WHERE m.session_id = s.id
+          AND json_extract(m.data, '$.role') = 'user'
+          AND m.time_created > p.time_created)
+  ) OR EXISTS (
+    SELECT 1 FROM part p2
+    WHERE p2.session_id = s.id
+      AND json_extract(p2.data, '$.type') = 'tool'
+      AND json_extract(p2.data, '$.state.status') = 'running'
+      AND p2.time_created < ${stuckBefore}))
+ORDER BY s.time_updated DESC`
+
+async function queryWaitingIds(db: any): Promise<Map<string, string>> {
+  const rows = (db.query(NEEDS_INPUT_SQL(Date.now() - STUCK_AFTER_MS)).all() ?? []) as {
+    id: unknown
+    reason: unknown
+  }[]
+  const out = new Map<string, string>()
+  for (const row of rows) {
+    if (
+      typeof row?.id === "string" &&
+      SESSION_ID_PATTERN.test(row.id) &&
+      (row.reason === "question" || row.reason === "stuck")
+    ) {
+      out.set(row.id, row.reason)
+    }
+  }
+  return out
+}
+
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
   try {
     const part = JSON.parse(data) as { type?: unknown; text?: unknown }
@@ -597,6 +659,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [navActive, setNavActive] = createSignal(false)
   const [cursor, setCursor] = createSignal(0)
   const [pendingDelete, setPendingDelete] = createSignal<string>()
+  const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
@@ -620,6 +683,19 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         // say so when there is nothing at all to show
         if (alive && entries().length === 0) setLoadFailed(true)
       }
+      try {
+        const db = await openTranscriptDb()
+        if (db) {
+          try {
+            const ids = await queryWaitingIds(db)
+            if (alive) setWaiting(ids)
+          } finally {
+            db.close()
+          }
+        }
+      } catch {
+        // leave the previous waiting set in place rather than flashing
+      }
     }
     void load()
     const clock = setInterval(() => void load(), POLL_MS)
@@ -641,9 +717,27 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const shownEntries = createMemo(() => filteredEntries())
   const remaining = createMemo(() => Math.max(0, filteredEntries().length - shownEntries().length))
 
+  const NEEDS_INPUT_DIR = "__needs_input__"
+  const waitingEntries = createMemo(() => {
+    const ids = waiting()
+    return shownEntries().filter((entry) => ids.has(entry.id))
+  })
+  const waitingReason = (id: string) => (waiting().get(id) === "question" ? "awaiting answer" : "run stuck")
+
   const tree = createMemo<TreeRow[]>(() => {
+    const rows: TreeRow[] = []
+    const pending = waitingEntries()
+    if (pending.length > 0) {
+      rows.push({ kind: "group", dir: NEEDS_INPUT_DIR, label: "Needs input", count: pending.length })
+      if (!collapsed()[NEEDS_INPUT_DIR]) {
+        for (let i = 0; i < pending.length; i++) {
+          rows.push({ kind: "item", entry: pending[i], last: i === pending.length - 1 })
+        }
+      }
+    }
     const groups = new Map<string, Entry[]>()
     for (const entry of shownEntries()) {
+      if (waiting().has(entry.id)) continue
       const list = groups.get(entry.dir) ?? []
       list.push(entry)
       groups.set(entry.dir, list)
@@ -656,7 +750,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           pins.directories.includes(group.dir) ? 2 : group.list.some((entry) => pins.sessions.includes(entry.id)) ? 1 : 0
         return rank(b) - rank(a) || b.updated - a.updated
       })
-    const rows: TreeRow[] = []
     for (const group of ordered) {
       rows.push({ kind: "group", dir: group.dir, label: prettyDir(group.dir, home), count: group.list.length })
       if (collapsed()[group.dir]) continue
@@ -961,6 +1054,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             {query().trim() ? ` (${filteredEntries().length}/${entries().length})` : ` (${entries().length})`}
           </span>
           <span style={{ fg: theme().accent }}>{navActive() ? " · nav" : ""}</span>
+          <Show when={waitingEntries().length > 0}>
+            <span style={{ fg: theme().warning }}> · {waitingEntries().length} need input</span>
+          </Show>
         </text>
         <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={toggleSection}>
           {sectionCollapsed() ? "▸ show" : "▾ hide"}
@@ -1065,7 +1161,15 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   matchColor={theme().warning}
                 />
                 <text flexShrink={0} style={{ fg: isPendingDelete(row.entry.id) ? theme().error : theme().textMuted }}>
-                  {isPendingDelete(row.entry.id) ? "ctrl+x again" : ago(row.entry.updated)}
+                  {isPendingDelete(row.entry.id) ? (
+                    "ctrl+x again"
+                  ) : waiting().has(row.entry.id) ? (
+                    <span>
+                      {ago(row.entry.updated)} · <span style={{ fg: theme().warning }}>{waitingReason(row.entry.id)}</span>
+                    </span>
+                  ) : (
+                    ago(row.entry.updated)
+                  )}
                 </text>
               </box>
             )

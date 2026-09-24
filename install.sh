@@ -236,7 +236,9 @@ for path in \
   bin/sesh-list.sh \
   bin/sesh-preview.sh \
   bin/sesh-delete.sh \
+  bin/sesh-prune.sh \
   bin/sesh-refresh-worker.sh \
+  bin/sesh-waiting.sh \
   bin/sesh-shortcuts.sh \
   opencode/tools/sesh-list.ts \
   tui/sesh-panel.tsx \

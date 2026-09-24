@@ -21,7 +21,7 @@ one="$(cd "$fixture/one" && pwd -P)"
 two="$(cd "$fixture/two" && pwd -P)"
 
 sqlite3 "$SESH_DB" <<'SQL'
-CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER);
+CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER, parent_id TEXT);
 CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
 SQL
@@ -370,6 +370,81 @@ grep -Fq 'directory header, not a session' "$fixture/notice.tsv"
 [ ! -e "$notice_state/action-notice" ]
 "$list" --state-dir "$notice_state" > "$fixture/notice2.tsv"
 grep -Fq 'directory header' "$fixture/notice2.tsv" && { echo "action notice was not consumed" >&2; exit 1; }
+
+# 22. Needs-input triage: unanswered questions and stale running tools are
+# listed; answered questions, fresh runs and plain sessions are not.
+tool_msg() { # session msg tool status created
+  local msg_json part_json
+  msg_json=$("$SESH_JQ" -cn '{role:"assistant"}')
+  part_json=$("$SESH_JQ" -cn --arg tool "$3" --arg status "$4" '{type:"tool",tool:$tool,state:{status:$status}}')
+  sqlite3 "$SESH_DB" \
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $5, $5, '$msg_json');
+     INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-$2', '$2', '$1', $5, $5, '$part_json');"
+}
+now_ms=$(($(date +%s) * 1000))
+recent=$((now_ms - 300000))
+add_session 'ses_waitq' "$one" 'Waiting question' 1600000000000 1600000100000
+add_part 'ses_waitq' 'msg_wq0' 'user' 'text' 'should I refactor' 1600000050000
+tool_msg 'ses_waitq' 'msg_wq1' 'question' 'pending' 1600000100000
+add_session 'ses_waitok' "$one" 'Answered question' 1600000000000 1600000100000
+add_part 'ses_waitok' 'msg_wo0' 'user' 'text' 'should I refactor' 1600000050000
+tool_msg 'ses_waitok' 'msg_wo1' 'question' 'completed' 1600000060000
+add_part 'ses_waitok' 'msg_wo2' 'user' 'text' 'yes do it' 1600000070000
+add_session 'ses_waitstuck' "$two" 'Stuck run' 1600000000000 1600000100000
+add_part 'ses_waitstuck' 'msg_ws0' 'user' 'text' 'run the migration' 1600000050000
+tool_msg 'ses_waitstuck' 'msg_ws1' 'bash' 'running' 1600000100000
+add_session 'ses_runnow' "$two" 'Active run' $recent $recent
+add_part 'ses_runnow' 'msg_rn0' 'user' 'text' 'keep working' $((recent - 60000))
+tool_msg 'ses_runnow' 'msg_rn1' 'bash' 'running' $recent
+waiting_ids="$("$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -r 'map(.id) | sort | join(",")')"
+[ "$waiting_ids" = 'ses_waitq,ses_waitstuck' ] || { echo "waiting set wrong: $waiting_ids" >&2; exit 1; }
+"$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -e 'map(.reason) | sort == ["question","stuck"]' >/dev/null
+"$PACKAGE_DIR/bin/sesh-waiting.sh" > "$fixture/waiting.txt"
+grep -Fq 'Waiting question' "$fixture/waiting.txt"
+grep -Fq 'Stuck run' "$fixture/waiting.txt"
+grep -Fq 'Answered question' "$fixture/waiting.txt" && { echo "answered question flagged" >&2; exit 1; }
+grep -Fq 'Active run' "$fixture/waiting.txt" && { echo "fresh run flagged" >&2; exit 1; }
+
+# 23. Prune archives stale sessions only: never pinned, waiting, fresh or
+# already archived ones. Non-TTY runs need --yes; --dry-run changes nothing.
+add_session 'ses_pruneold' "$one" 'Prune me' 1600000000000 1600000100000
+add_part 'ses_pruneold' 'msg_po0' 'user' 'text' 'old work' 1600000100000
+add_session 'ses_prunepin' "$one" 'Pinned old' 1600000000000 1600000100000
+add_part 'ses_prunepin' 'msg_pp0' 'user' 'text' 'pinned work' 1600000100000
+"$pins" toggle-session ses_prunepin > /dev/null
+add_session 'ses_prunenew' "$two" 'Fresh work' $recent $recent
+add_part 'ses_prunenew' 'msg_pn0' 'user' 'text' 'fresh work' $recent
+add_session 'ses_delold' "$two" 'Delete me' 1600000000000 1600000100000
+add_part 'ses_delold' 'msg_do0' 'user' 'text' 'delete work' 1600000100000
+sqlite3 "$SESH_DB" "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_childold', '$one', 'Fork child', 1600000000000, 1600000100000, NULL, 'ses_waitq');"
+tool_msg 'ses_childold' 'msg_co1' 'question' 'pending' 1600000100000
+prune="$PACKAGE_DIR/bin/sesh-prune.sh"
+archived_set() { sqlite3 "$SESH_DB" "SELECT id FROM session WHERE COALESCE(time_archived, 0) > 0 ORDER BY id;" | tr '\n' ','; }
+before_prune=$(archived_set)
+"$prune" --older-than 30d --dry-run > "$fixture/prune-dry.txt"
+grep -Fq 'ses_pruneold' "$fixture/prune-dry.txt"
+grep -Fq 'ses_delold' "$fixture/prune-dry.txt"
+for excluded in ses_prunepin ses_prunenew ses_waitq ses_waitstuck ses_childold; do
+  grep -Fq "$excluded" "$fixture/prune-dry.txt" && { echo "prune listed $excluded" >&2; exit 1; }
+done
+[ "$(archived_set)" = "$before_prune" ] || { echo "dry run archived" >&2; exit 1; }
+if "$prune" --older-than 30d < /dev/null >/dev/null 2>&1; then
+  echo "prune without --yes was not refused" >&2; exit 1
+fi
+"$prune" --older-than 30d --yes > /dev/null
+archived() { sqlite3 "$SESH_DB" "SELECT COALESCE(time_archived, 0) > 0 FROM session WHERE id = '$1';"; }
+[ "$(archived ses_pruneold)" = 1 ]
+[ "$(archived ses_delold)" = 1 ]
+for kept in ses_prunepin ses_prunenew ses_waitq ses_waitstuck ses_runnow; do
+  [ "$(archived "$kept")" = 0 ] || { echo "prune archived $kept" >&2; exit 1; }
+done
+
+# 24. Prune --delete hard-deletes through the opencode CLI stub from test 7.
+add_session 'ses_delold2' "$two" 'Delete me too' 1600000000000 1600000100000
+add_part 'ses_delold2' 'msg_do1' 'user' 'text' 'delete work two' 1600000100000
+"$prune" --older-than 30d --delete --yes > /dev/null
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_delold2';")" = 0 ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_prunepin';")" = 1 ]
 
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then

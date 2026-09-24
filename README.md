@@ -127,7 +127,15 @@ matches nothing says so instead of showing an empty screen.
 
 Flags: `--cwd` (current directory only), `--limit N` (default: all),
 `--archived`, `--print` (print `id<TAB>cwd` instead of resuming), `--fork`,
-`--json` (with `--print`, emit JSON), `--query TEXT`, `--check`.
+`--json` (with `--print`, emit JSON), `--query TEXT`, `--check`,
+`--needs-input` (list sessions waiting on you instead of opening the picker).
+
+`sesh prune [--older-than 30d] [--dry-run] [--yes] [--delete]` archives stale
+sessions (not updated within the threshold) so the list stays triageable.
+Pinned sessions, sessions waiting on you, fork children and already-archived
+sessions are never touched; archiving is reversible, while `--delete`
+hard-deletes through `opencode session delete`. Without `--dry-run`, a TTY run
+confirms first and a non-TTY run needs `--yes`.
 
 Because `--print` just emits the id and directory, `sesh` doubles as a scriptable
 session lookup:
@@ -162,6 +170,9 @@ the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to o
 Ctrl-P to preview, Option-S/Option-D to pin, Ctrl-X to delete, Esc to leave). Pinned
 sessions appear ahead of the rest; the section lists every session and scrolls
 to fill the sidebar, so click **▾ hide** to collapse it when you need the room.
+Sessions waiting on you (unanswered agent questions, runs stuck mid-tool) pin
+themselves to a **Needs input** group above the directories, with the count in
+the heading; `sesh --needs-input` lists the same set in the terminal.
 Hovering a row while keyboard navigation is active selects it for the next
 shortcut. The full picker is one keystroke away.
 

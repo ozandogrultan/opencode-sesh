@@ -22,5 +22,9 @@ case ${1:-} in
     shift
     exec bash "$SCRIPT_DIR/../install.sh" --uninstall "$@"
     ;;
+  prune)
+    shift
+    exec bash "$SCRIPT_DIR/sesh-prune.sh" "$@"
+    ;;
 esac
 exec "$SCRIPT_DIR/sesh.sh" "$@"

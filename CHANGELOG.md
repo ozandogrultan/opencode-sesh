@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Needs-input triage: sessions with unanswered agent questions or runs stuck
+  mid-tool pin a **Needs input** group above the sidebar directories (count in
+  the heading), and `sesh --needs-input [--json]` lists the same set in the
+  terminal. Detection reads the opencode store directly, so it works for every
+  session, not just ones owned by the current server.
+- `sesh prune [--older-than 30d] [--dry-run] [--yes] [--delete]` archives stale
+  sessions so the list stays triageable. Pinned sessions, sessions waiting on
+  you, fork children and already-archived sessions are never touched;
+  archiving is reversible, `--delete` hard-deletes through the opencode CLI,
+  and non-TTY runs need `--yes`.
+
 ## [0.2.1] - 2026-09-24
 
 ### Changed
