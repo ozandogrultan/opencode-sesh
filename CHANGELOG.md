@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
 ### Added
 
 - Needs-input triage: sessions with unanswered agent questions or runs stuck
@@ -19,7 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you, fork children and already-archived sessions are never touched;
   archiving is reversible, `--delete` hard-deletes through the opencode CLI,
   and non-TTY runs need `--yes`.
-
 ## [0.2.1] - 2026-09-24
 
 ### Changed
@@ -238,7 +239,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.6...v0.1.7
