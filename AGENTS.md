@@ -160,9 +160,11 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
     opens locally). Works for background agents and older panels too.
   - **Workspace naming.** The poll renames this workspace to the current
     session title (`cmux workspace rename <id> --title …`), skipping titles that
-    are still the pre-first-turn placeholder. `bin/sesh-cmux-sync.sh` does the
-    same for every workspace at once. The session title is the source of truth;
-    a manual cmux rename is overwritten on the next session-title change.
+    must never name a workspace: the pre-first-turn placeholder
+    (`/^New session\b/`) and plugin sentinels (`ghost-hidden`, which
+    opencode-ghost titles its internal sessions). `bin/sesh-cmux-sync.sh` does
+    the same for every workspace at once. The session title is the source of
+    truth; a manual cmux rename is overwritten on the next session-title change.
   These are the only cmux calls in the panel; keep them behind the
   `CMUX_WORKSPACE_ID` guard.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by

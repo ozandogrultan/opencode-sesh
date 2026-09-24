@@ -177,9 +177,10 @@ function pinnedFirst(entries: Entry[], pins: Pins): Entry[] {
 // dialog). Native `/sessions` and session_list (<leader>l) stay untouched.
 const BASE_MODE = "base"
 const POLL_MS = 15_000
-// opencode names a session only after its first turn; until then the title is
-// a placeholder that should not become a cmux workspace name.
-const PLACEHOLDER_TITLE = /^New session\b/i
+// Titles that must never become a cmux workspace name: opencode's pre-first-
+// turn placeholder, and the sentinel other plugins (opencode-ghost) use for
+// internal sessions so their scaffolding rows stay out of the UI.
+const PLACEHOLDER_TITLE = /^New session\b|^ghost-hidden$/i
 
 function shortDir(dir: string, home: string): string {
   if (!dir || dir === "/") return "other"

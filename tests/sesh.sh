@@ -521,13 +521,15 @@ case "\$1 \$2" in
     echo '{"windows":[{"workspaces":[
       {"ref":"workspace:1","panes":[{"surfaces":[{"ref":"surface:1","type":"terminal"}]}]},
       {"ref":"workspace:2","panes":[{"surfaces":[{"ref":"surface:2","type":"terminal"}]}]},
-      {"ref":"workspace:3","panes":[{"surfaces":[{"ref":"surface:3","type":"terminal"}]}]}]}]}'
+      {"ref":"workspace:3","panes":[{"surfaces":[{"ref":"surface:3","type":"terminal"}]}]},
+      {"ref":"workspace:9","panes":[{"surfaces":[{"ref":"surface:9","type":"terminal"}]}]}]}]}'
     ;;
   "surface resume")
     case "\$5" in
       surface:1) echo '{"restore_record":{"checkpoint_id":"ses_cmxA"}}' ;;
       surface:2) echo '{"restore_record":{"checkpoint_id":"ses_cmxB"}}' ;;
       surface:3) echo '{"restore_record":{"checkpoint_id":"ses_kept"}}' ;;
+      surface:9) echo '{"restore_record":{"checkpoint_id":"ses_ghost"}}' ;;
       *) echo '{"restore_record":null}' ;;
     esac
     ;;
@@ -551,6 +553,9 @@ add_part 'ses_cmxB' 'msg_cx2' 'user' 'text' 'body' 1700001000000
 # ses_newt was retitled in test 26 to a real title; give it a placeholder here
 # to prove placeholder titles are never pushed.
 sqlite3 "$SESH_DB" "UPDATE session SET title = 'New session - 2026-01-01T00:00:00.000Z' WHERE id = 'ses_kept';"
+# A ghost plugin session: its sentinel title must never become a workspace name.
+add_session 'ses_ghost' "$one" 'ghost-hidden' 1700001000000 1700001000000
+add_part 'ses_ghost' 'msg_gh1' 'user' 'text' 'body' 1700001000000
 rm -f "$fixture/cmux-renames.txt"
 cmuxsync="$PACKAGE_DIR/bin/sesh-cmux-sync.sh"
 SESH_CMUX="$cmux_stub_dir/cmux" "$cmuxsync" --dry-run > "$fixture/cmux-dry.txt"
@@ -558,11 +563,14 @@ grep -Fq 'workspace:1 → Add dark mode toggle' "$fixture/cmux-dry.txt"
 grep -Fq 'workspace:2' "$fixture/cmux-dry.txt" && { echo "already-matching workspace was queued" >&2; exit 1; }
 grep -Fq 'Imported widgets' "$fixture/cmux-dry.txt" && { echo "already-matching workspace was queued" >&2; exit 1; }
 grep -Fq 'workspace:3' "$fixture/cmux-dry.txt" && { echo "placeholder title was pushed" >&2; exit 1; }
+grep -Fq 'ghost-hidden' "$fixture/cmux-dry.txt" && { echo "ghost sentinel title was pushed" >&2; exit 1; }
+grep -Fq 'workspace:9' "$fixture/cmux-dry.txt" && { echo "ghost session's workspace was queued" >&2; exit 1; }
 [ ! -f "$fixture/cmux-renames.txt" ]
 SESH_CMUX="$cmux_stub_dir/cmux" "$cmuxsync" > "$fixture/cmux-apply.txt"
 grep -Fq 'RENAME workspace:1 Add dark mode toggle' "$fixture/cmux-renames.txt"
 grep -Fq 'workspace:2' "$fixture/cmux-renames.txt" && { echo "renamed an already-matching workspace" >&2; exit 1; }
 grep -Fq 'workspace:3' "$fixture/cmux-renames.txt" && { echo "renamed to a placeholder title" >&2; exit 1; }
+grep -Fq 'ghost-hidden' "$fixture/cmux-renames.txt" && { echo "renamed a workspace to the ghost sentinel" >&2; exit 1; }
 [ "$(grep -c RENAME "$fixture/cmux-renames.txt")" = 1 ]
 
 # Agent tool contract checks (global store, filter-before-limit) need Node.

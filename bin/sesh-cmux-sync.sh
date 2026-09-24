@@ -111,7 +111,10 @@ FINAL=$(printf '%s' "$PAIRS" | "$JQ_BIN" -c \
   | ($current[0] | map({key: .workspace, value: .title}) | from_entries) as $shown
   | [ .[]
       | ($byId[.session] // "" | gsub("^ +| +$"; "")) as $t
-      | select($t != "" and ($t | test("^New session\\b"; "i") | not))
+      | select($t != "")
+      # Never push a placeholder or a plugin sentinel (opencode-ghost titles its
+      # internal sessions "ghost-hidden").
+      | select(($t | test("^New session\\b|^ghost-hidden$"; "i") | not))
       | select(($shown[.workspace] // "") != $t)
       | . + {title: $t} ]')
 

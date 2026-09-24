@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sesh cmux-sync [--dry-run] [--json]` names every cmux workspace after the
   opencode session it is running, using cmux's own per-surface resume record.
 
+### Fixed
+
+- Workspace naming no longer pushes the `ghost-hidden` sentinel that the
+  opencode-ghost plugin uses for its internal sessions. The placeholder check
+  was also corrected, so `New session - …` titles are skipped as intended
+  rather than slipping through.
+
 ### Changed
 
 - Click-to-focus now reads cmux's per-surface resume record (`checkpoint_id`)
