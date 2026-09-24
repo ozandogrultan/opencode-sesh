@@ -175,6 +175,7 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Ctrl-X | Delete the selected session (asks to confirm) |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
+| Option-W / Option-P | Show only sessions needing input / pinned sessions |
 | Option-S / Option-D | Pin or unpin the selected session / directory |
 | Esc | Close |
 
@@ -197,7 +198,12 @@ keystroke away.
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing
 indexing progress under the search box. It only stops at a safety cap of 5,000
-sessions, and says so when it does.
+sessions, and says so when it does. Transcript matches show a short excerpt
+under the result; the Project, Needs input, and Pinned filters combine with
+search. The picker remembers your query and filters until you restart opencode.
+The Needs input dialog (`/sesh-needs`) shows why and how long each session has
+been waiting, oldest first. Press `n` there to open the next waiting session,
+or reopen it after answering one to continue through the list.
 
 ## Configuration
 

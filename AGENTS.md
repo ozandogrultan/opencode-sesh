@@ -160,7 +160,13 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   at `SESSION_MAX` and reported when truncated) instead of a fixed 500-row
   window, then indexes transcript text for **every** session in batches
   (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
-  The header shows indexing progress/coverage. `tests/tui.mjs` locks this.
+  The header shows indexing progress/coverage. Visible transcript hits get
+  short excerpts from the text-only index (never tool or reasoning payloads).
+  Project, needs-input (Option-W), and pinned-session (Option-P) filters compose
+  with the query; the picker remembers query/scope/filters until plugin restart.
+  `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
+  question or running-tool timestamp, lists longest-waiting first, and `n`
+  opens the next waiting session. `tests/tui.mjs` locks the data layer.
 - **Durable install:** opencode imports plugins once at startup and never hot
   reloads, so panel changes need a full quit/reopen. `install.sh --sync-panel`
   (run by the `postinstall`) refreshes an already-installed panel and is a

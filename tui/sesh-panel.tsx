@@ -402,6 +402,43 @@ async function queryWaitingIds(db: any): Promise<Map<string, string>> {
   return out
 }
 
+type WaitingDetail = { reason: "question" | "stuck"; since?: number }
+
+// The shared needs-input query decides *which* sessions are waiting. Read the
+// oldest still-unanswered question or stuck tool for each result so triage can
+// show how long it has waited, rather than its last (unrelated) update time.
+async function queryWaitingDetails(db: any): Promise<Map<string, WaitingDetail>> {
+  const reasons = await queryWaitingIds(db)
+  const details = new Map<string, WaitingDetail>(
+    [...reasons].map(([id, reason]) => [id, { reason: reason as WaitingDetail["reason"] }]),
+  )
+  const ids = [...details.keys()]
+  const cutoff = Date.now() - STUCK_AFTER_MS
+  for (let i = 0; i < ids.length; i += 200) {
+    const batch = ids.slice(i, i + 200)
+    const rows = (db.query(`
+ SELECT p.session_id AS id,
+   MIN(CASE WHEN json_extract(p.data, '$.tool') = 'question'
+      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
+      AND NOT EXISTS (SELECT 1 FROM message m WHERE m.session_id = p.session_id
+        AND json_extract(m.data, '$.role') = 'user' AND m.time_created > p.time_created)
+     THEN p.time_created END) AS question_since,
+   MIN(CASE WHEN json_extract(p.data, '$.state.status') = 'running'
+      AND p.time_created < ${cutoff} THEN p.time_created END) AS stuck_since
+ FROM part p
+ WHERE p.session_id IN (${batch.map(() => "?").join(",")})
+   AND json_extract(p.data, '$.type') = 'tool'
+ GROUP BY p.session_id`).all(...batch) ?? []) as { id: string; question_since: number | null; stuck_since: number | null }[]
+    for (const row of rows) {
+      const detail = details.get(row.id)
+      if (!detail) continue
+      const since = detail.reason === "question" ? row.question_since : row.stuck_since
+      if (typeof since === "number") detail.since = since
+    }
+  }
+  return details
+}
+
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
   try {
     const part = JSON.parse(data) as { type?: unknown; text?: unknown }
@@ -484,9 +521,14 @@ async function buildSearchIndexRemote(
       const base = index.get(id) ?? ""
       try {
         const raw = await readFile(`${cacheDir}/extractions/${id}.json`, "utf8")
-        const record = JSON.parse(raw) as { fulltextLower?: unknown }
+        const record = JSON.parse(raw) as { fulltextLower?: unknown; title?: unknown }
         const fulltext = typeof record?.fulltextLower === "string" ? record.fulltextLower : ""
-        index.set(id, `${base} ${fulltext}`.trim())
+        // Extraction caches prefix the transcript with the cached title. The
+        // live entry already indexes its own title; strip that duplicate so a
+        // title-only match cannot appear as a transcript excerpt.
+        const title = typeof record?.title === "string" ? `${record.title.toLowerCase()} ` : ""
+        const transcript = title && fulltext.startsWith(title) ? fulltext.slice(title.length) : fulltext
+        index.set(id, `${base} ${transcript}`.trim())
       } catch {
         try {
           const result = await api.client.session.messages({ sessionID: id })
@@ -506,6 +548,36 @@ async function buildSearchIndexRemote(
     }
   }
   await Promise.all(Array.from({ length: Math.min(REMOTE_CONCURRENCY, ids.length) }, worker))
+}
+
+// The index is title + directory + text parts, all lowercased. Start looking
+// after the metadata so a title match never masquerades as a transcript hit.
+function transcriptMatchExcerpt(indexed: string | undefined, entry: Entry, query: string): string | undefined {
+  const needle = query.trim().toLowerCase()
+  if (!indexed || !needle) return undefined
+  const transcriptStart = `${entry.title.toLowerCase()} ${entry.dir.toLowerCase()}`.length + 1
+  const at = indexed.indexOf(needle, transcriptStart)
+  if (at < 0) return undefined
+  const start = Math.max(transcriptStart, at - 28)
+  const end = Math.min(indexed.length, Math.max(at + needle.length + 28, start + 90))
+  const excerpt = indexed.slice(start, end).replace(/\s+/g, " ").trim()
+  return `${start > transcriptStart ? "…" : ""}${excerpt}${end < indexed.length ? "…" : ""}`
+}
+
+type PickerFilters = { query: string; scope?: string; waitingOnly: boolean; pinnedOnly: boolean }
+
+function filterPickerEntries(
+  entries: Entry[], filters: PickerFilters, index: Map<string, string>, waitingIds: Set<string>, pinnedSessions: string[],
+): Entry[] {
+  const q = filters.query.trim().toLowerCase()
+  const pinned = new Set(pinnedSessions)
+  return entries.filter((entry) => {
+    if (filters.scope && entry.group !== filters.scope) return false
+    if (filters.waitingOnly && !waitingIds.has(entry.id)) return false
+    if (filters.pinnedOnly && !pinned.has(entry.id)) return false
+    if (!q) return true
+    return (index.get(entry.id) ?? `${entry.title} ${entry.dir}`.toLowerCase()).includes(q)
+  })
 }
 
 const TRANSCRIPT_PREVIEW_TURNS = 8
@@ -1402,6 +1474,11 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
 
 const tui: TuiPlugin = async (api) => {
   const [pins, setPins] = createSignal<Pins>(emptyPins())
+  // Keep exploratory context while the plugin remains loaded; a full OpenCode
+  // restart starts with a clean picker rather than an old cross-project filter.
+  let pickerState: PickerFilters = {
+    query: "", waitingOnly: false, pinnedOnly: false,
+  }
   let pinVersion = 0
   const refreshPins = () => {
     const version = pinVersion
@@ -1454,9 +1531,34 @@ const tui: TuiPlugin = async (api) => {
     const [allEntries, setAllEntries] = createSignal<Entry[]>(entries)
     const [previewText, setPreviewText] = createSignal("")
     const [showPreview, setShowPreview] = createSignal(false)
-    const [query, setQuery] = createSignal("")
+    const [query, setQuery] = createSignal(pickerState.query)
     const [cursor, setCursor] = createSignal(0)
-    const [scope, setScope] = createSignal<string>()
+    const [scope, setScope] = createSignal<string | undefined>(
+      entries.some((entry) => entry.group === pickerState.scope) ? pickerState.scope : undefined,
+    )
+    const [waitingOnly, setWaitingOnly] = createSignal(pickerState.waitingOnly)
+    const [pinnedOnly, setPinnedOnly] = createSignal(pickerState.pinnedOnly)
+    const [waitingIds, setWaitingIds] = createSignal<Set<string>>(new Set())
+    const [waitingCoverage, setWaitingCoverage] = createSignal<"loading" | "ready" | "unavailable">("loading")
+    let alive = true
+    void (async () => {
+      const db = await openTranscriptDb()
+      if (!db) {
+        if (alive) setWaitingCoverage("unavailable")
+        return
+      }
+      try {
+        const ids = await queryWaitingIds(db)
+        if (alive) {
+          setWaitingIds(new Set(ids.keys()))
+          setWaitingCoverage("ready")
+        }
+      } catch {
+        if (alive) setWaitingCoverage("unavailable")
+      } finally {
+        db.close()
+      }
+    })()
     const [pendingDelete, setPendingDelete] = createSignal<Entry>()
     const [searchIndex, setSearchIndex] = createSignal<Map<string, string>>(new Map())
     const [indexProgress, setIndexProgress] = createSignal<IndexProgress>({
@@ -1465,6 +1567,7 @@ const tui: TuiPlugin = async (api) => {
       complete: false,
     })
     void buildSearchIndex(api, entries, (progress, index) => {
+      if (!alive) return
       setIndexProgress(progress)
       // Publish a fresh snapshot: the indexing workers mutate their own map,
       // while Solid needs a new reference to update search results mid-scan.
@@ -1473,16 +1576,18 @@ const tui: TuiPlugin = async (api) => {
     type DialogRow = { kind: "group"; label: string; count: number } | { kind: "item"; entry: Entry }
 
     const orderedEntries = createMemo(() => pinnedFirst(allEntries(), pins()))
+    const currentProject = () => {
+      const route = api.route.current
+      const id = route.name === "session" ? route.params?.sessionID : undefined
+      return allEntries().find((entry) => entry.id === id)?.group ??
+        allEntries().find((entry) => entry.dir === api.state.path.directory)?.group
+    }
     const matchedGroups = createMemo(() => {
-      const q = query().trim().toLowerCase()
-      const index = searchIndex()
-      const group = scope()
-      const matched = orderedEntries().filter((entry) => {
-        if (group && entry.group !== group) return false
-        if (!q) return true
-        const haystack = index.get(entry.id) ?? `${entry.title} ${entry.dir}`.toLowerCase()
-        return haystack.includes(q)
-      })
+      const matched = filterPickerEntries(
+        orderedEntries(),
+        { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() },
+        searchIndex(), waitingIds(), pins().sessions,
+      )
       const byGroup = new Map<string, Entry[]>()
       for (const entry of matched) {
         const list = byGroup.get(entry.group) ?? []
@@ -1507,6 +1612,8 @@ const tui: TuiPlugin = async (api) => {
       const progress = indexProgress()
       const bits: string[] = []
       if (scope()) bits.push(`scope ${scope()}`)
+      if (waitingOnly()) bits.push(waitingCoverage() === "loading" ? "checking needs input" : waitingCoverage() === "unavailable" ? "needs-input unavailable" : "needs input")
+      if (pinnedOnly()) bits.push("pinned sessions")
       if (progress.total > 0) {
         bits.push(
           progress.complete
@@ -1542,7 +1649,9 @@ const tui: TuiPlugin = async (api) => {
 
     const visiblePickerRows = createMemo<DialogRow[]>(() => {
       const flat = pickerRows()
-      const windowSize = listHeight
+      // A transcript hit adds a second line to a row; bound by screen height,
+      // not just the number of session IDs.
+      const windowSize = query().trim() ? Math.max(2, Math.floor(listHeight / 3)) : listHeight
       const currentID = selectableEntries()[cursor()]?.id
       let pos = currentID
         ? flat.findIndex((row) => row.kind === "item" && row.entry.id === currentID)
@@ -1736,6 +1845,8 @@ const tui: TuiPlugin = async (api) => {
             else if (target) setScope(target.group)
           },
         },
+        { key: "option+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
+        { key: "option+p", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
         {
           key: "escape",
           desc: "Close",
@@ -1749,6 +1860,8 @@ const tui: TuiPlugin = async (api) => {
     })
 
     const cleanup = () => {
+      alive = false
+      pickerState = { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() }
       disposeNav()
       disposeConfirm?.()
       disposeConfirm = undefined
@@ -1791,6 +1904,21 @@ const tui: TuiPlugin = async (api) => {
                 <text style={{ fg: api.theme.current.textMuted }}>{coverageLabel()}</text>
               </box>
             </Show>
+            <box flexDirection="row" gap={2} paddingTop={1}>
+              <text style={{ fg: scope() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => {
+                const group = currentProject()
+                if (group) setScope(scope() === group ? undefined : group)
+                else api.ui.toast({ message: "No current project to filter", variant: "info" })
+              }}>
+                {scope() ? `Project: ${truncate(scope()!, 22)}` : "Project: all"}
+              </text>
+              <text style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
+                {waitingOnly() ? "● Needs input" : "○ Needs input"}
+              </text>
+              <text style={{ fg: pinnedOnly() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => setPinnedOnly((value) => !value)}>
+                {pinnedOnly() ? "★ Pinned" : "☆ Pinned"}
+              </text>
+            </box>
           </box>
           <box
             flexDirection="column"
@@ -1801,17 +1929,18 @@ const tui: TuiPlugin = async (api) => {
             }}
           >
             <For each={visiblePickerRows()}>
-                {(row) =>
-                  row.kind === "group" ? (
+                {(row) => {
+                  if (row.kind === "group") return (
                     <box paddingTop={1} paddingLeft={4}>
                       <text style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
                         {matchedGroups().find((group) => group.name === row.label)?.list.some((entry) => pins().directories.includes(entry.dir)) ? "★ " : ""}{row.label} <span style={{ fg: api.theme.current.textMuted }}>({row.count})</span>
                       </text>
                     </box>
-                  ) : (
+                  )
+                  const excerpt = createMemo(() => transcriptMatchExcerpt(searchIndex().get(row.entry.id), row.entry, query()))
+                  return (
                     <box
-                      flexDirection="row"
-                      gap={1}
+                      flexDirection="column"
                       paddingLeft={4}
                       paddingRight={4}
                       backgroundColor={
@@ -1821,6 +1950,7 @@ const tui: TuiPlugin = async (api) => {
                       }
                       onMouseDown={() => choose(row.entry)}
                     >
+                      <box flexDirection="row" gap={1}>
                       <Show when={row.entry.id === currentSessionID()}>
                         <text
                           flexShrink={0}
@@ -1869,17 +1999,39 @@ const tui: TuiPlugin = async (api) => {
                                 : ""
                             }`}
                       </text>
+                      </box>
+                      <Show when={excerpt()}>
+                        {(match) => (
+                          <box flexDirection="row" gap={1} paddingLeft={2}>
+                            <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>↳</text>
+                            <Highlighted
+                              text={match()}
+                              query={query()}
+                              color={row.entry.id === selectableEntries()[cursor()]?.id ? api.theme.current.selectedListItemText : api.theme.current.textMuted}
+                              matchColor={api.theme.current.warning}
+                            />
+                          </box>
+                        )}
+                      </Show>
                     </box>
                   )
-                }
+                }}
               </For>
               <Show when={selectableEntries().length === 0}>
                 <box paddingLeft={4} paddingRight={4}>
                   <text style={{ fg: api.theme.current.textMuted }}>
-                    {!indexProgress().complete
-                      ? "No matches yet · still searching transcripts…"
+                    {waitingOnly() && waitingCoverage() === "loading"
+                        ? "Checking which sessions need input…"
+                      : waitingOnly() && waitingCoverage() === "unavailable"
+                        ? "Needs-input data unavailable · turn off the filter"
+                      : pinnedOnly() && pins().sessions.length === 0
+                        ? "No pinned sessions yet · option+s pins a session"
+                      : !indexProgress().complete && query().trim()
+                        ? "No matches yet · still searching transcripts…"
                       : scope()
                         ? `No matches in ${scope()} · ctrl+g for all projects`
+                        : waitingOnly()
+                          ? "No sessions need input with these filters"
                         : "No sessions match · try another search"}
                   </text>
                 </box>
@@ -1909,7 +2061,7 @@ const tui: TuiPlugin = async (api) => {
               </scrollbox>
             </box>
           </Show>
-          <box paddingLeft={4} paddingRight={4} flexShrink={0}>
+          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column">
             <text
               style={{
                 fg: pendingDelete() ? api.theme.current.warning : api.theme.current.textMuted,
@@ -1917,8 +2069,11 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ navigate · enter open · option+s/d pin · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
+                : "↑↓ move · enter open · ctrl+g project · option+w needs · option+p pinned · ctrl+p preview"}
             </text>
+            <Show when={!pendingDelete()}>
+              <text style={{ fg: api.theme.current.textMuted }}>option+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
+            </Show>
           </box>
         </box>
       ),
@@ -2043,27 +2198,32 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
 
   // Triage dialog: the waiting set as an openable list. Enter opens the
   // highlighted session; the sidebar section stays the always-visible view.
+  let lastNeedsID: string | undefined
   const openNeeds = async () => {
     if (api.mode.current() !== BASE_MODE) return
     if (api.renderer.currentFocusedEditor === null) return
-    let items: { entry: Entry; reason: string }[] = []
+    let items: { entry: Entry; reason: string; since?: number }[] = []
     try {
       const { entries } = await fetchEntries(api)
       const db = await openTranscriptDb()
-      let waiting = new Map<string, string>()
-      if (db) {
-        try {
-          waiting = await queryWaitingIds(db)
-        } finally {
-          db.close()
-        }
+      if (!db) {
+        api.ui.toast({ message: "Needs-input data unavailable", variant: "error" })
+        return
+      }
+      let waiting: Map<string, WaitingDetail>
+      try {
+        waiting = await queryWaitingDetails(db)
+      } finally {
+        db.close()
       }
       items = entries
         .filter((entry) => waiting.has(entry.id))
         .map((entry) => ({
           entry,
-          reason: waiting.get(entry.id) === "question" ? "awaiting answer" : "run stuck",
+          reason: waiting.get(entry.id)?.reason === "question" ? "awaiting answer" : "run stuck",
+          since: waiting.get(entry.id)?.since,
         }))
+        .sort((a, b) => (a.since ?? a.entry.updated) - (b.since ?? b.entry.updated))
     } catch {
       api.ui.toast({ message: "Could not load sessions", variant: "error" })
       return
@@ -2072,12 +2232,15 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       api.ui.toast({ message: "No sessions are waiting on you.", variant: "info" })
       return
     }
-    const [cursor, setCursor] = createSignal(0)
+    const route = api.route.current
+    const currentID = route.name === "session" ? route.params?.sessionID : undefined
+    const previous = items.findIndex((item) => item.entry.id === (currentID ?? lastNeedsID))
+    const [cursor, setCursor] = createSignal(previous < 0 ? 0 : (previous + 1) % items.length)
     const moveCursor = (delta: number) =>
       setCursor((value) => Math.max(0, Math.min(items.length - 1, value + delta)))
-    const choose = () => {
-      const target = items[cursor()]
+    const choose = (target = items[cursor()]) => {
       if (!target) return
+      lastNeedsID = target.entry.id
       disposeNav()
       api.ui.dialog.clear()
       api.route.navigate("session", { sessionID: target.entry.id })
@@ -2087,6 +2250,10 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
+        { key: "n", desc: "Open next waiting session", preventDefault: true, cmd: () => {
+          const at = items.findIndex((item) => item.entry.id === currentID)
+          choose(items[at < 0 ? cursor() : (at + 1) % items.length])
+        } },
         {
           key: "escape",
           desc: "Close",
@@ -2101,9 +2268,9 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1}>
           <text attributes={TextAttributes.BOLD}>
             Needs input{" "}
-            <span style={{ fg: api.theme.current.textMuted }}>({items.length})</span>
+            <span style={{ fg: api.theme.current.textMuted }}>({items.length} · longest waiting first)</span>
           </text>
-          <box flexDirection="column">
+          <scrollbox flexGrow={1} height={Math.max(6, Math.floor(api.renderer.height / 2) - 10)} scrollbarOptions={{ visible: false }}>
             <For each={items}>
               {(item, index) => (
                 <box
@@ -2118,7 +2285,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                   }
                   onMouseDown={() => {
                     setCursor(index())
-                    choose()
+                    choose(item)
                   }}
                 >
                   <text
@@ -2154,14 +2321,14 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                           : api.theme.current.textMuted,
                     }}
                   >
-                    {prettyDir(item.entry.dir, home)} · {ago(item.entry.updated)}
+                    {prettyDir(item.entry.dir, home)} · {item.since === undefined ? "time unknown" : `waiting ${ago(item.since)}`}
                   </text>
                 </box>
               )}
             </For>
-          </box>
+          </scrollbox>
           <box flexShrink={0}>
-            <text style={{ fg: api.theme.current.textMuted }}>↑↓ navigate · enter open · esc close</text>
+            <text style={{ fg: api.theme.current.textMuted }}>↑↓ navigate · enter open · n open next waiting · esc close</text>
           </box>
         </box>
       ),

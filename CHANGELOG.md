@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The TUI picker shows a highlighted excerpt for matching transcript text,
+  offers composable project, needs-input and pinned-session filters, and keeps
+  the query and filters when reopened during the same opencode run.
+- `/sesh-needs` shows how long each session has waited, puts the longest-waiting
+  first, and can open the next waiting session with `n`.
+
 ## [0.8.0] - 2026-09-24
 
 ### Changed

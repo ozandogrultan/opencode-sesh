@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { DatabaseSync } from "node:sqlite"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -19,7 +20,7 @@ if (typeof stripTypeScriptTypes !== "function") {
   process.exit(0)
 }
 
-function loadDataLayer() {
+function loadDataLayer(readExtraction = async () => { throw new Error("no local cache") }) {
   const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
   const start = source.indexOf("function shortDir")
   const end = source.indexOf("const TRANSCRIPT_PREVIEW_TURNS")
@@ -30,12 +31,10 @@ function loadDataLayer() {
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarActivity }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarActivity, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails }`,
   )
   return factory(
-    async () => {
-      throw new Error("no local cache")
-    },
+    readExtraction,
     { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache" } },
     setTimeout,
   )
@@ -49,7 +48,7 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarActivity } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarActivity, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -203,6 +202,66 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.ok(progress.some((p) => p.indexed > 0 && !p.complete), "publish partial transcript coverage")
   assert.ok(snapshots.some((snapshot) => snapshot.get("ses_00000")?.includes("needle ses_00000")))
   assert.ok(!snapshots[0].get("ses_00000")?.includes("needle"), "initial snapshot contains metadata only")
+}
+
+// Picker excerpts come only from text parts, never a repeated cached title or
+// unrelated metadata. Filters compose rather than discarding transcript hits.
+{
+  const entry = { id: "ses_excerpt", title: "Title Only", dir: "/project", group: "project", updated: 1 }
+  const cached = loadDataLayer(async () => JSON.stringify({
+    title: "Title Only", fulltextLower: "title only A genuine transcript mention of widgets here",
+  }))
+  const index = await cached.buildSearchIndex(
+    { client: { session: { messages: async () => { throw new Error("cache was ignored") } } } }, [entry],
+  )
+  assert.equal(cached.transcriptMatchExcerpt(index.get(entry.id), entry, "title only"), undefined)
+  assert.match(cached.transcriptMatchExcerpt(index.get(entry.id), entry, "widgets"), /widgets/)
+  assert.equal(transcriptMatchExcerpt("title only /project tool secret", entry, "absent"), undefined)
+  const remote = await buildSearchIndex({ client: { session: { messages: async () => ({ data: [{ parts: [
+    { type: "tool", text: "SECRET_TOOL" }, { type: "reasoning", text: "SECRET_REASONING" },
+    { type: "text", text: "Visible transcript match" },
+  ] }] }) } } }, [entry])
+  assert.match(transcriptMatchExcerpt(remote.get(entry.id), entry, "visible"), /visible/)
+  assert.equal(transcriptMatchExcerpt(remote.get(entry.id), entry, "SECRET_TOOL"), undefined)
+  assert.equal(transcriptMatchExcerpt(remote.get(entry.id), entry, "SECRET_REASONING"), undefined)
+  const other = { ...entry, id: "ses_other", group: "elsewhere", title: "Other" }
+  const filters = { query: "widgets", scope: "project", waitingOnly: true, pinnedOnly: true }
+  assert.deepEqual(filterPickerEntries([entry, other], filters, index, new Set([entry.id]), [entry.id]), [entry])
+  assert.deepEqual(filterPickerEntries([entry, other], filters, index, new Set(), [entry.id]), [])
+  assert.deepEqual(filterPickerEntries([entry, other], filters, index, new Set([entry.id]), []), [])
+}
+
+// Triage timestamps come from the oldest unresolved question/running tool,
+// not the last update of a session or a question already answered by a user.
+{
+  const sqlite = new DatabaseSync(":memory:")
+  try {
+    sqlite.exec(`CREATE TABLE session (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER);
+      CREATE TABLE part (session_id TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT);`)
+    const addSession = sqlite.prepare("INSERT INTO session VALUES (?, 0, NULL, ?)")
+    const addPart = sqlite.prepare("INSERT INTO part VALUES (?, ?, ?)")
+    const addMessage = sqlite.prepare("INSERT INTO message VALUES (?, ?, ?)")
+    const now = Date.now()
+    for (const id of ["ses_question", "ses_stuck", "ses_answered", "ses_fresh"]) addSession.run(id, now)
+    const question = JSON.stringify({ type: "tool", tool: "question", state: { status: "pending" } })
+    const running = JSON.stringify({ type: "tool", tool: "shell", state: { status: "running" } })
+    addPart.run("ses_question", now - 3_600_000, question)
+    addPart.run("ses_question", now - 1_800_000, question)
+    addPart.run("ses_stuck", now - 7_200_000, running)
+    addPart.run("ses_answered", now - 8_000_000, question)
+    addMessage.run("ses_answered", now - 100_000, JSON.stringify({ role: "user" }))
+    addPart.run("ses_fresh", now - 1_000, running)
+    const details = await queryWaitingDetails({ query: (sql) => sqlite.prepare(sql) })
+    assert.equal(details.get("ses_question")?.reason, "question")
+    assert.equal(details.get("ses_question")?.since, now - 3_600_000)
+    assert.equal(details.get("ses_stuck")?.reason, "stuck")
+    assert.equal(details.get("ses_stuck")?.since, now - 7_200_000)
+    assert.equal(details.has("ses_answered"), false)
+    assert.equal(details.has("ses_fresh"), false)
+  } finally {
+    sqlite.close()
+  }
 }
 
 // Remote transcript fetches run in a bounded pool, not all at once.
