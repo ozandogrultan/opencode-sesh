@@ -41,10 +41,31 @@ function loadDataLayer() {
   )
 }
 
+function loadPinnedSort() {
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const start = source.indexOf("function pinnedFirst")
+  const end = source.indexOf("// Sessions panel", start)
+  assert.ok(start >= 0 && end > start, "could not locate TUI pin sorting")
+  return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
+}
+
 const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// An old pinned session remains visible ahead of a capped recent list, even
+// when another directory is pinned as a group.
+{
+  const entries = [
+    { id: "ses_recent", dir: "/other", updated: 300 },
+    { id: "ses_directory", dir: "/pinned", updated: 200 },
+    { id: "ses_old", dir: "/other", updated: 100 },
+  ]
+  const sorted = loadPinnedSort()(entries, { sessions: ["ses_old"], directories: ["/pinned"] })
+  assert.deepEqual(sorted.map((entry) => entry.id), ["ses_old", "ses_directory", "ses_recent"])
+  assert.equal(sorted[0], entries[2], "sorting must not replace session records")
+}
 
 function sessionsFor(count, { spread = 1_000_000 } = {}) {
   return Array.from({ length: count }, (_, i) => ({

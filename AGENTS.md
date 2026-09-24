@@ -72,6 +72,11 @@ the schema below. Keystrokes never touch the database:
   selection leaves a one-shot `STATE_DIR/action-notice` the next render shows
   and consumes. Snapshot records carry `archived` as 0/1 (the DB column is an
   epoch, not a boolean).
+- Session and directory pins live in `${XDG_DATA_HOME:-$HOME/.local/share}/sesh/pins.json`
+  (`SESH_PINS_FILE` overrides it for tests), shared by fzf and the TUI. Writes
+  use a sibling lock directory and atomic rename. Alt-S toggles a selected
+  session; Alt-D toggles its directory. Pinned directories sort before groups
+  containing pinned sessions, with pinned sessions first inside each group.
 
 **Output contract** (TSV, 6 fields):
 `agentId  sessionId  liveState  display  cwd  trackingId`. `display` is the only
@@ -125,7 +130,8 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 ## TUI panel (`tui/sesh-panel.tsx`)
 
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
-  sidebar content stays). Renders the newest `SIDEBAR_LIMIT` unarchived sessions
+  sidebar content stays). Renders pinned sessions before the newest
+  `SIDEBAR_LIMIT` unarchived sessions
   with the current one highlighted, polled every 15 s; space previews a row and
   ctrl+x deletes one (armed, then confirmed). Anything bulkier belongs to the
   picker.

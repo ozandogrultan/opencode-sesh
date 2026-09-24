@@ -8,6 +8,8 @@ sesh shortcuts
   Ctrl-F            Resume the selected session as a fork
   Ctrl-G            Toggle current-directory scope / all sessions
   Space             Toggle transcript preview
+  Alt-S             Pin / unpin selected session
+  Alt-D             Pin / unpin selected directory
   ?                 Toggle this help
   Ctrl-X            Delete the selected session (asks to confirm)
   Escape            Exit the picker

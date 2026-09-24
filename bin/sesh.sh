@@ -90,6 +90,7 @@ q_list=$(shell_quote "$SCRIPT_DIR/sesh-list.sh")
 q_worker=$(shell_quote "$SCRIPT_DIR/sesh-refresh-worker.sh")
 q_preview=$(shell_quote "$SCRIPT_DIR/sesh-preview.sh")
 q_delete=$(shell_quote "$SCRIPT_DIR/sesh-delete.sh")
+q_pins=$(shell_quote "$SCRIPT_DIR/sesh-pins.sh")
 q_shortcuts=$(shell_quote "$SCRIPT_DIR/sesh-shortcuts.sh")
 q_state=$(shell_quote "$state_dir")
 export SESH_LIST="$SCRIPT_DIR/sesh-list.sh"
@@ -119,6 +120,8 @@ preview_cmd="if [ -f $q_state/help ]; then $q_shortcuts; else $q_preview $q_stat
 help_bind="?:transform:[ -z {q} ] && ( [ -f $q_state/help ] && rm -f $q_state/help && echo hide-preview || ( : > $q_state/help && echo show-preview+refresh-preview ) ) || echo 'put(?)'"
 toggle_cmd="$q_list --toggle-scope --state-dir $q_state >/dev/null"
 delete_cmd="$q_delete $q_state {2}"
+pin_session_cmd="$q_pins toggle-session {2}"
+pin_directory_cmd="$q_pins toggle-directory {5}"
 
 query="$picker_query"
 while :; do
@@ -132,6 +135,8 @@ while :; do
     --bind="$help_bind" \
     --bind="ctrl-x:execute($delete_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
     --bind="ctrl-g:execute($toggle_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
+    --bind="alt-s:execute-silent($pin_session_cmd)+reload($cache_cmd)" \
+    --bind="alt-d:execute-silent($pin_directory_cmd)+reload($cache_cmd)" \
     --bind="change:reload:$cache_cmd" \
     --bind="start,every(3):transform-header($header_cmd)+reload-sync:$cache_cmd")
 status=$?

@@ -7,6 +7,7 @@ command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 is required for these test
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/sesh-test.XXXXXX")
 # Never read or write the user's real database or extraction cache.
 export SESH_CACHE_DIR="$fixture/cache"
+export SESH_PINS_FILE="$fixture/pins.json"
 export SESH_DB="$fixture/opencode.db"
 export SESH_JQ=${SESH_JQ:-$(command -v jq)}
 export SESH_SQLITE=$(command -v sqlite3)
@@ -52,6 +53,7 @@ add_part 'ses_notitle' 'msg_n1' 'user' 'text' 'untitled session body words' 1700
 
 list="$PACKAGE_DIR/bin/sesh-list.sh"
 preview="$PACKAGE_DIR/bin/sesh-preview.sh"
+pins="$PACKAGE_DIR/bin/sesh-pins.sh"
 state="$fixture/state"
 
 # 1. Default refresh shows ALL sessions across every directory, newest first;
@@ -77,6 +79,34 @@ grep -Fq 'ses_alpha' "$fixture/search.tsv"
 grep -Fq 'ses_beta' "$fixture/search.tsv" && { echo "title/body search leaked" >&2; exit 1; }
 "$list" --state-dir "$state" --query "SECRET_TOOL_OUTPUT" > "$fixture/tool.tsv"
 grep -Fq 'ses_alpha' "$fixture/tool.tsv" && { echo "tool payload indexed" >&2; exit 1; }
+
+# Pins survive refreshes, prioritize directories and sessions independently,
+# and never change the six-field TSV or the search/scope contract.
+"$pins" toggle-session ses_alpha > /dev/null
+"$pins" toggle-directory "$two" > /dev/null
+"$list" --state-dir "$state" > "$fixture/pinned.tsv"
+"$SESH_JQ" -e --arg dir "$two" '.sessions == ["ses_alpha"] and .directories == [$dir]' "$SESH_PINS_FILE" > /dev/null
+awk -F'\t' -v two="$two" '$6 == "hdr:" two { exit(NR != 1) }' "$fixture/pinned.tsv"
+grep -Fq '★ Alpha work' "$fixture/pinned.tsv"
+grep -Fq '★ '"$two" "$fixture/pinned.tsv"
+"$list" --refresh --state-dir "$state" --limit 1 > /dev/null
+"$SESH_JQ" -s -e 'length == 1 and .[0].sessionId == "ses_notitle"' "$state/snapshot.jsonl" > /dev/null
+"$list" --refresh --state-dir "$state" --limit 0 > /dev/null
+"$list" --state-dir "$state" --query widget > "$fixture/pinned-search.tsv"
+grep -Fq 'ses_alpha' "$fixture/pinned-search.tsv"
+"$pins" toggle-directory "$two" > /dev/null
+"$list" --state-dir "$state" > "$fixture/pinned-session.tsv"
+awk -F'\t' -v one="$one" '$6 == "hdr:" one { exit(NR != 1) }' "$fixture/pinned-session.tsv"
+"$list" --refresh --state-dir "$state" --limit 1 > /dev/null
+"$SESH_JQ" -s -e 'length == 1 and .[0].sessionId == "ses_alpha"' "$state/snapshot.jsonl" > /dev/null
+"$list" --refresh --state-dir "$state" --limit 0 > /dev/null
+"$pins" toggle-session ses_alpha > /dev/null
+"$SESH_JQ" -e '.sessions == [] and .directories == []' "$SESH_PINS_FILE" > /dev/null
+mkdir "$SESH_PINS_FILE.lock"
+printf '99999999\n' > "$SESH_PINS_FILE.lock/pid"
+"$pins" toggle-session ses_alpha > /dev/null
+"$SESH_JQ" -e '.sessions == ["ses_alpha"]' "$SESH_PINS_FILE" > /dev/null
+"$pins" toggle-session ses_alpha > /dev/null
 
 # 3. Scope narrows to one directory; the toggle flips back to global.
 ( cd "$one"; "$list" --refresh --state-dir "$state" --cwd > /dev/null )

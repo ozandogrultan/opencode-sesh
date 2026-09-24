@@ -2,7 +2,8 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { readFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
@@ -88,6 +89,77 @@ function getMarkdownStyle(theme: ThemeColors): SyntaxStyle | undefined {
       return undefined
     }
   }
+}
+
+type Pins = { sessions: string[]; directories: string[] }
+const emptyPins = (): Pins => ({ sessions: [], directories: [] })
+const pinsPath = () =>
+  process.env.SESH_PINS_FILE ?? join(process.env.XDG_DATA_HOME ?? join(process.env.HOME ?? "", ".local/share"), "sesh/pins.json")
+
+async function readPins(): Promise<Pins> {
+  try {
+    const data = JSON.parse(await readFile(pinsPath(), "utf8")) as Partial<Pins>
+    return {
+      sessions: Array.isArray(data.sessions) ? data.sessions.filter((id): id is string => typeof id === "string") : [],
+      directories: Array.isArray(data.directories) ? data.directories.filter((dir): dir is string => typeof dir === "string") : [],
+    }
+  } catch {
+    return emptyPins()
+  }
+}
+
+async function togglePin(kind: keyof Pins, value: string): Promise<Pins> {
+  const file = pinsPath()
+  await mkdir(dirname(file), { recursive: true })
+  const lock = `${file}.lock`
+  let locked = false
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      await mkdir(lock)
+      locked = true
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+      try {
+        const owner = Number((await readFile(join(lock, "pid"), "utf8")).trim())
+        if (Number.isSafeInteger(owner) && owner > 0) {
+          try {
+            process.kill(owner, 0)
+          } catch (check) {
+            if ((check as NodeJS.ErrnoException).code === "ESRCH") {
+              await unlink(join(lock, "pid")).catch(() => {})
+              await rmdir(lock).catch(() => {})
+            }
+          }
+        }
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+  }
+  if (!locked) throw new Error("pins are busy")
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`
+  try {
+    await writeFile(join(lock, "pid"), `${process.pid}\n`)
+    const next = await readPins()
+    next[kind] = next[kind].includes(value) ? next[kind].filter((item) => item !== value) : [...next[kind], value]
+    await writeFile(tmp, JSON.stringify(next) + "\n", { mode: 0o600 })
+    await rename(tmp, file)
+    return next
+  } finally {
+    await unlink(tmp).catch(() => {})
+    await unlink(join(lock, "pid")).catch(() => {})
+    await rmdir(lock)
+  }
+}
+
+function pinnedFirst(entries: Entry[], pins: Pins): Entry[] {
+  const sessions = new Set(pins.sessions)
+  const directories = new Set(pins.directories)
+  return [...entries].sort((a, b) => {
+    const aRank = sessions.has(a.id) ? 2 : directories.has(a.dir) ? 1 : 0
+    const bRank = sessions.has(b.id) ? 2 : directories.has(b.dir) ? 1 : 0
+    return bRank - aRank || b.updated - a.updated
+  })
 }
 
 // Sessions panel: an opencode-native session switcher in two parts.
@@ -509,7 +581,9 @@ type TreeRow =
   | { kind: "group"; dir: string; label: string; count: number }
   | { kind: "item"; entry: Entry; last: boolean }
 
-function SidebarSessions(props: { api: TuiPluginApi }) {
+type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; refreshPins: () => void }
+
+function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
   const [entries, setEntries] = createSignal<Entry[]>([])
@@ -535,6 +609,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
   onMount(() => {
     let alive = true
     const load = async () => {
+      props.refreshPins()
       try {
         const { entries: all } = await fetchEntries(props.api)
         if (alive) {
@@ -557,8 +632,9 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
   const filteredEntries = createMemo(() => {
     const q = query().trim().toLowerCase()
-    if (!q) return entries()
-    return entries().filter(
+    const ordered = pinnedFirst(entries(), props.pins())
+    if (!q) return ordered
+    return ordered.filter(
       (entry) => entry.title.toLowerCase().includes(q) || entry.dir.toLowerCase().includes(q),
     )
   })
@@ -575,7 +651,12 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     }
     const ordered = [...groups.entries()]
       .map(([dir, list]) => ({ dir, list, updated: Math.max(...list.map((entry) => entry.updated)) }))
-      .sort((a, b) => b.updated - a.updated)
+      .sort((a, b) => {
+        const pins = props.pins()
+        const rank = (group: { dir: string; list: Entry[] }) =>
+          pins.directories.includes(group.dir) ? 2 : group.list.some((entry) => pins.sessions.includes(entry.id)) ? 1 : 0
+        return rank(b) - rank(a) || b.updated - a.updated
+      })
     const rows: TreeRow[] = []
     for (const group of ordered) {
       rows.push({ kind: "group", dir: group.dir, label: prettyDir(group.dir, home), count: group.list.length })
@@ -611,9 +692,14 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
     if (count === 0) return
     setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
   }
+  let previousRows: Entry[] = []
   createEffect(() => {
-    const count = itemRows().length
-    if (cursor() >= count) setCursor(Math.max(0, count - 1))
+    const rows = itemRows()
+    const selected = previousRows[cursor()]?.id
+    const position = rows.findIndex((entry) => entry.id === selected)
+    if (position >= 0 && position !== cursor()) setCursor(position)
+    else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
+    previousRows = rows
   })
 
   const sessionStatus = (id: string): "running" | "waiting" | "idle" => {
@@ -741,6 +827,8 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
           preventDefault: true,
           cmd: () => requestDelete(entry),
         },
+        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
         {
           key: "/",
           desc: "Search sessions",
@@ -792,6 +880,24 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
         cmd: () => {
           const entry = itemRows()[cursor()]
           if (entry) requestDelete(entry)
+        },
+      },
+      {
+        key: "alt+s",
+        desc: "Pin session",
+        preventDefault: true,
+        cmd: () => {
+          const entry = itemRows()[cursor()]
+          if (entry) props.onTogglePin("sessions", entry.id)
+        },
+      },
+      {
+        key: "alt+d",
+        desc: "Pin directory",
+        preventDefault: true,
+        cmd: () => {
+          const entry = itemRows()[cursor()]
+          if (entry) props.onTogglePin("directories", entry.dir)
         },
       },
       {
@@ -899,7 +1005,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
               <box flexDirection="row" paddingTop={1} onMouseDown={() => toggleGroup(row.dir)}>
                 <text flexGrow={1} flexShrink={1} wrapMode="none">
                   <span style={{ fg: theme().textMuted }}>{collapsed()[row.dir] ? "▸ " : "▾ "}</span>
-                  <b>{truncate(row.label, SIDEBAR_GROUP_WIDTH)}</b>
+                  <b>{props.pins().directories.includes(row.dir) ? "★ " : ""}{truncate(row.label, SIDEBAR_GROUP_WIDTH - (props.pins().directories.includes(row.dir) ? 2 : 0))}</b>
                 </text>
                 <text flexShrink={0} style={{ fg: theme().textMuted }}>
                   {" "}({row.count})
@@ -916,7 +1022,16 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
                     ? theme().backgroundElement
                     : RGBA.fromInts(0, 0, 0, 0)
                 }
-                onMouseOver={() => setHovered(row.entry.id)}
+                onMouseOver={() => {
+                  setHovered(row.entry.id)
+                  // The keyboard layer wins over the hover layer while nav is
+                  // active. Keep its cursor on the hovered row so Alt-S/Alt-D
+                  // cannot silently pin a different (often current) session.
+                  if (navActive()) {
+                    const index = itemRows().findIndex((entry) => entry.id === row.entry.id)
+                    if (index >= 0) setCursor(index)
+                  }
+                }}
                 onMouseOut={() => setHovered(undefined)}
                 onMouseDown={() => props.api.route.navigate("session", { sessionID: row.entry.id })}
               >
@@ -935,7 +1050,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
                   </span>
                 </text>
                 <Highlighted
-                  text={truncate(row.entry.title, SIDEBAR_TITLE_WIDTH)}
+                  text={`${props.pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, SIDEBAR_TITLE_WIDTH - (props.pins().sessions.includes(row.entry.id) ? 2 : 0))}`}
                   query={query()}
                   color={isPendingDelete(row.entry.id) ? theme().error : theme().text}
                   matchColor={theme().warning}
@@ -956,7 +1071,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · space preview · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · space preview · alt+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -967,7 +1082,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
 const HOME_SESSION_LIMIT = 6
 
-function HomeSessions(props: { api: TuiPluginApi }) {
+function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
   const [entries, setEntries] = createSignal<Entry[]>([])
@@ -1027,6 +1142,8 @@ function HomeSessions(props: { api: TuiPluginApi }) {
           preventDefault: true,
           cmd: () => preview.open(entry),
         },
+        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
       ],
     })
   })
@@ -1037,6 +1154,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
   onMount(() => {
     let alive = true
     const load = async () => {
+      props.refreshPins()
       try {
         const { entries: all } = await fetchEntries(props.api)
         if (alive) {
@@ -1062,7 +1180,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
           (entry) => entry.title.toLowerCase().includes(q) || entry.dir.toLowerCase().includes(q),
         )
       : entries()
-    return list.slice(0, HOME_SESSION_LIMIT)
+    return pinnedFirst(list, props.pins()).slice(0, HOME_SESSION_LIMIT)
   })
 
   return (
@@ -1127,13 +1245,13 @@ function HomeSessions(props: { api: TuiPluginApi }) {
                 ○
               </text>
               <Highlighted
-                text={truncate(entry.title, HOME_TITLE_WIDTH)}
+                text={`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${truncate(entry.title, HOME_TITLE_WIDTH - (props.pins().sessions.includes(entry.id) ? 2 : 0))}`}
                 query={query()}
                 color={theme().text}
                 matchColor={theme().warning}
               />
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                {prettyDir(entry.dir, home)} · {ago(entry.updated)}
+                {props.pins().directories.includes(entry.dir) ? "★ " : ""}{prettyDir(entry.dir, home)} · {ago(entry.updated)}
               </text>
             </box>
           )}
@@ -1147,19 +1265,40 @@ function HomeSessions(props: { api: TuiPluginApi }) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  const [pins, setPins] = createSignal<Pins>(emptyPins())
+  let pinVersion = 0
+  const refreshPins = () => {
+    const version = pinVersion
+    void readPins().then((latest) => {
+      if (version === pinVersion) setPins(latest)
+    })
+  }
+  refreshPins()
+  const onTogglePin = (kind: keyof Pins, value: string) => {
+    if (!value) return
+    pinVersion += 1
+    void togglePin(kind, value).then(
+      (updated) => {
+        setPins(updated)
+        api.ui.toast({ message: `${updated[kind].includes(value) ? "Pinned" : "Unpinned"} ${kind === "sessions" ? "session" : "directory"}`, variant: "info" })
+      },
+      () => api.ui.toast({ message: "Could not update pins", variant: "error" }),
+    )
+  }
   api.slots.register({
     order: 100,
     slots: {
       sidebar_content() {
-        return <SidebarSessions api={api} />
+        return <SidebarSessions api={api} pins={pins} onTogglePin={onTogglePin} refreshPins={refreshPins} />
       },
       home_bottom() {
-        return <HomeSessions api={api} />
+        return <HomeSessions api={api} pins={pins} onTogglePin={onTogglePin} refreshPins={refreshPins} />
       },
     },
   })
 
   const openPicker = async () => {
+    refreshPins()
     if (api.mode.current() !== BASE_MODE) return
     if (api.renderer.currentFocusedEditor === null) return
 
@@ -1197,11 +1336,12 @@ const tui: TuiPlugin = async (api) => {
     })
     type DialogRow = { kind: "group"; label: string; count: number } | { kind: "item"; entry: Entry }
 
+    const orderedEntries = createMemo(() => pinnedFirst(allEntries(), pins()))
     const matchedGroups = createMemo(() => {
       const q = query().trim().toLowerCase()
       const index = searchIndex()
       const group = scope()
-      const matched = allEntries().filter((entry) => {
+      const matched = orderedEntries().filter((entry) => {
         if (group && entry.group !== group) return false
         if (!q) return true
         const haystack = index.get(entry.id) ?? `${entry.title} ${entry.dir}`.toLowerCase()
@@ -1213,7 +1353,14 @@ const tui: TuiPlugin = async (api) => {
         list.push(entry)
         byGroup.set(entry.group, list)
       }
-      return [...byGroup.entries()].map(([name, list]) => ({ name, list }))
+      const groups = [...byGroup.entries()].map(([name, list]) => ({ name, list }))
+      const currentPins = pins()
+      const rank = (group: (typeof groups)[number]) =>
+        group.list.some((entry) => currentPins.directories.includes(entry.dir)) ? 2
+          : group.list.some((entry) => currentPins.sessions.includes(entry.id)) ? 1 : 0
+      return groups.sort((a, b) =>
+        rank(b) - rank(a) || Math.max(...b.list.map((entry) => entry.updated)) - Math.max(...a.list.map((entry) => entry.updated)),
+      )
     })
 
     const selectableEntries = createMemo(() => matchedGroups().flatMap((g) => g.list))
@@ -1235,9 +1382,14 @@ const tui: TuiPlugin = async (api) => {
       return bits.join(" · ")
     })
 
+    let previousSelection: Entry[] = []
     createEffect(() => {
-      const count = selectableEntries().length
-      if (cursor() >= count) setCursor(Math.max(0, count - 1))
+      const rows = selectableEntries()
+      const selected = previousSelection[cursor()]?.id
+      const position = rows.findIndex((entry) => entry.id === selected)
+      if (position >= 0 && position !== cursor()) setCursor(position)
+      else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
+      previousSelection = rows
     })
 
     const pickerRows = createMemo<DialogRow[]>(() => {
@@ -1409,6 +1561,14 @@ const tui: TuiPlugin = async (api) => {
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
         { key: "ctrl+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
+        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => {
+          const entry = selectableEntries()[cursor()]
+          if (entry) onTogglePin("sessions", entry.id)
+        } },
+        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => {
+          const entry = selectableEntries()[cursor()]
+          if (entry) onTogglePin("directories", entry.dir)
+        } },
         {
           key: "ctrl+x",
           desc: "Delete session",
@@ -1509,7 +1669,7 @@ const tui: TuiPlugin = async (api) => {
                   row.kind === "group" ? (
                     <box paddingTop={1} paddingLeft={4}>
                       <text style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
-                        {row.label} <span style={{ fg: api.theme.current.textMuted }}>({row.count})</span>
+                        {matchedGroups().find((group) => group.name === row.label)?.list.some((entry) => pins().directories.includes(entry.dir)) ? "★ " : ""}{row.label} <span style={{ fg: api.theme.current.textMuted }}>({row.count})</span>
                       </text>
                     </box>
                   ) : (
@@ -1539,7 +1699,7 @@ const tui: TuiPlugin = async (api) => {
                         </text>
                       </Show>
                       <Highlighted
-                        text={truncate(row.entry.title, 61)}
+                        text={`${pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, pins().sessions.includes(row.entry.id) ? 59 : 61)}`}
                         query={query()}
                         bold={row.entry.id === selectableEntries()[cursor()]?.id}
                         color={
@@ -1621,7 +1781,7 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ navigate · enter open · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
+                : "↑↓ navigate · enter open · alt+s/d pin · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
             </text>
           </box>
         </box>

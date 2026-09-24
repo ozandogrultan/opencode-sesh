@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pin sessions with Alt-S or directories with Alt-D in both pickers. Pins live
+  in a shared XDG data file, appear with a star, and sort ahead of recent
+  sessions in the terminal picker, TUI picker, sidebar and home list.
+
 ### Fixed
 
+- Hovering a sidebar session while keyboard navigation is active now moves the
+  selection to that row, so Alt-S/Alt-D pin the row under the pointer rather
+  than the previously selected (often currently open) session.
 - The TUI sidebar's Sessions section now has a working show/hide control,
   separate from clicking the heading to activate keyboard navigation.
 - Transcript previews pass OpenTUI's tree-sitter client to the markdown

@@ -157,7 +157,7 @@ render() {
   {
     [ -n "$notice" ] && printf '\t\tunknown\t%s%s%s\t\tnotice:action\n' "$YELLOW" "$notice" "$RESET"
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
-    "$JQ_BIN" -sr --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg selected "$SELECTED_ID" '
+    "$JQ_BIN" -sr --argjson pins "$("${BASH_SOURCE[0]%/*}/sesh-pins.sh" read)" --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg selected "$SELECTED_ID" '
       def ago($epoch):
         ((now - ($epoch | tonumber)) | floor) as $s
         | if $s < 60 then "now" elif $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
@@ -180,17 +180,20 @@ render() {
          then notice_row(if $q == "" then "No sessions in this store" else "No sessions match \"" + $query + "\"" end; "notice:no-match")
          else empty end),
         ($matched
-      | group_by(.cwd)
-      | map({cwd: .[0].cwd, updated: (map(.updatedEpoch) | max), items: (sort_by(.updatedEpoch) | reverse)})
-      | sort_by(.updated) | reverse
-      | .[] as $g
-      | (["", "", "unknown", ($magenta + ($g.cwd | homepath | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + $reset), $g.cwd, ("hdr:" + $g.cwd)] | @tsv),
+       | group_by(.cwd)
+       | map({cwd: .[0].cwd, updated: (map(.updatedEpoch) | max),
+              pinDirectory: (.[0].cwd as $dir | $pins.directories | index($dir) != null),
+              pinSession: (any(.[]; .sessionId as $id | $pins.sessions | index($id) != null)),
+              items: (sort_by([(.sessionId as $id | $pins.sessions | index($id) != null), .updatedEpoch]) | reverse)})
+       | sort_by([.pinDirectory, .pinSession, .updated]) | reverse
+       | .[] as $g
+       | (["", "", "unknown", ($magenta + (if $g.pinDirectory then "★ " else "" end) + ($g.cwd | homepath | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + $reset), $g.cwd, ("hdr:" + $g.cwd)] | @tsv),
         ($g.items | to_entries[] | .key as $i | .value as $s
          # Archived rows are opt-in and need to look like it; nothing else about
          # a row is knowable here (live agent state is not exposed by opencode).
          | (if $s.archived == 1 then $yellow else $gray end) as $c
          | ($gray + (if $i == (($g.items|length)-1) then "└" else "├" end) + $reset) as $branch
-         | [$s.agentId, $s.sessionId, $s.liveState, ($branch + " " + $c + ($s.title | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + (if $s.archived == 1 then " · archived" else "" end) + $reset + "  " + $gray + ago($s.updatedEpoch) + $reset), $s.cwd, $s.sessionId] | @tsv)))
+          | [$s.agentId, $s.sessionId, $s.liveState, ($branch + " " + $c + (if ($s.sessionId as $id | $pins.sessions | index($id)) != null then "★ " else "" end) + ($s.title | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + (if $s.archived == 1 then " · archived" else "" end) + $reset + "  " + $gray + ago($s.updatedEpoch) + $reset), $s.cwd, $s.sessionId] | @tsv)))
     ' "$SNAPSHOT"
   } || printf '\t\tunknown\t%sSnapshot rendering failed; retry refresh%s\t\tnotice:render-error\n' "$YELLOW" "$RESET"
 }
@@ -372,7 +375,7 @@ refresh() {
     done < "$records"
   fi
 
-  if ! "$JQ_BIN" -c --slurpfile hist "$historical" --arg scope "$SCOPE_CWD" --argjson limit "$LIMIT" --argjson archived "$INCLUDE_ARCHIVED" '
+  if ! "$JQ_BIN" -c --slurpfile hist "$historical" --argjson pins "$("${BASH_SOURCE[0]%/*}/sesh-pins.sh" read)" --arg scope "$SCOPE_CWD" --argjson limit "$LIMIT" --argjson archived "$INCLUDE_ARCHIVED" '
     .meta as $meta
     | ($hist | map({key: .sessionId, value: .}) | from_entries) as $histById
     | [$meta[]
@@ -387,7 +390,7 @@ refresh() {
           updatedEpoch: ($h.updatedEpoch // (($m.time_updated / 1000 | floor))),
           title: (if ($h.title // "") != "" then $h.title else ($m.title // "(untitled)") end)}
        | .searchText = ((.title | ascii_downcase) + " " + ($histById[.sessionId].fulltextLower // ""))]
-    | sort_by(.updatedEpoch) | reverse
+     | sort_by([(.cwd as $dir | $pins.directories | index($dir) != null), (.sessionId as $id | $pins.sessions | index($id) != null), .updatedEpoch]) | reverse
     | (if $limit == 0 then . else .[:$limit] end)[]
   ' "$cache_state" > "$out"; then
     set_status 'stale: snapshot construction failed; showing last good snapshot'

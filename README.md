@@ -27,7 +27,10 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 ## Why sesh
 
 - **Every session, everywhere.** Sessions are grouped by project directory and
-  sorted by recency — across *all* your projects, not just the current one.
+  sorted by pins, then recency — across *all* your projects, not just the current one.
+- **Pin what matters.** Alt-S pins a session and Alt-D pins its directory in
+  either picker. Pins are shared across the terminal and opencode TUI and
+  persist across restarts; pinned directories and sessions sort first.
 - **Full-text search.** Type to match against session titles *and* the text of
   the conversation itself. Reasoning and tool output are excluded, so the index
   stays clean.
@@ -112,6 +115,7 @@ bash install.sh --uninstall   # from source
 | Enter | Resume the selected session in this terminal |
 | Ctrl-F       | Resume as a fork (the original is untouched) |
 | Ctrl-G | Toggle current-directory scope / all sessions |
+| Alt-S / Alt-D | Pin or unpin the selected session / directory |
 | Space (empty query) | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |
 | Ctrl-X | Delete the selected session (asks to confirm) |
@@ -144,18 +148,21 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | `ctrl+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
-| Space | Toggle the transcript preview |
+| Ctrl-P | Toggle the transcript preview |
 | Enter | Open the selected session |
 | Ctrl-X | Delete the selected session (asks to confirm) |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
+| Alt-S / Alt-D | Pin or unpin the selected session / directory |
 | Esc | Close |
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Space to preview, Ctrl-X to delete, Esc to leave). The sidebar shows the 15 most
-recent sessions — the full picker is one keystroke away.
+Space to preview, Alt-S/Alt-D to pin, Ctrl-X to delete, Esc to leave). Pinned
+sessions appear ahead of recent ones in the 15-row sidebar; click **▾ hide**
+to collapse the section. Hovering a row while keyboard navigation is active
+selects it for the next shortcut. The full picker is one keystroke away.
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing
@@ -174,6 +181,7 @@ All variables are optional.
 | `SESH_GLOW` | first `glow` on `PATH` | optional Markdown preview renderer |
 | `SESH_OPENCODE` | `opencode` | opencode executable (resume / delete) |
 | `SESH_CACHE_DIR` | `~/.cache/sesh` | persistent search-index cache |
+| `SESH_PINS_FILE` | `${XDG_DATA_HOME:-~/.local/share}/sesh/pins.json` | shared persistent session/directory pins |
 
 ## How it works
 
