@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI sidebar's Sessions section now lists every session and fills the
+  available sidebar height: the fixed 15-row cap is gone, with overflow
+  scrolling inside the section.
+
 ### Added
 
 - Pin sessions with Option-S or directories with Option-D in both pickers. Pins live
@@ -14,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessions in the terminal picker, TUI picker, sidebar and home list.
 
 ### Fixed
+
+- The sidebar delete confirm no longer disarms when the pointer leaves the
+  armed row: the second Ctrl+X (or `y`) commits the visibly armed row wherever
+  the pointer is, so deleting works while hovering the sidebar edges.
 
 - Session previews now use Ctrl-P rather than Space in the terminal picker,
   sidebar and home list, so typing cannot accidentally open a preview.

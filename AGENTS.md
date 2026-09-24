@@ -130,11 +130,11 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 ## TUI panel (`tui/sesh-panel.tsx`)
 
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
-  sidebar content stays). Renders pinned sessions before the newest
-  `SIDEBAR_LIMIT` unarchived sessions
-  with the current one highlighted, polled every 15 s; Ctrl-P previews a row and
-  ctrl+x deletes one (armed, then confirmed). Anything bulkier belongs to the
-  picker.
+  sidebar content stays). Renders pinned sessions before the newest unarchived
+  sessions, with the current one highlighted, polled every 15 s; Ctrl-P previews
+  a row and ctrl+x deletes one (armed, then confirmed). The section lists every
+  session without a row cap and flex-grows to fill the sidebar, with overflow
+  scrolling inside; the picker remains the place for transcript search.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;
@@ -174,12 +174,15 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   opt-in: clicking the *Sessions* heading (or its search box) activates a
   priority-20 layer, because a global `↑`/`↓` would hijack the main prompt.
   Cursor state is derived from `itemRows()`, so hover and cursor resolve to the
-  same row, and the section is capped at `SIDEBAR_LIMIT` (`… N more · ctrl+o for
-  all` is the escape hatch) — it must stay a glanceable recent list.
+  same row. The section lists every session with no row cap
+  (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the
+  stretched section.
 - **Delete in the TUI is two-step.** The first `ctrl+x` arms `pendingDelete`,
-  the second (or `y`, or Enter in the picker footer) commits, and `n`/Esc/moving
-  cancels. The `y`/`n` layer is registered *only while armed*, so it can never
-  shadow the search box's typing.
+  the second (or `y`, or Enter in the picker footer) commits the armed row
+  wherever the pointer or cursor is, and `n`/Esc (or a five-second timeout)
+  cancels. Moving the pointer must never disarm: edge-hover flicker ate the
+  confirm before `confirmArmed` landed. The `y`/`n` layer is registered *only
+  while armed*, so it can never shadow the search box's typing.
 - **Picker `ctrl+g` is project scope**, not close (parity with the fzf picker's
   `Ctrl-G`); Esc is the only close key. `ctrl+f` forks through
   `api.client.session.fork` and navigates to the returned session.

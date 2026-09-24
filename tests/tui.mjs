@@ -54,6 +54,23 @@ const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// The sidebar lists every session without a row cap: all filtered entries
+// reach the tree, and overflow scrolls inside the stretched scrollbox.
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  assert.doesNotMatch(source, /slice\(0, SIDEBAR_LIMIT\)/)
+  assert.doesNotMatch(source, /sidebarRowBudget/)
+  assert.match(source, /const shownEntries = createMemo\(\(\) => filteredEntries\(\)\)/)
+}
+
+// The delete confirm targets the armed row wherever the pointer is: leaving
+// the armed row (edge-hover flicker) must not disarm the pending delete.
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  assert.doesNotMatch(source, /pending !== hovered\(\)/)
+  assert.match(source, /const confirmArmed = /)
+}
+
 // Space must remain available to both search boxes and the main prompt even
 // when a session row is hovered or selected in the sidebar.
 {

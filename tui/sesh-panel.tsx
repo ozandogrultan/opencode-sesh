@@ -212,10 +212,9 @@ const SIDEBAR_TITLE_WIDTH = 27
 const SIDEBAR_GROUP_WIDTH = 30
 const HOME_TITLE_WIDTH = 30
 
-// The sidebar is a glanceable recent list, not a second picker: cap it so the
-// section cannot grow into a scrolling wall (the docs promise "most recent"),
-// and point at the picker for everything else.
-const SIDEBAR_LIMIT = 15
+// The sidebar lists every session (newest first, pins ahead) and fills
+// whatever vertical space it gets: overflow scrolls inside the stretched
+// scrollbox. The picker (ctrl+o) remains the place for transcript search.
 
 // Uppercase is included deliberately: a search box that silently drops shifted
 // letters cannot be used for acronyms or paths like README.
@@ -639,7 +638,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     )
   })
 
-  const shownEntries = createMemo(() => filteredEntries().slice(0, SIDEBAR_LIMIT))
+  const shownEntries = createMemo(() => filteredEntries())
   const remaining = createMemo(() => Math.max(0, filteredEntries().length - shownEntries().length))
 
   const tree = createMemo<TreeRow[]>(() => {
@@ -727,8 +726,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   }
 
   // Deleting is irreversible, so ctrl+x arms the row and a second ctrl+x (or y)
-  // commits it. Anything else — another row, five seconds, a keypress elsewhere
-  // — lets it go. The old behaviour deleted whatever was hovered outright.
+  // commits it. The arm survives pointer movement — edge-hover flicker must
+  // not eat the confirm — and is cleared by the five-second timeout, n, Esc,
+  // collapsing the section, or the delete itself.
   const requestDelete = (entry: Entry) => {
     if (deleting()) return
     if (pendingDelete() === entry.id) {
@@ -738,6 +738,18 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setPendingDelete(entry.id)
     if (confirmTimer) clearTimeout(confirmTimer)
     confirmTimer = setTimeout(() => setPendingDelete(undefined), 5000)
+  }
+
+  // The confirm always targets the visibly armed row ("ctrl+x again"),
+  // wherever the pointer or cursor currently is. Returns true when an arm
+  // was pending (and is now committed or discarded as stale).
+  const confirmArmed = (): boolean => {
+    const id = pendingDelete()
+    if (!id) return false
+    const entry = entries().find((e) => e.id === id)
+    if (!entry) cancelDelete()
+    else void deleteEntry(entry)
+    return true
   }
 
   const deleteEntry = async (entry: Entry) => {
@@ -825,7 +837,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           key: "ctrl+x",
           desc: "Delete session",
           preventDefault: true,
-          cmd: () => requestDelete(entry),
+          cmd: () => {
+            if (!confirmArmed()) requestDelete(entry)
+          },
         },
         { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
         { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
@@ -837,13 +851,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       ],
     })
-  })
-
-  // Mouse hover must not commit a keyboard-initiated confirm (and vice versa):
-  // leaving the armed row abandons the pending delete.
-  createEffect(() => {
-    const pending = pendingDelete()
-    if (pending && !navActive() && pending !== hovered()) cancelDelete()
   })
 
   // Keyboard navigation is opt-in (click the "Sessions" heading or the search
@@ -878,6 +885,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         desc: "Delete session",
         preventDefault: true,
         cmd: () => {
+          if (confirmArmed()) return
           const entry = itemRows()[cursor()]
           if (entry) requestDelete(entry)
         },
@@ -925,8 +933,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
               desc: "Confirm delete",
               preventDefault: true,
               cmd: () => {
-                const entry = itemRows()[cursor()]
-                if (entry && pendingDelete() === entry.id) void deleteEntry(entry)
+                confirmArmed()
               },
             },
             { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
@@ -944,7 +951,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   return (
-    <box flexDirection="column" paddingRight={1}>
+    <box flexDirection="column" paddingRight={1} flexGrow={1} flexShrink={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
         <text flexShrink={1} onMouseDown={() => {
           if (!sectionCollapsed()) setNavActive((value) => !value)
@@ -996,6 +1003,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           </Show>
         </box>
         <scrollbox
+          flexGrow={1}
+          flexShrink={1}
           verticalScrollbarOptions={{ visible: false }}
           horizontalScrollbarOptions={{ visible: false }}
         >

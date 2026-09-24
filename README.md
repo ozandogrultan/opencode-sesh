@@ -160,9 +160,10 @@ Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
 Ctrl-P to preview, Option-S/Option-D to pin, Ctrl-X to delete, Esc to leave). Pinned
-sessions appear ahead of recent ones in the 15-row sidebar; click **▾ hide**
-to collapse the section. Hovering a row while keyboard navigation is active
-selects it for the next shortcut. The full picker is one keystroke away.
+sessions appear ahead of the rest; the section lists every session and scrolls
+to fill the sidebar, so click **▾ hide** to collapse it when you need the room.
+Hovering a row while keyboard navigation is active selects it for the next
+shortcut. The full picker is one keystroke away.
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing
