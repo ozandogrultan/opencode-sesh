@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The sidebar renames its cmux workspace to the current session title, so the
+  workspace list matches the session. Pre-first-turn placeholder titles
+  (`New session - …`) are never pushed.
+- `sesh cmux-sync [--dry-run] [--json]` names every cmux workspace after the
+  opencode session it is running, using cmux's own per-surface resume record.
+
+### Changed
+
+- Click-to-focus now reads cmux's per-surface resume record (`checkpoint_id`)
+  instead of heartbeat files, so it also finds background agents and panes
+  running an older panel, and has no files to sweep.
+
 ## [0.6.0] - 2026-09-24
 
 ### Added
@@ -16,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pane. Panes advertise their open session (cmux-only, one heartbeat file per
   session, ~45 s TTL); outside cmux or with no live claimant, the click opens
   the session locally as before.
+
 ## [0.5.0] - 2026-09-24
 
 ### Added

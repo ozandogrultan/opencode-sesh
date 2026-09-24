@@ -2,7 +2,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { mkdir, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
@@ -177,6 +177,9 @@ function pinnedFirst(entries: Entry[], pins: Pins): Entry[] {
 // dialog). Native `/sessions` and session_list (<leader>l) stay untouched.
 const BASE_MODE = "base"
 const POLL_MS = 15_000
+// opencode names a session only after its first turn; until then the title is
+// a placeholder that should not become a cmux workspace name.
+const PLACEHOLDER_TITLE = /^New session\b/i
 
 function shortDir(dir: string, home: string): string {
   if (!dir || dir === "/") return "other"
@@ -390,49 +393,62 @@ async function queryWaitingIds(db: any): Promise<Map<string, string>> {
   return out
 }
 
-// Presence registry: which cmux workspace is showing which session, so opening
-// a session that is already visible elsewhere focuses that workspace instead
-// of opening a duplicate here. Each panel heartbeats its own session file
-// (one file per session: concurrent panes never share a file, and renames are
-// atomic, so no locking is needed); files older than PRESENCE_TTL_MS are
-// treated as gone. Outside cmux nothing is written and nothing is read.
-const PRESENCE_TTL_MS = 45000
-function presenceDir(): string {
-  const home = process.env.HOME ?? ""
-  const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
-  return join(dataHome, "sesh", "presence")
-}
-function parsePresence(raw: string, now: number): string | undefined {
-  let parsed: { workspace?: unknown; updated?: unknown }
+// cmux bridge: which surface is running which agent session, so opening a
+// session that is live in another cmux workspace focuses that workspace
+// instead of opening a duplicate here. The truth is cmux's own resume record
+// (`checkpoint_id` per surface), not anything this panel writes — so it also
+// covers background agents and panes running an older panel. Outside cmux
+// (no CMUX_WORKSPACE_ID) no cmux call is made.
+type CmuxSurface = { ref: string; workspaceRef: string; here: boolean; checkpoint?: string }
+
+async function cmuxJson(args: string[]): Promise<any | undefined> {
   try {
-    parsed = JSON.parse(raw)
+    const { stdout } = await promisify(execFile)("cmux", args)
+    return JSON.parse(stdout)
   } catch {
     return undefined
   }
-  if (typeof parsed?.workspace !== "string" || !parsed.workspace) return undefined
-  if (typeof parsed?.updated !== "number" || now - parsed.updated > PRESENCE_TTL_MS) return undefined
-  return parsed.workspace
 }
-async function sweepPresence(): Promise<void> {
-  try {
-    const dir = presenceDir()
-    const now = Date.now()
-    const names = await readdir(dir)
-    await Promise.all(
-      names
-        .filter((name) => name.endsWith(".json"))
-        .map(async (name) => {
-          try {
-            const raw = await readFile(join(dir, name), "utf8")
-            if (!parsePresence(raw, now)) await unlink(join(dir, name))
-          } catch {
-            // ignore races with other panes
+
+async function cmuxSurfaces(): Promise<CmuxSurface[]> {
+  const tree = await cmuxJson(["tree", "--json", "--all"])
+  if (!tree) return []
+  const surfaces: CmuxSurface[] = []
+  for (const w of tree.windows ?? []) {
+    for (const ws of w.workspaces ?? []) {
+      if (typeof ws?.ref !== "string") continue
+      for (const pane of ws.panes ?? []) {
+        for (const s of pane.surfaces ?? []) {
+          if (s?.type === "terminal" && typeof s.ref === "string") {
+            surfaces.push({ ref: s.ref, workspaceRef: ws.ref, here: s.here === true })
           }
-        }),
-    )
-  } catch {
-    // missing directory or concurrent cleanup; presence is best-effort
+        }
+      }
+    }
   }
+  await Promise.all(
+    surfaces.map(async (surface) => {
+      const info = await cmuxJson(["surface", "resume", "show", "--surface", surface.ref, "--json"])
+      const checkpoint = info?.restore_record?.checkpoint_id
+      if (typeof checkpoint === "string") surface.checkpoint = checkpoint
+    }),
+  )
+  return surfaces
+}
+
+// Pure selection: the workspace to focus for a session, or undefined to open
+// locally. Prefers a live surface in a different workspace; ignores the
+// caller's own surface and workspace (focusing where you already are is a
+// no-op, so a local open is the better answer).
+function pickFocusWorkspace(surfaces: CmuxSurface[], sessionID: string): string | undefined {
+  const self = surfaces.find((surface) => surface.here)
+  for (const surface of surfaces) {
+    if (self && surface.ref === self.ref) continue
+    if (surface.checkpoint !== sessionID) continue
+    if (self && surface.workspaceRef === self.workspaceRef) continue
+    return surface.workspaceRef
+  }
+  return undefined
 }
 
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
@@ -708,6 +724,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
+  let lastSyncedTitle: string | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
     if (route.name !== "session") return undefined
@@ -743,30 +760,20 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       } catch {
         // leave the previous waiting set in place rather than flashing
       }
-      // Heartbeat this pane's session so another pane can focus it instead of
-      // opening a duplicate. cmux-only: without CMUX_WORKSPACE_ID nothing is
-      // written and opening a session always navigates locally.
+      // Keep this cmux workspace named after the session it is showing, so the
+      // sidebar and the workspace list agree. The session title is the source
+      // of truth; a placeholder title is never pushed. cmux-only.
       try {
         const workspace = process.env.CMUX_WORKSPACE_ID
         const id = currentID()
-        if (workspace && id && SESSION_ID_PATTERN.test(id)) {
-          const dir = presenceDir()
-          await mkdir(dir, { recursive: true })
-          const tmp = join(dir, `${id}.tmp`)
-          await writeFile(
-            tmp,
-            JSON.stringify({
-              workspace,
-              surface: process.env.CMUX_SURFACE_ID ?? null,
-              updated: Date.now(),
-            }),
-          )
-          await rename(tmp, join(dir, `${id}.json`))
+        const title = id ? (props.api.state.session.get(id)?.title ?? "").trim() : ""
+        if (workspace && title && !PLACEHOLDER_TITLE.test(title) && title !== lastSyncedTitle) {
+          await promisify(execFile)("cmux", ["workspace", "rename", workspace, "--title", title])
+          lastSyncedTitle = title
         }
       } catch {
-        // presence is best-effort; a failed heartbeat only disables focusing
+        // renaming is best-effort; a failure leaves the workspace name alone
       }
-      if (process.env.CMUX_WORKSPACE_ID) void sweepPresence()
     }
     void load()
     const clock = setInterval(() => void load(), POLL_MS)
@@ -845,26 +852,19 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setSectionCollapsed((value) => !value)
   }
 
-  // Open a session. If a live cmux workspace is already showing it, focus that
-  // workspace instead of opening a duplicate here. The heartbeat self-entry is
-  // ignored (it is this pane); a stale file (crashed pane) falls through to a
-  // local navigate. Only the sidebar goes through here.
+  // Open a session. If a cmux surface is already running it in another
+  // workspace, focus that workspace instead of opening a duplicate here;
+  // otherwise open it locally. `cmux` calls only run inside cmux.
   const openSession = async (entry: Entry) => {
-    const selfWorkspace = process.env.CMUX_WORKSPACE_ID
-    if (selfWorkspace) {
-      try {
-        const raw = await readFile(join(presenceDir(), `${entry.id}.json`), "utf8")
-        const workspace = parsePresence(raw, Date.now())
-        if (workspace && workspace !== selfWorkspace) {
-          try {
-            await promisify(execFile)("cmux", ["workspace", "select", workspace])
-            return
-          } catch {
-            // cmux unavailable; fall through to a local open
-          }
+    if (process.env.CMUX_WORKSPACE_ID) {
+      const target = pickFocusWorkspace(await cmuxSurfaces(), entry.id)
+      if (target) {
+        try {
+          await promisify(execFile)("cmux", ["workspace", "select", target])
+          return
+        } catch {
+          // cmux unavailable; fall through to a local open
         }
-      } catch {
-        // no presence file for this session
       }
     }
     props.api.route.navigate("session", { sessionID: entry.id })

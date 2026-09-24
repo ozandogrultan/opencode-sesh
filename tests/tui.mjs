@@ -30,7 +30,7 @@ function loadDataLayer() {
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, parsePresence }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, pickFocusWorkspace }`,
   )
   return factory(
     async () => {
@@ -49,24 +49,30 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, parsePresence } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, pickFocusWorkspace } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// Presence files drive click-to-focus in cmux: a fresh entry names the live
-// workspace, a stale one (crashed pane) is ignored, and malformed JSON never
-// throws. Absent/foreign workspaces resolve to undefined so the caller falls
-// back to a local open.
+// Click-to-focus picks the *other* workspace running a session from cmux's
+// own resume records; it never targets the caller's own workspace/surface
+// (focusing where you already are is a no-op, so a local open is better),
+// and returns undefined when nothing else is running it.
 {
-  const now = 1_000_000
-  const fresh = JSON.stringify({ workspace: "WS-1", surface: "S-1", updated: now - 1_000 })
-  assert.equal(parsePresence(fresh, now), "WS-1")
-  const stale = JSON.stringify({ workspace: "WS-2", updated: now - 60_000 })
-  assert.equal(parsePresence(stale, now), undefined)
-  assert.equal(parsePresence("not json", now), undefined)
-  assert.equal(parsePresence(JSON.stringify({ updated: now }), now), undefined)
-  assert.equal(parsePresence(JSON.stringify({ workspace: "", updated: now }), now), undefined)
+  const surfaces = [
+    { ref: "surface:1", workspaceRef: "workspace:1", here: true, checkpoint: "ses_self" },
+    { ref: "surface:2", workspaceRef: "workspace:1", here: false, checkpoint: "ses_same_ws" },
+    { ref: "surface:3", workspaceRef: "workspace:2", here: false, checkpoint: "ses_target" },
+    { ref: "surface:4", workspaceRef: "workspace:3", here: false },
+  ]
+  assert.equal(pickFocusWorkspace(surfaces, "ses_target"), "workspace:2")
+  // Same workspace as the caller resolves to undefined, not a no-op focus.
+  assert.equal(pickFocusWorkspace(surfaces, "ses_same_ws"), undefined)
+  // The caller's own surface is never targeted.
+  assert.equal(pickFocusWorkspace(surfaces, "ses_self"), undefined)
+  // No claimant at all -> open locally.
+  assert.equal(pickFocusWorkspace(surfaces, "ses_absent"), undefined)
+  assert.equal(pickFocusWorkspace([], "ses_target"), undefined)
 }
 
 // The sidebar lists every session without a row cap: all filtered entries

@@ -235,6 +235,7 @@ for path in \
   bin/sesh.sh \
   bin/sesh-list.sh \
   bin/sesh-preview.sh \
+  bin/sesh-cmux-sync.sh \
   bin/sesh-costs.sh \
   bin/sesh-delete.sh \
   bin/sesh-prune.sh \

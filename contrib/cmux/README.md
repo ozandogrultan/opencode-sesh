@@ -35,6 +35,19 @@ sesh --print --json --query "auth refactor" \
 Wrap that in a cmux `command` action (as above) or a shell function; it is
 caller-side on purpose, so sesh stays terminal-agnostic.
 
+## Keep workspace names in step
+
+The sidebar renames its workspace to the opencode session title as you work, and
+`sesh cmux-sync` does it for every workspace at once:
+
+```bash
+sesh cmux-sync --dry-run   # preview
+sesh cmux-sync             # rename to match
+```
+
+It reads cmux's own per-surface resume record, so it also names workspaces whose
+agent was started outside the sidebar.
+
 ## Needs-input triage from cmux
 
 `sesh --needs-input` prints (or `--json` emits) the sessions with unanswered
