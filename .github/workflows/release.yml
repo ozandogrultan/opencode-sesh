@@ -15,6 +15,13 @@ permissions:
   contents: write
   id-token: write
 
+# Serialize release cuts: a second dispatch waits instead of racing the first
+# into a duplicate bump/publish. The queued run then finds [Unreleased] empty
+# and no-ops (see the guard in the cut job).
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
 jobs:
   tagged:
     name: publish tagged release
@@ -90,7 +97,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Ensure there is something to release
+        # A queued duplicate dispatch starts after the first cut has promoted
+        # [Unreleased], so it lands here with nothing to announce. Treat that as
+        # a clean no-op instead of a second bump. `notes` exits non-zero when
+        # the section is missing or empty.
+        run: |
+          if bash scripts/changelog.sh notes > /dev/null 2>&1; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CHANGELOG.md [Unreleased] is empty; nothing to release."
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+        id: unreleased
       - name: Bump version, promote the changelog and tag
+        if: steps.unreleased.outputs.ok == '1'
         id: version
         run: |
           # npm only writes the version fields: the release commit has to carry
@@ -110,12 +131,15 @@ jobs:
           git tag -a "$version" -m "$version"
           echo "tag=$version" >> "$GITHUB_OUTPUT"
       - name: Push commit and tag
+        if: steps.unreleased.outputs.ok == '1'
         # Tags pushed with GITHUB_TOKEN do not re-trigger this workflow, so the
         # publish below is the only one for this release.
         run: git push --follow-tags
       - name: Publish to npm
+        if: steps.unreleased.outputs.ok == '1'
         run: npm publish --provenance --access public
       - name: Create GitHub release
+        if: steps.unreleased.outputs.ok == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
