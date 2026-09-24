@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Pin sessions with Alt-S or directories with Alt-D in both pickers. Pins live
+- Pin sessions with Option-S or directories with Option-D in both pickers. Pins live
   in a shared XDG data file, appear with a star, and sort ahead of recent
   sessions in the terminal picker, TUI picker, sidebar and home list.
 
@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session previews now use Ctrl-P rather than Space in the terminal picker,
   sidebar and home list, so typing cannot accidentally open a preview.
 - Hovering a sidebar session while keyboard navigation is active now moves the
-  selection to that row, so Alt-S/Alt-D pin the row under the pointer rather
+  selection to that row, so Option-S/Option-D pin the row under the pointer rather
   than the previously selected (often currently open) session.
 - The TUI sidebar's Sessions section now has a working show/hide control,
   separate from clicking the heading to activate keyboard navigation.
@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pin shortcuts are labeled Option-S/Option-D (the macOS key) in both pickers
+  and the docs. The terminal picker still binds fzf's `alt-s`/`alt-d`, which is
+  fzf's name for Option and unchanged.
 - The TUI picker now shows transcript search matches as indexing progresses,
   identifies transcript-only hits, and distinguishes an in-progress search from
   a completed search with no results.

@@ -261,10 +261,10 @@ exec {shlex.quote(FZF)} "$@"
     def test_pin_shortcuts_persist_without_accepting(self):
         self.start()
         pins = self.root / "home/data/sesh/pins.json"
-        self.key(b"\x1bs")  # Alt-S pins the selected session.
+        self.key(b"\x1bs")  # Option-S (fzf alt-s) pins the selected session.
         self.until(lambda: pins.exists() and "ses_beta" in json.loads(pins.read_text())["sessions"])
         self.settle(0.5)  # Let fzf finish the bound reload before the next key.
-        self.key(b"\x1bd")  # Alt-D pins its directory.
+        self.key(b"\x1bd")  # Option-D (fzf alt-d) pins its directory.
         self.until(lambda: str(self.root / "project") in json.loads(pins.read_text())["directories"])
         self.settle(0.5)
         self.assertFalse(self.actions())

@@ -827,8 +827,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           preventDefault: true,
           cmd: () => requestDelete(entry),
         },
-        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
         {
           key: "/",
           desc: "Search sessions",
@@ -883,7 +883,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "alt+s",
+        key: "option+s",
         desc: "Pin session",
         preventDefault: true,
         cmd: () => {
@@ -892,7 +892,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "alt+d",
+        key: "option+d",
         desc: "Pin directory",
         preventDefault: true,
         cmd: () => {
@@ -1025,7 +1025,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseOver={() => {
                   setHovered(row.entry.id)
                   // The keyboard layer wins over the hover layer while nav is
-                  // active. Keep its cursor on the hovered row so Alt-S/Alt-D
+                  // active. Keep its cursor on the hovered row so Option-S/Option-D
                   // cannot silently pin a different (often current) session.
                   if (navActive()) {
                     const index = itemRows().findIndex((entry) => entry.id === row.entry.id)
@@ -1071,7 +1071,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · alt+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · option+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1142,8 +1142,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           preventDefault: true,
           cmd: () => preview.open(entry),
         },
-        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
       ],
     })
   })
@@ -1561,11 +1561,11 @@ const tui: TuiPlugin = async (api) => {
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
         { key: "ctrl+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
-        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => {
+        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("sessions", entry.id)
         } },
-        { key: "alt+d", desc: "Pin directory", preventDefault: true, cmd: () => {
+        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("directories", entry.dir)
         } },
@@ -1781,7 +1781,7 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ navigate · enter open · alt+s/d pin · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
+                : "↑↓ navigate · enter open · option+s/d pin · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
             </text>
           </box>
         </box>

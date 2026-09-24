@@ -28,7 +28,7 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 
 - **Every session, everywhere.** Sessions are grouped by project directory and
   sorted by pins, then recency — across *all* your projects, not just the current one.
-- **Pin what matters.** Alt-S pins a session and Alt-D pins its directory in
+- **Pin what matters.** Option-S pins a session and Option-D pins its directory in
   either picker. Pins are shared across the terminal and opencode TUI and
   persist across restarts; pinned directories and sessions sort first.
 - **Full-text search.** Type to match against session titles *and* the text of
@@ -115,7 +115,7 @@ bash install.sh --uninstall   # from source
 | Enter | Resume the selected session in this terminal |
 | Ctrl-F       | Resume as a fork (the original is untouched) |
 | Ctrl-G | Toggle current-directory scope / all sessions |
-| Alt-S / Alt-D | Pin or unpin the selected session / directory |
+| Option-S / Option-D | Pin or unpin the selected session / directory |
 | Ctrl-P | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |
 | Ctrl-X | Delete the selected session (asks to confirm) |
@@ -153,13 +153,13 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Ctrl-X | Delete the selected session (asks to confirm) |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
-| Alt-S / Alt-D | Pin or unpin the selected session / directory |
+| Option-S / Option-D | Pin or unpin the selected session / directory |
 | Esc | Close |
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Ctrl-P to preview, Alt-S/Alt-D to pin, Ctrl-X to delete, Esc to leave). Pinned
+Ctrl-P to preview, Option-S/Option-D to pin, Ctrl-X to delete, Esc to leave). Pinned
 sessions appear ahead of recent ones in the 15-row sidebar; click **▾ hide**
 to collapse the section. Hovering a row while keyboard navigation is active
 selects it for the next shortcut. The full picker is one keystroke away.
