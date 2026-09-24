@@ -137,6 +137,18 @@ sessions are never touched; archiving is reversible, while `--delete`
 hard-deletes through `opencode session delete`. Without `--dry-run`, a TTY run
 confirms first and a non-TTY run needs `--yes`.
 
+`sesh costs [--days N] [--json]` sums assistant-message cost per project, with a
+recent window beside the lifetime total, so a day's work reads as a
+per-project record.
+
+`sesh retitle [--dry-run] [--yes]` replaces auto-generated placeholder titles
+(`New session - …`) with the start of the session's first user message. Only
+placeholder titles are touched, and the same dry-run/`--yes` gating applies.
+
+When searching, title matches outrank transcript-only matches and the current
+project rises, so the list answers "where was that thing I worked on" before it
+answers "what is newest". Pins still win outright.
+
 Because `--print` just emits the id and directory, `sesh` doubles as a scriptable
 session lookup:
 
@@ -194,6 +206,13 @@ All variables are optional.
 | `SESH_OPENCODE` | `opencode` | opencode executable (resume / delete) |
 | `SESH_CACHE_DIR` | `~/.cache/sesh` | persistent search-index cache |
 | `SESH_PINS_FILE` | `${XDG_DATA_HOME:-~/.local/share}/sesh/pins.json` | shared persistent session/directory pins |
+
+## Integrations
+
+sesh is terminal-agnostic on purpose: it has no window-management code. The
+[`contrib/cmux/`](contrib/cmux/README.md) directory shows how to drive it from
+cmux — command-palette entries, shortcuts, resuming a session in its own
+workspace, and a global "resume from anywhere" hotkey — all caller-side.
 
 ## How it works
 

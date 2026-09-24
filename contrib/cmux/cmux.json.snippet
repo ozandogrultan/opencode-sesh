@@ -1,0 +1,38 @@
+{
+  "actions": {
+    "sesh.picker": {
+      "type": "command",
+      "title": "sesh — session picker",
+      "subtitle": "Fuzzy-find and resume any opencode session",
+      "command": "sesh",
+      "target": "newTabInCurrentPane",
+      "palette": true,
+      "shortcut": "cmd+shift+s"
+    },
+    "sesh.needs": {
+      "type": "command",
+      "title": "sesh — needs input",
+      "subtitle": "Sessions waiting on you (questions, stuck runs)",
+      "command": "sesh --needs-input",
+      "target": "newTabInCurrentPane",
+      "palette": true,
+      "shortcut": "cmd+shift+i"
+    },
+    "sesh.costs": {
+      "type": "command",
+      "title": "sesh — cost digest",
+      "subtitle": "Spend per project, today and lifetime",
+      "command": "sesh costs",
+      "target": "newTabInCurrentPane",
+      "palette": true
+    }
+  },
+  "ui": {
+    "newWorkspace": {
+      "contextMenu": [
+        { "action": "sesh.picker", "title": "Resume a session" },
+        { "type": "separator" }
+      ]
+    }
+  }
+}

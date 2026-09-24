@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sesh costs [--days N] [--json]` sums assistant-message cost per project, with
+  a recent window beside the lifetime total, so a day's work reads as a
+  per-project record.
+- `sesh retitle [--dry-run] [--yes]` replaces auto-generated placeholder titles
+  (`New session - …`) with the start of the session's first user message. Only
+  placeholder titles are touched.
+- `contrib/cmux/` documents driving sesh from cmux: command-palette entries,
+  shortcuts, resuming a session in its own workspace, and a global "resume from
+  anywhere" hotkey. The glue is caller-side; sesh stays terminal-agnostic.
+
+### Changed
+
+- Search now weights results: a title match outranks a transcript-only match and
+  the current project rises while a query is active. Pins still win outright,
+  and the idle list keeps pure pin+recency ordering.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added

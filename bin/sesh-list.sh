@@ -157,7 +157,7 @@ render() {
   {
     [ -n "$notice" ] && printf '\t\tunknown\t%s%s%s\t\tnotice:action\n' "$YELLOW" "$notice" "$RESET"
     [ -n "$state" ] && [ "$state" != fresh ] && printf '\t\tunknown\t%s%s%s\t\tnotice:live-state\n' "$YELLOW" "$state" "$RESET"
-    "$JQ_BIN" -sr --argjson pins "$("${BASH_SOURCE[0]%/*}/sesh-pins.sh" read)" --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg selected "$SELECTED_ID" '
+    "$JQ_BIN" -sr --argjson pins "$("${BASH_SOURCE[0]%/*}/sesh-pins.sh" read)" --arg green "$GREEN" --arg cyan "$CYAN" --arg gray "$GRAY" --arg magenta "$MAGENTA" --arg red "$RED" --arg bold "$BOLD" --arg yellow "$YELLOW" --arg reset "$RESET" --arg query "$QUERY" --arg home "$HOME" --arg cwd "$PWD" --arg selected "$SELECTED_ID" '
       def ago($epoch):
         ((now - ($epoch | tonumber)) | floor) as $s
         | if $s < 60 then "now" elif $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
@@ -181,11 +181,19 @@ render() {
          else empty end),
         ($matched
        | group_by(.cwd)
+       # Search relevance, not just recency: a title hit outranks a
+       # transcript-only hit, and the current project rises while a query is
+       # active. Both are query-gated so the idle list keeps pure pin+recency
+       # ordering (the scope toggle, not this, is what narrows the list).
        | map({cwd: .[0].cwd, updated: (map(.updatedEpoch) | max),
               pinDirectory: (.[0].cwd as $dir | $pins.directories | index($dir) != null),
               pinSession: (any(.[]; .sessionId as $id | $pins.sessions | index($id) != null)),
-              items: (sort_by([(.sessionId as $id | $pins.sessions | index($id) != null), .updatedEpoch]) | reverse)})
-       | sort_by([.pinDirectory, .pinSession, .updated]) | reverse
+              current: (($q != "") and (.[0].cwd == $cwd)),
+              titleHit: (($q != "") and any(.[]; (.title | ascii_downcase | contains($q)))),
+              items: (sort_by([(.sessionId as $id | $pins.sessions | index($id) != null),
+                               (if $q != "" then (.title | ascii_downcase | contains($q)) else false end),
+                               .updatedEpoch]) | reverse)})
+       | sort_by([.pinDirectory, .pinSession, .current, .titleHit, .updated]) | reverse
        | .[] as $g
        | (["", "", "unknown", ($magenta + (if $g.pinDirectory then "★ " else "" end) + ($g.cwd | homepath | gsub("[\u0000-\u001f\u007f-\u009f]";" ")) + $reset), $g.cwd, ("hdr:" + $g.cwd)] | @tsv),
         ($g.items | to_entries[] | .key as $i | .value as $s

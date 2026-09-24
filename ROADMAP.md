@@ -33,27 +33,29 @@ input. Archive is reversible; `--delete` stays the explicit hard-delete path
 through the existing two-step confirm. Interactive runs confirm with a
 candidate summary; non-TTY runs require `--yes`; `--dry-run` lists only.
 
-## 3. sesh ↔ cmux bridge (planned)
+## 3. sesh ↔ cmux bridge (done)
 
-The cmux workspace layout (grouped by directory) and the session list (grouped
-by directory) describe the same projects but don't know about each other.
-A picker action to resume a session in a fresh cmux workspace
-(`opencode --session <id>` in the session's cwd) closes the loop in both
-directions.
+**Approach:** kept caller-side. sesh has no window-management code (a hard
+repo rule), so [`contrib/cmux/`](contrib/cmux/README.md) ships the cmux
+actions, shortcuts and a `--print --json` recipe that resumes a session in its
+own workspace. cmux calls sesh; sesh never calls cmux.
 
-## 4. Per-project cost digest (planned)
+## 4. Per-project cost digest (done)
 
-The statusline already tracks session and daily cost. Broken down by directory
-with a "what moved today" summary, it becomes an end-of-day handover and a
-per-project effort record.
+`sesh costs [--days N] [--json]` sums assistant-message cost per directory with
+a recent window beside the lifetime total, so a day's work reads as a
+per-project record. Message-level summing (not `session.cost`) keeps a
+half-finished day from dragging in a session's earlier history.
 
-## 5. Resume from anywhere (planned)
+## 5. Resume from anywhere (done)
 
-`sesh --print --json` already script-resolves a session id. Wiring it to a
-global hotkey or a cmux command-palette entry (fuzzy-pick a session without
-opening the picker first) removes the last context switch on the resume path.
+Covered by the same contrib recipes: `sesh --print --json` resolves a session
+non-interactively, so a cmux action, skhd binding or launcher can resume a
+specific session — or open the picker — from any context.
 
-## Smaller items (unplanned)
+## Smaller items (done)
 
-- Recency + pin + cwd-weighted ranking for transcript search hits.
-- Auto-retitling of untitled sessions (`New session - …`) so rows scan faster.
+- Search weighting: title matches outrank transcript-only matches and the
+  current project rises while a query is active; pins still win outright.
+- `sesh retitle [--dry-run] [--yes]` replaces placeholder titles
+  (`New session - …`) with the start of the first user message.

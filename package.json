@@ -26,12 +26,14 @@
   },
   "files": [
     "bin/",
+    "contrib/",
     "opencode/",
     "themes/",
     "tui/",
     "install.sh",
     "AGENTS.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "ROADMAP.md"
   ],
   "publishConfig": {
     "access": "public"

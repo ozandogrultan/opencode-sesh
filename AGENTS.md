@@ -37,10 +37,14 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 - `bin/` — flat; no subdirs. Scripts resolve siblings from their own location.
   Never hardcode install paths. `sesh-waiting.sh` owns the needs-input query
   (shared heuristic with the TUI sidebar copy, marked `NEEDS_INPUT_SQL` in
-  both); `sesh-prune.sh` archives stale sessions. Reads go through
-  `sqlite3 -readonly` (or `opencode db`); the single archive `UPDATE` in
-  `sesh-prune.sh` is the only sanctioned direct write (no archive endpoint
-  exists — deletes stay on `opencode session delete`).
+  both); `sesh-prune.sh` archives stale sessions; `sesh-costs.sh` sums
+  assistant-message cost per directory; `sesh-retitle.sh` renames placeholder
+  titles. Reads go through `sqlite3 -readonly` (or `opencode db`); the direct
+  `UPDATE`s in `sesh-prune.sh` (archive) and `sesh-retitle.sh` (title) are the
+  only sanctioned writes — neither has a CLI or API endpoint, and hard deletes
+  stay on `opencode session delete`.
+- `contrib/` — caller-side integrations (currently cmux). Nothing here may add
+  window management to sesh itself.
 - `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
 - `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
 - `scripts/changelog.sh` — release tooling: drafts `[Unreleased]` from

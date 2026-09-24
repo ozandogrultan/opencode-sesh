@@ -446,6 +446,69 @@ add_part 'ses_delold2' 'msg_do1' 'user' 'text' 'delete work two' 1600000100000
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_delold2';")" = 0 ]
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_prunepin';")" = 1 ]
 
+# 25. Cost digest groups assistant-message cost by directory and splits a
+# recent window from lifetime, so a half-finished day is not inflated by a
+# session's earlier history.
+cost_msg() { # session msg cost created
+  local data
+  data=$("$SESH_JQ" -cn --argjson cost "$3" '{role:"assistant",cost:$cost,tokens:{input:10,output:20}}')
+  sqlite3 "$SESH_DB" \
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $4, $4, '$data');"
+}
+today=$(( $(date +%s) * 1000 - 3600000 ))
+old=$(( $(date +%s) * 1000 - 30 * 86400000 ))
+cost_dir="$fixture/costdir"; mkdir -p "$cost_dir"
+add_session 'ses_costA' "$cost_dir" 'Cost A' $today $today
+cost_msg 'ses_costA' 'msg_ca1' 3 $today
+cost_msg 'ses_costA' 'msg_ca2' 5 $old
+add_session 'ses_costB' "$cost_dir" 'Cost B' $today $today
+cost_msg 'ses_costB' 'msg_cb1' 2 $today
+costs="$PACKAGE_DIR/bin/sesh-costs.sh"
+"$costs" --json > "$fixture/costs.json"
+"$SESH_JQ" -e --arg dir "$cost_dir" '
+  (map(select(.directory == $dir)) | .[0]) as $r
+  | ($r.window_cost == 5) and ($r.lifetime_cost == 10) and ($r.sessions == 2)
+' "$fixture/costs.json" > /dev/null
+"$costs" --days 0 --json | "$SESH_JQ" -e --arg dir "$cost_dir" '
+  (map(select(.directory == $dir)) | .[0].window_cost == 0)' > /dev/null
+if "$costs" --days x >/dev/null 2>&1; then echo "costs accepted a bad --days" >&2; exit 1; fi
+
+# 26. Retitle only touches placeholder titles, derives from the first user
+# message, and is dry-run/--yes gated like the other writes.
+add_session 'ses_newt' "$two" 'New session - 2026-01-01T00:00:00.000Z' 1700000000000 1700000000000
+add_part 'ses_newt' 'msg_nt0' 'user' 'text' 'Fix the widget ranking across directories' 1700000000000
+add_session 'ses_kept' "$two" 'A real title' 1700000000000 1700000000000
+add_part 'ses_kept' 'msg_kt0' 'user' 'text' 'irrelevant' 1700000000000
+retitle="$PACKAGE_DIR/bin/sesh-retitle.sh"
+"$retitle" --dry-run > "$fixture/retitle-dry.txt"
+grep -Fq 'Fix the widget ranking' "$fixture/retitle-dry.txt"
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_newt';")" = 'New session - 2026-01-01T00:00:00.000Z' ]
+if "$retitle" < /dev/null >/dev/null 2>&1; then echo "retitle without --yes was not refused" >&2; exit 1; fi
+"$retitle" --yes < /dev/null > /dev/null
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_newt';")" = 'Fix the widget ranking across directories' ]
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_kept';")" = 'A real title' ]
+
+# 27. Search weighting: a title hit outranks a transcript-only hit, and the
+# current project rises while a query is active. Pins still win outright.
+rank_dir="$fixture/rankdir"; mkdir -p "$rank_dir" "$fixture/otherdir"
+add_session 'ses_ranktitle' "$fixture/otherdir" 'penguin migration' 1700000200000 1700000200000
+add_part 'ses_ranktitle' 'msg_rt0' 'user' 'text' 'unrelated body' 1700000200000
+add_session 'ses_rankbody' "$fixture/otherdir" 'Unrelated' 1700000999999 1700000999999
+add_part 'ses_rankbody' 'msg_rb0' 'user' 'text' 'penguin appears only here' 1700000999999
+rank_state="$fixture/rank-state"
+( cd "$rank_dir"; "$list" --refresh --state-dir "$rank_state" > /dev/null )
+( cd "$rank_dir"; "$list" --state-dir "$rank_state" --query penguin > "$fixture/rank.tsv" )
+rank_order=$(awk -F'\t' '$2 != "" { print $2 }' "$fixture/rank.tsv" | tr '\n' ',')
+[ "$rank_order" = 'ses_ranktitle,ses_rankbody,' ] \
+  || { echo "title hit did not outrank transcript hit: $rank_order" >&2; exit 1; }
+# With the query cleared, recency wins again (the body session is newer).
+# Scoped to these two ids: an earlier test leaves a session pinned, and pins
+# legitimately float above recency.
+( cd "$rank_dir"; "$list" --state-dir "$rank_state" > "$fixture/rank-none.tsv" )
+rank_none=$(awk -F'\t' '$2 == "ses_rankbody" || $2 == "ses_ranktitle" { print $2 }' "$fixture/rank-none.tsv" | tr '\n' ',')
+[ "$rank_none" = 'ses_rankbody,ses_ranktitle,' ] \
+  || { echo "idle order not by recency: $rank_none" >&2; exit 1; }
+
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then
   node "$PACKAGE_DIR/tests/agent-tool.mjs"
