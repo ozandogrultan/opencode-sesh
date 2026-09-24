@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-24
+
 ### Added
 
 - `sesh costs [--days N] [--json]` sums assistant-message cost per project, with
@@ -24,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Search now weights results: a title match outranks a transcript-only match and
   the current project rises while a query is active. Pins still win outright,
   and the idle list keeps pure pin+recency ordering.
-
 ## [0.3.0] - 2026-09-24
 
 ### Added
@@ -257,7 +258,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.1.7...v0.2.0
