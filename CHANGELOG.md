@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-24
+
 ### Removed
 
 - The cmux bridge, panel and CLI. Click-to-focus, the sidebar's workspace
   renaming, and the `sesh cmux-sync` command (with `bin/sesh-cmux-sync.sh`) are
   gone: cmux already tracks each surface's session and names workspaces, so sesh
   no longer shells out to the `cmux` CLI at all.
-
 ## [0.7.2] - 2026-09-24
 
 ### Fixed
@@ -325,7 +326,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.6.0...v0.7.0
