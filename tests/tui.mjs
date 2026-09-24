@@ -30,7 +30,7 @@ function loadDataLayer() {
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarActivity }`,
   )
   return factory(
     async () => {
@@ -49,7 +49,7 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarActivity } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -101,8 +101,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /key: "space", preventDefault: true, cmd: \(\) => append\(" "\)/)
 }
 
-// An old pinned session remains visible ahead of a capped recent list, even
-// when another directory is pinned as a group.
+// Home still floats pinned sessions. Within sidebar/picker directory groups,
+// updated time wins even over an older pinned session.
 {
   const entries = [
     { id: "ses_recent", dir: "/other", updated: 300 },
@@ -112,6 +112,22 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const sorted = loadPinnedSort()(entries, { sessions: ["ses_old"], directories: ["/pinned"] })
   assert.deepEqual(sorted.map((entry) => entry.id), ["ses_old", "ses_directory", "ses_recent"])
   assert.equal(sorted[0], entries[2], "sorting must not replace session records")
+  const inDirectory = newestFirst(sorted.filter((entry) => entry.dir === "/other"))
+  assert.deepEqual(inDirectory.map((entry) => entry.id), ["ses_recent", "ses_old"])
+  assert.deepEqual(sorted.map((entry) => entry.id), ["ses_old", "ses_directory", "ses_recent"], "group sorting must not mutate the pinned list")
+}
+
+// Waiting wins over running for unanswered questions, but a live busy agent
+// supersedes a stale running-tool record. Current idle is distinct from both.
+{
+  assert.equal(sidebarActivity(true, "idle"), "active")
+  assert.equal(sidebarActivity(false, "busy"), "running")
+  assert.equal(sidebarActivity(false, "retry"), "running")
+  assert.equal(sidebarActivity(true, "busy", false, "question"), "waiting")
+  assert.equal(sidebarActivity(false, "busy", true), "waiting")
+  assert.equal(sidebarActivity(false, "busy", false, "stuck"), "running")
+  assert.equal(sidebarActivity(false, undefined, false, "stuck"), "waiting")
+  assert.equal(sidebarActivity(false), "idle")
 }
 
 function sessionsFor(count, { spread = 1_000_000 } = {}) {

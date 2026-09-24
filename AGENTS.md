@@ -139,8 +139,10 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 ## TUI panel (`tui/sesh-panel.tsx`)
 
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
-  sidebar content stays). Renders pinned sessions before the newest unarchived
-  sessions, with the current one highlighted, polled every 15 s; Ctrl-P previews
+  sidebar content stays). Pinned directories sort first, then directory groups
+  by recency; sessions within each group sort by last update regardless of pins.
+  Waiting, running, and current-idle sessions have distinct title colors and
+  text labels (in addition to row markers), polled every 15 s; Ctrl-P previews
   a row and ctrl+x deletes one (armed, then confirmed). The section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.

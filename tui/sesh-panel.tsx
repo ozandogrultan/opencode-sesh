@@ -248,6 +248,20 @@ function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
 
 type Entry = { id: string; title: string; dir: string; group: string; updated: number }
 type EntryResult = { entries: Entry[]; truncated: boolean }
+type SidebarActivity = "waiting" | "running" | "active" | "idle"
+
+function newestFirst(entries: Entry[]): Entry[] {
+  return [...entries].sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id))
+}
+
+// A question needs an answer even if the agent is busy. A stale running-tool
+// record, on the other hand, must not hide a currently busy agent.
+function sidebarActivity(current: boolean, live?: string, pending = false, reason?: string): SidebarActivity {
+  if (pending || reason === "question") return "waiting"
+  if (live === "busy" || live === "retry") return "running"
+  if (reason === "stuck") return "waiting"
+  return current ? "active" : "idle"
+}
 
 const SESSION_PAGE_LIMIT = 200
 const SESSION_MAX = 5000
@@ -707,7 +721,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 
   const filteredEntries = createMemo(() => {
     const q = query().trim().toLowerCase()
-    const ordered = pinnedFirst(entries(), props.pins())
+    const ordered = entries()
     if (!q) return ordered
     return ordered.filter(
       (entry) => entry.title.toLowerCase().includes(q) || entry.dir.toLowerCase().includes(q),
@@ -720,9 +734,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const NEEDS_INPUT_DIR = "__needs_input__"
   const waitingEntries = createMemo(() => {
     const ids = waiting()
-    return shownEntries().filter((entry) => ids.has(entry.id))
+    return newestFirst(shownEntries().filter((entry) => ids.has(entry.id)))
   })
-  const waitingReason = (id: string) => (waiting().get(id) === "question" ? "awaiting answer" : "run stuck")
+  const waitingReason = (id: string) =>
+    waiting().get(id) === "question" ? "awaiting answer" : waiting().get(id) === "stuck" ? "run stuck" : "needs input"
 
   const tree = createMemo<TreeRow[]>(() => {
     const rows: TreeRow[] = []
@@ -751,10 +766,11 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         return rank(b) - rank(a) || b.updated - a.updated
       })
     for (const group of ordered) {
+      const sessions = newestFirst(group.list)
       rows.push({ kind: "group", dir: group.dir, label: prettyDir(group.dir, home), count: group.list.length })
       if (collapsed()[group.dir]) continue
-      for (let i = 0; i < group.list.length; i++) {
-        rows.push({ kind: "item", entry: group.list[i], last: i === group.list.length - 1 })
+      for (let i = 0; i < sessions.length; i++) {
+        rows.push({ kind: "item", entry: sessions[i], last: i === sessions.length - 1 })
       }
     }
     return rows
@@ -796,21 +812,24 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     previousRows = rows
   })
 
-  const sessionStatus = (id: string): "running" | "waiting" | "idle" => {
+  const sessionStatus = (id: string): SidebarActivity => {
     try {
       const permissions = props.api.state.session.permission(id)
       const questions = props.api.state.session.question(id)
-      if ((permissions?.length ?? 0) > 0 || (questions?.length ?? 0) > 0) return "waiting"
-      const status = props.api.state.session.status(id)
-      if (status?.type === "busy" || status?.type === "retry") return "running"
+      return sidebarActivity(
+        id === currentID(),
+        props.api.state.session.status(id)?.type,
+        (permissions?.length ?? 0) > 0 || (questions?.length ?? 0) > 0,
+        waiting().get(id),
+      )
     } catch {}
-    return "idle"
+    return sidebarActivity(id === currentID(), undefined, false, waiting().get(id))
   }
 
-  const statusColor = (id: string) => {
-    const status = sessionStatus(id)
+  const statusColor = (status: SidebarActivity) => {
     if (status === "running") return theme().success
     if (status === "waiting") return theme().warning
+    if (status === "active") return theme().accent
     return theme().textMuted
   }
 
@@ -1107,8 +1126,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           horizontalScrollbarOptions={{ visible: false }}
         >
           <For each={tree()}>
-          {(row) =>
-            row.kind === "group" ? (
+          {(row) => {
+            if (row.kind === "group") return (
               <box flexDirection="row" paddingTop={1} onMouseDown={() => toggleGroup(row.dir)}>
                 <text flexGrow={1} flexShrink={1} wrapMode="none">
                   <span style={{ fg: theme().textMuted }}>{collapsed()[row.dir] ? "▸ " : "▾ "}</span>
@@ -1118,7 +1137,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   {" "}({row.count})
                 </text>
               </box>
-            ) : (
+            )
+            const activity = createMemo(() => sessionStatus(row.entry.id))
+            return (
               <box
                 flexDirection="row"
                 gap={1}
@@ -1150,24 +1171,24 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                         ? theme().error
                         : row.entry.id === currentID()
                           ? theme().accent
-                          : statusColor(row.entry.id),
+                          : statusColor(activity()),
                     }}
                   >
-                    {row.entry.id === currentID() ? "●" : isActive(row.entry.id) ? "▸" : "○"}
+                    {row.entry.id === currentID() ? "●" : activity() === "waiting" ? "!" : activity() === "running" ? "▶" : isActive(row.entry.id) ? "▸" : "○"}
                   </span>
                 </text>
                 <Highlighted
                   text={`${props.pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, SIDEBAR_TITLE_WIDTH - (props.pins().sessions.includes(row.entry.id) ? 2 : 0))}`}
                   query={query()}
-                  color={isPendingDelete(row.entry.id) ? theme().error : theme().text}
+                  color={isPendingDelete(row.entry.id) ? theme().error : activity() === "idle" ? theme().text : statusColor(activity())}
                   matchColor={theme().warning}
                 />
                 <text flexShrink={0} style={{ fg: isPendingDelete(row.entry.id) ? theme().error : theme().textMuted }}>
                   {isPendingDelete(row.entry.id) ? (
                     "ctrl+x again"
-                  ) : waiting().has(row.entry.id) ? (
+                  ) : activity() !== "idle" ? (
                     <span>
-                      {ago(row.entry.updated)} · <span style={{ fg: theme().warning }}>{waitingReason(row.entry.id)}</span>
+                      {ago(row.entry.updated)} · <span style={{ fg: statusColor(activity()) }}>{activity() === "waiting" ? waitingReason(row.entry.id) : activity()}</span>
                     </span>
                   ) : (
                     ago(row.entry.updated)
@@ -1175,7 +1196,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
               </box>
             )
-          }
+          }}
         </For>
         </scrollbox>
         <Show when={remaining() > 0}>
@@ -1468,7 +1489,7 @@ const tui: TuiPlugin = async (api) => {
         list.push(entry)
         byGroup.set(entry.group, list)
       }
-      const groups = [...byGroup.entries()].map(([name, list]) => ({ name, list }))
+      const groups = [...byGroup.entries()].map(([name, list]) => ({ name, list: newestFirst(list) }))
       const currentPins = pins()
       const rank = (group: (typeof groups)[number]) =>
         group.list.some((entry) => currentPins.directories.includes(entry.dir)) ? 2

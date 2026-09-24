@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Sidebar and picker sessions within each directory now sort by last update,
+  newest first, even when a session is pinned. Sidebar titles and labels make
+  waiting, running, and currently open idle sessions distinguishable at a glance.
+
 ## [0.7.3] - 2026-09-24
 
 ### Removed

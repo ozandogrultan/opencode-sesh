@@ -182,11 +182,14 @@ Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
 Ctrl-P to preview, Option-S/Option-D to pin, Ctrl-X to delete, Esc to leave). Pinned
-sessions appear ahead of the rest; the section lists every session and scrolls
-to fill the sidebar, so click **▾ hide** to collapse it when you need the room.
+directories rise first, while sessions within each directory are ordered by
+last update, newest first. The section lists every session and scrolls to fill
+the sidebar, so click **▾ hide** to collapse it when you need the room.
 Sessions waiting on you (unanswered agent questions, runs stuck mid-tool) pin
 themselves to a **Needs input** group above the directories, with the count in
-the heading; `sesh --needs-input` lists the same set in the terminal.
+the heading; `sesh --needs-input` lists the same set in the terminal. Row titles
+and labels mark waiting (warning), running (success), and the current idle
+session (accent); other sessions stay neutral.
 Hovering a row while keyboard navigation is active selects it for the next
 shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
 keystroke away.
