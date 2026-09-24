@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The TUI sidebar's Sessions section now has a working show/hide control,
+  separate from clicking the heading to activate keyboard navigation.
+- Transcript previews pass OpenTUI's tree-sitter client to the markdown
+  renderer, restoring themed Markdown and fenced-code highlighting.
+- Preview Markdown now uses the active theme's semantic accents for headings,
+  emphasis, code and list markers when the default Markdown colors read like
+  body text.
+
+### Changed
+
+- The TUI picker now shows transcript search matches as indexing progresses,
+  identifies transcript-only hits, and distinguishes an in-progress search from
+  a completed search with no results.
+- Session previews identify the selected session and show loading feedback
+  while it changes, instead of displaying another session's transcript.
+- The TUI picker uses `Ctrl-P` for transcript preview; Space always enters a
+  space in the search field, including at the start of a query.
+- Sidebar and home searches direct users to the full picker for transcript
+  search when no titles or directories match.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added

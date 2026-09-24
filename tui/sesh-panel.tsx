@@ -3,7 +3,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { readFile } from "node:fs/promises"
-import { RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
+import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
 
@@ -49,21 +49,24 @@ function buildMarkdownStyle(theme: ThemeColors): SyntaxStyle {
       ],
       style: { foreground: theme.error },
     },
-    { scope: ["markup.heading"], style: { foreground: theme.markdownHeading, bold: true } },
+    // Some opencode themes give Markdown roles the same foreground as body
+    // text. Use their semantic accents here so transcript structure remains
+    // legible without recoloring the surrounding TUI or ordinary prose.
+    { scope: ["markup.heading"], style: { foreground: theme.accent, bold: true } },
     {
       scope: ["markup.heading.1"],
-      style: { foreground: theme.markdownHeading, bold: true, underline: true },
+      style: { foreground: theme.primary, bold: true, underline: true },
     },
     {
       scope: ["markup.heading.2", "markup.heading.3", "markup.heading.4", "markup.heading.5", "markup.heading.6"],
-      style: { foreground: theme.markdownHeading, bold: true },
+      style: { foreground: theme.accent, bold: true },
     },
-    { scope: ["markup.bold", "markup.strong"], style: { foreground: theme.markdownStrong, bold: true } },
-    { scope: ["markup.italic"], style: { foreground: theme.markdownEmph, italic: true } },
-    { scope: ["markup.list"], style: { foreground: theme.markdownListItem } },
+    { scope: ["markup.bold", "markup.strong"], style: { foreground: theme.accent, bold: true } },
+    { scope: ["markup.italic"], style: { foreground: theme.syntaxString, italic: true } },
+    { scope: ["markup.list"], style: { foreground: theme.syntaxKeyword } },
     { scope: ["markup.quote"], style: { foreground: theme.markdownBlockQuote, italic: true } },
-    { scope: ["markup.raw", "markup.raw.block"], style: { foreground: theme.markdownCode } },
-    { scope: ["markup.raw.inline"], style: { foreground: theme.markdownCode, background: theme.background } },
+    { scope: ["markup.raw", "markup.raw.block"], style: { foreground: theme.syntaxString } },
+    { scope: ["markup.raw.inline"], style: { foreground: theme.syntaxString, background: theme.background } },
     {
       scope: ["markup.link", "markup.link.url", "string.special", "string.special.url"],
       style: { foreground: theme.markdownLink, underline: true },
@@ -269,7 +272,7 @@ function addTranscript(index: Map<string, string>, sid: string, data: string): v
 async function buildSearchIndex(
   api: TuiPluginApi,
   entries: Entry[],
-  onProgress?: (progress: IndexProgress) => void,
+  onProgress?: (progress: IndexProgress, index: Map<string, string>) => void,
 ): Promise<Map<string, string>> {
   const index = new Map<string, string>()
   for (const entry of entries) {
@@ -279,7 +282,7 @@ async function buildSearchIndex(
   const remaining = new Set(ids)
   const total = ids.length
   let indexed = 0
-  const report = (complete: boolean) => onProgress?.({ indexed, total, complete })
+  const report = (complete: boolean) => onProgress?.({ indexed, total, complete }, index)
   report(false)
 
   const db = await openTranscriptDb()
@@ -309,7 +312,7 @@ async function buildSearchIndex(
   if (remaining.size > 0) {
     await buildSearchIndexRemote(api, [...remaining], index, () => {
       indexed += 1
-      report(false)
+      if (indexed % TRANSCRIPT_BATCH === 0) report(false)
     })
   }
   report(true)
@@ -446,7 +449,9 @@ function createTranscriptPreview(api: TuiPluginApi) {
     }
     setPreviewID(entry.id)
     setPreviewText("Loading…")
-    void fetchTranscriptText(api, entry.id).then(setPreviewText)
+    void fetchTranscriptText(api, entry.id).then((text) => {
+      if (previewID() === entry.id) setPreviewText(text)
+    })
     api.ui.dialog.replace(
       () => (
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
@@ -464,7 +469,11 @@ function createTranscriptPreview(api: TuiPluginApi) {
             maxHeight={Math.max(6, Math.floor(api.renderer.height / 2))}
           >
             {getMarkdownStyle(api.theme.current) ? (
-              <markdown content={previewText()} syntaxStyle={getMarkdownStyle(api.theme.current)!} />
+              <markdown
+                content={previewText()}
+                syntaxStyle={getMarkdownStyle(api.theme.current)!}
+                treeSitterClient={getTreeSitterClient()}
+              />
             ) : (
               <text wrapMode="word">{previewText()}</text>
             )}
@@ -504,6 +513,7 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
   const [entries, setEntries] = createSignal<Entry[]>([])
+  const [sectionCollapsed, setSectionCollapsed] = createSignal(false)
   const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({})
   const [hovered, setHovered] = createSignal<string>()
   const preview = createTranscriptPreview(props.api)
@@ -579,6 +589,16 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
   const toggleGroup = (dir: string) => {
     setCollapsed((prev) => ({ ...prev, [dir]: !prev[dir] }))
+  }
+
+  const toggleSection = () => {
+    if (!sectionCollapsed()) {
+      cancelDelete()
+      setNavActive(false)
+      setSearching(false)
+      setHovered(undefined)
+    }
+    setSectionCollapsed((value) => !value)
   }
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
@@ -819,15 +839,21 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
 
   return (
     <box flexDirection="column" paddingRight={1}>
-      <box flexDirection="row" gap={1} onMouseDown={() => setNavActive((value) => !value)}>
-        <text>
+      <box flexDirection="row" justifyContent="space-between" gap={1}>
+        <text flexShrink={1} onMouseDown={() => {
+          if (!sectionCollapsed()) setNavActive((value) => !value)
+        }}>
           <b>Sessions</b>
           <span style={{ fg: theme().textMuted }}>
             {query().trim() ? ` (${filteredEntries().length}/${entries().length})` : ` (${entries().length})`}
           </span>
-          <span style={{ fg: navActive() ? theme().accent : theme().textMuted }}>{navActive() ? "  ▸ nav" : "  ▸"}</span>
+          <span style={{ fg: theme().accent }}>{navActive() ? " · nav" : ""}</span>
+        </text>
+        <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={toggleSection}>
+          {sectionCollapsed() ? "▸ show" : "▾ hide"}
         </text>
       </box>
+      <Show when={!sectionCollapsed()}>
       <Show
         when={entries().length > 0}
         fallback={
@@ -925,11 +951,15 @@ function SidebarSessions(props: { api: TuiPluginApi }) {
         <Show when={remaining() > 0}>
           <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · ctrl+o for all`}</text>
         </Show>
+        <Show when={query().trim() && filteredEntries().length === 0}>
+          <text style={{ fg: theme().textMuted }}>No title or directory matches · ctrl+o to search transcripts</text>
+        </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
             <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · space preview · ctrl+x delete · esc done</text>
           </box>
         </Show>
+      </Show>
       </Show>
     </box>
   )
@@ -1109,7 +1139,7 @@ function HomeSessions(props: { api: TuiPluginApi }) {
           )}
         </For>
         <Show when={visible().length === 0}>
-          <text style={{ fg: theme().textMuted }}>No matching sessions</text>
+          <text style={{ fg: theme().textMuted }}>No title or directory matches · ctrl+o to search transcripts</text>
         </Show>
       </Show>
     </box>
@@ -1159,9 +1189,12 @@ const tui: TuiPlugin = async (api) => {
       total: 0,
       complete: false,
     })
-    void buildSearchIndex(api, entries, setIndexProgress).then(setSearchIndex)
-    let pickerInput: { value: string; isDestroyed?: boolean } | undefined
-
+    void buildSearchIndex(api, entries, (progress, index) => {
+      setIndexProgress(progress)
+      // Publish a fresh snapshot: the indexing workers mutate their own map,
+      // while Solid needs a new reference to update search results mid-scan.
+      setSearchIndex(new Map(index))
+    })
     type DialogRow = { kind: "group"; label: string; count: number } | { kind: "item"; entry: Entry }
 
     const matchedGroups = createMemo(() => {
@@ -1273,8 +1306,8 @@ const tui: TuiPlugin = async (api) => {
         setPreviewText(cached)
         return
       }
-      // Keep the previous transcript visible while the next one loads so the
-      // preview does not blink away on every cursor move.
+      // Never show another session's transcript beneath the new selection.
+      setPreviewText("Loading…")
       previewTimer = setTimeout(() => void loadPreview(id), 120)
     })
 
@@ -1375,6 +1408,7 @@ const tui: TuiPlugin = async (api) => {
           cmd: () => setCursor(selectableEntries().length - 1),
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
+        { key: "ctrl+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
         {
           key: "ctrl+x",
           desc: "Delete session",
@@ -1425,16 +1459,6 @@ const tui: TuiPlugin = async (api) => {
       if (previewTimer) clearTimeout(previewTimer)
     }
 
-    const onSearchInput = (value: string) => {
-      if (query() === "" && value.trim() === "" && value.length > 0) {
-        if (pickerInput && !pickerInput.isDestroyed) pickerInput.value = ""
-        setQuery("")
-        togglePreview()
-        return
-      }
-      setQuery(value)
-    }
-
     api.ui.dialog.replace(
       () => (
         <box flexDirection="column" flexGrow={1} paddingBottom={1} gap={1}>
@@ -1449,7 +1473,6 @@ const tui: TuiPlugin = async (api) => {
             </box>
             <box paddingTop={1}>
               <input
-                ref={(r) => (pickerInput = r)}
                 focused
                 placeholder="Search title, directory, transcript…"
                 value={query()}
@@ -1457,7 +1480,7 @@ const tui: TuiPlugin = async (api) => {
                 focusedBackgroundColor={api.theme.current.backgroundPanel}
                 focusedTextColor={api.theme.current.text}
                 cursorColor={api.theme.current.primary}
-                onInput={onSearchInput}
+                onInput={setQuery}
                 onSubmit={() => choose()}
                 onKeyDown={(event) => {
                   if (event.name === "escape") {
@@ -1543,7 +1566,12 @@ const tui: TuiPlugin = async (api) => {
                       >
                         {pendingDelete()?.id === row.entry.id
                           ? "press y to delete"
-                          : `${prettyDir(row.entry.dir, process.env.HOME ?? "")} · ${ago(row.entry.updated)}`}
+                          : `${prettyDir(row.entry.dir, process.env.HOME ?? "")} · ${ago(row.entry.updated)}${
+                              query().trim() &&
+                              !`${row.entry.title} ${row.entry.dir}`.toLowerCase().includes(query().trim().toLowerCase())
+                                ? " · transcript match"
+                                : ""
+                            }`}
                       </text>
                     </box>
                   )
@@ -1552,7 +1580,11 @@ const tui: TuiPlugin = async (api) => {
               <Show when={selectableEntries().length === 0}>
                 <box paddingLeft={4} paddingRight={4}>
                   <text style={{ fg: api.theme.current.textMuted }}>
-                    {scope() ? `No sessions in ${scope()}` : "No sessions match this search"}
+                    {!indexProgress().complete
+                      ? "No matches yet · still searching transcripts…"
+                      : scope()
+                        ? `No matches in ${scope()} · ctrl+g for all projects`
+                        : "No sessions match · try another search"}
                   </text>
                 </box>
               </Show>
@@ -1560,20 +1592,23 @@ const tui: TuiPlugin = async (api) => {
           <Show when={showPreview()}>
             <box flexShrink={0} flexDirection="column" paddingLeft={4} paddingRight={4} height={12}>
               <text style={{ fg: api.theme.current.textMuted }} attributes={TextAttributes.BOLD}>
-                Preview
+                {previewID() ? `Preview · ${truncate(selectableEntries()[cursor()]!.title, 48)}` : "Preview"}
               </text>
               <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }}>
-                <Show
-                  when={previewText()}
-                  fallback={<text style={{ fg: api.theme.current.textMuted }}>Loading…</text>}
-                >
-                  {(text) =>
-                    getMarkdownStyle(api.theme.current) ? (
-                      <markdown content={text()} syntaxStyle={getMarkdownStyle(api.theme.current)!} />
-                    ) : (
-                      <text wrapMode="word">{text()}</text>
-                    )
-                  }
+                <Show when={previewID()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Select a session to preview</text>}>
+                  <Show when={previewText()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Loading…</text>}>
+                    {(text) =>
+                      getMarkdownStyle(api.theme.current) ? (
+                        <markdown
+                          content={text()}
+                          syntaxStyle={getMarkdownStyle(api.theme.current)!}
+                          treeSitterClient={getTreeSitterClient()}
+                        />
+                      ) : (
+                        <text wrapMode="word">{text()}</text>
+                      )
+                    }
+                  </Show>
                 </Show>
               </scrollbox>
             </box>
@@ -1586,7 +1621,7 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ navigate · enter open · ctrl+x delete · ctrl+f fork · ctrl+g project · space preview · esc close"}
+                : "↑↓ navigate · enter open · ctrl+x delete · ctrl+f fork · ctrl+g project · ctrl+p preview · esc close"}
             </text>
           </box>
         </box>

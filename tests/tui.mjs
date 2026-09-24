@@ -104,7 +104,11 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const api = makeApi(sessionsFor(200))
   const progress = []
-  const index = await buildSearchIndex(api, (await fetchEntries(api)).entries, (p) => progress.push(p))
+  const snapshots = []
+  const index = await buildSearchIndex(api, (await fetchEntries(api)).entries, (p, current) => {
+    progress.push(p)
+    snapshots.push(new Map(current))
+  })
   for (const id of ["ses_00150", "ses_00199"]) {
     assert.ok(index.has(id), `${id} must be indexed`)
     assert.match(index.get(id), new RegExp(`needle ${id}`))
@@ -112,6 +116,9 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.equal(progress.at(-1).complete, true)
   assert.equal(progress.at(-1).indexed, progress.at(-1).total)
   assert.equal(progress.at(-1).total, 200)
+  assert.ok(progress.some((p) => p.indexed > 0 && !p.complete), "publish partial transcript coverage")
+  assert.ok(snapshots.some((snapshot) => snapshot.get("ses_00000")?.includes("needle ses_00000")))
+  assert.ok(!snapshots[0].get("ses_00000")?.includes("needle"), "initial snapshot contains metadata only")
 }
 
 // Remote transcript fetches run in a bounded pool, not all at once.
