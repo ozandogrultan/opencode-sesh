@@ -188,7 +188,10 @@ Sessions waiting on you (unanswered agent questions, runs stuck mid-tool) pin
 themselves to a **Needs input** group above the directories, with the count in
 the heading; `sesh --needs-input` lists the same set in the terminal.
 Hovering a row while keyboard navigation is active selects it for the next
-shortcut. The full picker is one keystroke away.
+shortcut. Clicking (or Enter on) a session opens it here — unless a live cmux
+workspace is already showing that session, in which case the sidebar focuses
+that workspace instead of opening a duplicate. The full picker is one
+keystroke away.
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing

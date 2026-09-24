@@ -2,8 +2,10 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
-import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
@@ -388,6 +390,51 @@ async function queryWaitingIds(db: any): Promise<Map<string, string>> {
   return out
 }
 
+// Presence registry: which cmux workspace is showing which session, so opening
+// a session that is already visible elsewhere focuses that workspace instead
+// of opening a duplicate here. Each panel heartbeats its own session file
+// (one file per session: concurrent panes never share a file, and renames are
+// atomic, so no locking is needed); files older than PRESENCE_TTL_MS are
+// treated as gone. Outside cmux nothing is written and nothing is read.
+const PRESENCE_TTL_MS = 45000
+function presenceDir(): string {
+  const home = process.env.HOME ?? ""
+  const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
+  return join(dataHome, "sesh", "presence")
+}
+function parsePresence(raw: string, now: number): string | undefined {
+  let parsed: { workspace?: unknown; updated?: unknown }
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed?.workspace !== "string" || !parsed.workspace) return undefined
+  if (typeof parsed?.updated !== "number" || now - parsed.updated > PRESENCE_TTL_MS) return undefined
+  return parsed.workspace
+}
+async function sweepPresence(): Promise<void> {
+  try {
+    const dir = presenceDir()
+    const now = Date.now()
+    const names = await readdir(dir)
+    await Promise.all(
+      names
+        .filter((name) => name.endsWith(".json"))
+        .map(async (name) => {
+          try {
+            const raw = await readFile(join(dir, name), "utf8")
+            if (!parsePresence(raw, now)) await unlink(join(dir, name))
+          } catch {
+            // ignore races with other panes
+          }
+        }),
+    )
+  } catch {
+    // missing directory or concurrent cleanup; presence is best-effort
+  }
+}
+
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
   try {
     const part = JSON.parse(data) as { type?: unknown; text?: unknown }
@@ -696,6 +743,30 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       } catch {
         // leave the previous waiting set in place rather than flashing
       }
+      // Heartbeat this pane's session so another pane can focus it instead of
+      // opening a duplicate. cmux-only: without CMUX_WORKSPACE_ID nothing is
+      // written and opening a session always navigates locally.
+      try {
+        const workspace = process.env.CMUX_WORKSPACE_ID
+        const id = currentID()
+        if (workspace && id && SESSION_ID_PATTERN.test(id)) {
+          const dir = presenceDir()
+          await mkdir(dir, { recursive: true })
+          const tmp = join(dir, `${id}.tmp`)
+          await writeFile(
+            tmp,
+            JSON.stringify({
+              workspace,
+              surface: process.env.CMUX_SURFACE_ID ?? null,
+              updated: Date.now(),
+            }),
+          )
+          await rename(tmp, join(dir, `${id}.json`))
+        }
+      } catch {
+        // presence is best-effort; a failed heartbeat only disables focusing
+      }
+      if (process.env.CMUX_WORKSPACE_ID) void sweepPresence()
     }
     void load()
     const clock = setInterval(() => void load(), POLL_MS)
@@ -772,6 +843,31 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       setHovered(undefined)
     }
     setSectionCollapsed((value) => !value)
+  }
+
+  // Open a session. If a live cmux workspace is already showing it, focus that
+  // workspace instead of opening a duplicate here. The heartbeat self-entry is
+  // ignored (it is this pane); a stale file (crashed pane) falls through to a
+  // local navigate. Only the sidebar goes through here.
+  const openSession = async (entry: Entry) => {
+    const selfWorkspace = process.env.CMUX_WORKSPACE_ID
+    if (selfWorkspace) {
+      try {
+        const raw = await readFile(join(presenceDir(), `${entry.id}.json`), "utf8")
+        const workspace = parsePresence(raw, Date.now())
+        if (workspace && workspace !== selfWorkspace) {
+          try {
+            await promisify(execFile)("cmux", ["workspace", "select", workspace])
+            return
+          } catch {
+            // cmux unavailable; fall through to a local open
+          }
+        }
+      } catch {
+        // no presence file for this session
+      }
+    }
+    props.api.route.navigate("session", { sessionID: entry.id })
   }
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
@@ -1007,7 +1103,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         preventDefault: true,
         cmd: () => {
           const entry = itemRows()[cursor()]
-          if (entry) props.api.route.navigate("session", { sessionID: entry.id })
+          if (entry) void openSession(entry)
         },
       },
       {
@@ -1138,7 +1234,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   }
                 }}
                 onMouseOut={() => setHovered(undefined)}
-                onMouseDown={() => props.api.route.navigate("session", { sessionID: row.entry.id })}
+                onMouseDown={() => void openSession(row.entry)}
               >
                 <text flexShrink={0}>
                   <span style={{ fg: theme().textMuted }}>{row.last ? "└" : "├"}</span>

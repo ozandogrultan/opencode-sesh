@@ -147,6 +147,17 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
   **Needs input** group above the directories, with the count in the heading —
   same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`.
+- **Presence / click-to-focus (cmux-only).** Each sidebar pane heartbeats
+  `{workspace, surface, updated}` to the session file
+  `${XDG_DATA_HOME:-~/.local/share}/sesh/presence/<sessionId>.json` every poll,
+  but only when `CMUX_WORKSPACE_ID` is set; without it nothing is written and a
+  click always navigates locally. Opening a session reads that file and, when a
+  *fresh* (≤45 s), *foreign* workspace claims it, runs
+  `cmux workspace select <id>` instead of `api.route.navigate`. One file per
+  session means concurrent panes never share a file; writes are tmp+rename and
+  stale files are swept on each poll. A crashed pane falls through to a local
+  open after the TTL. The dispatch lives in the sidebar only — the picker and
+  home list always open locally.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;

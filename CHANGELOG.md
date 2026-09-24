@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Clicking (or Enter on) a sidebar session now switches to the live cmux
+  workspace already showing it, instead of opening a duplicate in the current
+  pane. Panes advertise their open session (cmux-only, one heartbeat file per
+  session, ~45 s TTL); outside cmux or with no live claimant, the click opens
+  the session locally as before.
 - `/sesh-costs` opens the per-project cost digest inside the TUI (24h beside
   lifetime, same message-level sums as `sesh costs`).
 - `/sesh-needs` opens the sessions waiting on you as an openable list (Enter

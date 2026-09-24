@@ -30,7 +30,7 @@ function loadDataLayer() {
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, parsePresence }`,
   )
   return factory(
     async () => {
@@ -49,10 +49,25 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, parsePresence } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// Presence files drive click-to-focus in cmux: a fresh entry names the live
+// workspace, a stale one (crashed pane) is ignored, and malformed JSON never
+// throws. Absent/foreign workspaces resolve to undefined so the caller falls
+// back to a local open.
+{
+  const now = 1_000_000
+  const fresh = JSON.stringify({ workspace: "WS-1", surface: "S-1", updated: now - 1_000 })
+  assert.equal(parsePresence(fresh, now), "WS-1")
+  const stale = JSON.stringify({ workspace: "WS-2", updated: now - 60_000 })
+  assert.equal(parsePresence(stale, now), undefined)
+  assert.equal(parsePresence("not json", now), undefined)
+  assert.equal(parsePresence(JSON.stringify({ updated: now }), now), undefined)
+  assert.equal(parsePresence(JSON.stringify({ workspace: "", updated: now }), now), undefined)
+}
 
 // The sidebar lists every session without a row cap: all filtered entries
 // reach the tree, and overflow scrolls inside the stretched scrollbox.
