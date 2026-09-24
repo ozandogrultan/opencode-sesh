@@ -4,8 +4,6 @@ import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
@@ -177,10 +175,6 @@ function pinnedFirst(entries: Entry[], pins: Pins): Entry[] {
 // dialog). Native `/sessions` and session_list (<leader>l) stay untouched.
 const BASE_MODE = "base"
 const POLL_MS = 15_000
-// Titles that must never become a cmux workspace name: opencode's pre-first-
-// turn placeholder, and the sentinel other plugins (opencode-ghost) use for
-// internal sessions so their scaffolding rows stay out of the UI.
-const PLACEHOLDER_TITLE = /^New session\b|^ghost-hidden$/i
 
 function shortDir(dir: string, home: string): string {
   if (!dir || dir === "/") return "other"
@@ -392,96 +386,6 @@ async function queryWaitingIds(db: any): Promise<Map<string, string>> {
     }
   }
   return out
-}
-
-// cmux bridge: which surface is running which agent session, so opening a
-// session that is live in another cmux workspace focuses that workspace
-// instead of opening a duplicate here. The truth is cmux's own resume record
-// (`checkpoint_id` per surface), not anything this panel writes — so it also
-// covers background agents and panes running an older panel. Outside cmux
-// (no CMUX_WORKSPACE_ID) no cmux call is made.
-type CmuxSurface = { ref: string; workspaceRef: string; here: boolean; checkpoint?: string }
-
-async function cmuxJson(args: string[]): Promise<any | undefined> {
-  try {
-    const { stdout } = await promisify(execFile)("cmux", args)
-    return JSON.parse(stdout)
-  } catch {
-    return undefined
-  }
-}
-
-async function cmuxSurfaces(): Promise<CmuxSurface[]> {
-  const tree = await cmuxJson(["tree", "--json", "--all"])
-  if (!tree) return []
-  const surfaces: CmuxSurface[] = []
-  for (const w of tree.windows ?? []) {
-    for (const ws of w.workspaces ?? []) {
-      if (typeof ws?.ref !== "string") continue
-      for (const pane of ws.panes ?? []) {
-        for (const s of pane.surfaces ?? []) {
-          if (s?.type === "terminal" && typeof s.ref === "string") {
-            surfaces.push({ ref: s.ref, workspaceRef: ws.ref, here: s.here === true })
-          }
-        }
-      }
-    }
-  }
-  await Promise.all(
-    surfaces.map(async (surface) => {
-      const info = await cmuxJson(["surface", "resume", "show", "--surface", surface.ref, "--json"])
-      const checkpoint = info?.restore_record?.checkpoint_id
-      if (typeof checkpoint === "string") surface.checkpoint = checkpoint
-    }),
-  )
-  return surfaces
-}
-
-// The bridge walks `cmux tree` plus one `surface resume show` per surface, and
-// switching sessions is frequent while the surface set changes rarely, so reuse
-// a recent scan for a moment instead of re-walking cmux on every open.
-let cmuxSurfacesCache: { at: number; surfaces: CmuxSurface[] } | undefined
-async function cmuxSurfacesCached(): Promise<CmuxSurface[]> {
-  const now = Date.now()
-  if (cmuxSurfacesCache && now - cmuxSurfacesCache.at < 1500) return cmuxSurfacesCache.surfaces
-  const surfaces = await cmuxSurfaces()
-  cmuxSurfacesCache = { at: now, surfaces }
-  return surfaces
-}
-
-// Pure selection: the workspace to focus for a session, or undefined to open
-// locally. Prefers a live surface in a different workspace; ignores the
-// caller's own surface and workspace (focusing where you already are is a
-// no-op, so a local open is the better answer).
-function pickFocusWorkspace(surfaces: CmuxSurface[], sessionID: string): string | undefined {
-  const self = surfaces.find((surface) => surface.here)
-  for (const surface of surfaces) {
-    if (self && surface.ref === self.ref) continue
-    if (surface.checkpoint !== sessionID) continue
-    if (self && surface.workspaceRef === self.workspaceRef) continue
-    return surface.workspaceRef
-  }
-  return undefined
-}
-
-// Open a session from anywhere in the panel, cmux-aware: if another cmux
-// workspace is already running it, focus that workspace instead of opening a
-// duplicate here; otherwise open it locally. Every switch path (sidebar, home
-// list, picker, needs-input picker) goes through here so none of them silently
-// skips the bridge. cmux calls only run inside cmux.
-async function openSessionEntry(api: TuiPluginApi, entry: Entry): Promise<void> {
-  if (process.env.CMUX_WORKSPACE_ID) {
-    const target = pickFocusWorkspace(await cmuxSurfacesCached(), entry.id)
-    if (target) {
-      try {
-        await promisify(execFile)("cmux", ["workspace", "select", target])
-        return
-      } catch {
-        // cmux unavailable; fall through to a local open
-      }
-    }
-  }
-  api.route.navigate("session", { sessionID: entry.id })
 }
 
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
@@ -757,7 +661,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
-  let lastSyncedTitle: string | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
     if (route.name !== "session") return undefined
@@ -792,20 +695,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         }
       } catch {
         // leave the previous waiting set in place rather than flashing
-      }
-      // Keep this cmux workspace named after the session it is showing, so the
-      // sidebar and the workspace list agree. The session title is the source
-      // of truth; a placeholder title is never pushed. cmux-only.
-      try {
-        const workspace = process.env.CMUX_WORKSPACE_ID
-        const id = currentID()
-        const title = id ? (props.api.state.session.get(id)?.title ?? "").trim() : ""
-        if (workspace && title && !PLACEHOLDER_TITLE.test(title) && title !== lastSyncedTitle) {
-          await promisify(execFile)("cmux", ["workspace", "rename", workspace, "--title", title])
-          lastSyncedTitle = title
-        }
-      } catch {
-        // renaming is best-effort; a failure leaves the workspace name alone
       }
     }
     void load()
@@ -885,9 +774,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setSectionCollapsed((value) => !value)
   }
 
-  // Sidebar rows open through the shared cmux-aware path, so they focus the
-  // workspace already running the session instead of opening a duplicate.
-  const openSession = (entry: Entry) => openSessionEntry(props.api, entry)
+  const openSession = (entry: Entry) => props.api.route.navigate("session", { sessionID: entry.id })
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
   // mouse hover resolve to the same row.
@@ -1467,7 +1354,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
               backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
               onMouseOver={() => setHovered(entry.id)}
               onMouseOut={() => setHovered(undefined)}
-              onMouseDown={() => void openSessionEntry(props.api, entry)}
+              onMouseDown={() => props.api.route.navigate("session", { sessionID: entry.id })}
             >
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 ○
@@ -1771,7 +1658,7 @@ const tui: TuiPlugin = async (api) => {
       if (!target) return
       cleanup()
       api.ui.dialog.clear()
-      void openSessionEntry(api, target)
+      api.route.navigate("session", { sessionID: target.id })
     }
 
     const disposeNav = api.keymap.registerLayer({
@@ -2172,7 +2059,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       if (!target) return
       disposeNav()
       api.ui.dialog.clear()
-      void openSessionEntry(api, target.entry)
+      api.route.navigate("session", { sessionID: target.entry.id })
     }
     const disposeNav = api.keymap.registerLayer({
       bindings: [

@@ -29,10 +29,8 @@ function loadDataLayer() {
     "readFile",
     "process",
     "setTimeout",
-    "promisify",
-    "execFile",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, pickFocusWorkspace, openSessionEntry }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH }`,
   )
   return factory(
     async () => {
@@ -40,10 +38,6 @@ function loadDataLayer() {
     },
     { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache" } },
     setTimeout,
-    (fn) => fn,
-    async () => {
-      throw new Error("cmux must not be invoked outside cmux")
-    },
   )
 }
 
@@ -55,42 +49,10 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, pickFocusWorkspace, openSessionEntry } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-// Click-to-focus picks the *other* workspace running a session from cmux's
-// own resume records; it never targets the caller's own workspace/surface
-// (focusing where you already are is a no-op, so a local open is better),
-// and returns undefined when nothing else is running it.
-{
-  const surfaces = [
-    { ref: "surface:1", workspaceRef: "workspace:1", here: true, checkpoint: "ses_self" },
-    { ref: "surface:2", workspaceRef: "workspace:1", here: false, checkpoint: "ses_same_ws" },
-    { ref: "surface:3", workspaceRef: "workspace:2", here: false, checkpoint: "ses_target" },
-    { ref: "surface:4", workspaceRef: "workspace:3", here: false },
-  ]
-  assert.equal(pickFocusWorkspace(surfaces, "ses_target"), "workspace:2")
-  // Same workspace as the caller resolves to undefined, not a no-op focus.
-  assert.equal(pickFocusWorkspace(surfaces, "ses_same_ws"), undefined)
-  // The caller's own surface is never targeted.
-  assert.equal(pickFocusWorkspace(surfaces, "ses_self"), undefined)
-  // No claimant at all -> open locally.
-  assert.equal(pickFocusWorkspace(surfaces, "ses_absent"), undefined)
-  assert.equal(pickFocusWorkspace([], "ses_target"), undefined)
-}
-
-// Outside cmux the bridge must be inert: with no CMUX_WORKSPACE_ID, opening a
-// session navigates locally and never shells out to cmux, so iTerm/Terminal.app
-// (and any other terminal) behave exactly as before. The execFile stub throws,
-// so any accidental cmux call fails the suite instead of going unnoticed.
-{
-  const navigations = []
-  const api = { route: { navigate: (...args) => navigations.push(args) } }
-  await openSessionEntry(api, { id: "ses_outside", title: "t", dir: "/tmp", group: "g", updated: 0 })
-  assert.deepEqual(navigations, [["session", { sessionID: "ses_outside" }]])
-}
 
 // The sidebar lists every session without a row cap: all filtered entries
 // reach the tree, and overflow scrolls inside the stretched scrollbox.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The cmux bridge, panel and CLI. Click-to-focus, the sidebar's workspace
+  renaming, and the `sesh cmux-sync` command (with `bin/sesh-cmux-sync.sh`) are
+  gone: cmux already tracks each surface's session and names workspaces, so sesh
+  no longer shells out to the `cmux` CLI at all.
+
 ## [0.7.2] - 2026-09-24
 
 ### Fixed

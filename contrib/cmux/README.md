@@ -37,16 +37,9 @@ caller-side on purpose, so sesh stays terminal-agnostic.
 
 ## Keep workspace names in step
 
-The sidebar renames its workspace to the opencode session title as you work, and
-`sesh cmux-sync` does it for every workspace at once:
-
-```bash
-sesh cmux-sync --dry-run   # preview
-sesh cmux-sync             # rename to match
-```
-
-It reads cmux's own per-surface resume record, so it also names workspaces whose
-agent was started outside the sidebar.
+sesh no longer renames workspaces — that's cmux's own concern (its auto-naming,
+or a title-mirroring hook on the session title). The sidebar only shows the
+session; naming stays caller-side like everything else here.
 
 ## Needs-input triage from cmux
 

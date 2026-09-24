@@ -34,9 +34,5 @@ case ${1:-} in
     shift
     exec bash "$SCRIPT_DIR/sesh-retitle.sh" "$@"
     ;;
-  cmux-sync)
-    shift
-    exec bash "$SCRIPT_DIR/sesh-cmux-sync.sh" "$@"
-    ;;
 esac
 exec "$SCRIPT_DIR/sesh.sh" "$@"

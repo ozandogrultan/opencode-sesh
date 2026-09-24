@@ -145,10 +145,6 @@ per-project record.
 (`New session - …`) with the start of the session's first user message. Only
 placeholder titles are touched, and the same dry-run/`--yes` gating applies.
 
-`sesh cmux-sync [--dry-run] [--json]` names every [cmux](https://cmux.dev)
-workspace after the opencode session its pane is running, so the sidebar and the
-workspace list agree. cmux-only; a no-op without the cmux CLI.
-
 When searching, title matches outrank transcript-only matches and the current
 project rises, so the list answers "where was that thing I worked on" before it
 answers "what is newest". Pins still win outright.
@@ -192,10 +188,8 @@ Sessions waiting on you (unanswered agent questions, runs stuck mid-tool) pin
 themselves to a **Needs input** group above the directories, with the count in
 the heading; `sesh --needs-input` lists the same set in the terminal.
 Hovering a row while keyboard navigation is active selects it for the next
-shortcut. Clicking (or Enter on) a session opens it here — unless another cmux
-workspace is already running that session, in which case the sidebar focuses
-that workspace instead of opening a duplicate (and the workspace is kept named
-after its session). The full picker is one keystroke away.
+shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
+keystroke away.
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing
