@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Confirming a session delete in the TUI picker no longer leaks `y` or `n` into
+  the search input; `Enter` and a second `Ctrl-X` commit the armed delete, and
+  session deletion is supported on the home screen.
+
 ## [0.11.0] - 2026-09-25
 
 ### Changed

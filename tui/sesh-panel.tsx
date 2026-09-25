@@ -1013,7 +1013,46 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
   let disposeNav: (() => void) | undefined
+  let disposeConfirm: (() => void) | undefined
   let insideSearchBox = false
+
+  createEffect(() => {
+    disposeConfirm?.()
+    disposeConfirm = undefined
+    if (!pendingDelete()) return
+    disposeConfirm = props.api.keymap.registerLayer({
+      mode: "base",
+      priority: 25,
+      bindings: [
+        {
+          key: "y",
+          desc: "Confirm delete",
+          preventDefault: true,
+          cmd: () => {
+            confirmArmed()
+          },
+        },
+        {
+          key: "ctrl+x",
+          desc: "Confirm delete",
+          preventDefault: true,
+          cmd: () => {
+            confirmArmed()
+          },
+        },
+        {
+          key: "enter",
+          desc: "Confirm delete",
+          preventDefault: true,
+          cmd: () => {
+            confirmArmed()
+          },
+        },
+        { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+        { key: "escape", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+      ],
+    })
+  })
 
   const onRootMouseDown = () => {
     if (insideSearchBox) {
@@ -1144,6 +1183,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         desc: "Open session",
         preventDefault: true,
         cmd: () => {
+          if (confirmArmed()) return
           const entry = itemRows()[cursor()]
           if (entry) void openSession(entry)
         },
@@ -1178,6 +1218,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     disposeHoverSpace?.()
     disposeSearch?.()
     disposeNav?.()
+    disposeConfirm?.()
     if (confirmTimer) clearTimeout(confirmTimer)
   })
 
@@ -1337,10 +1378,88 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const [hovered, setHovered] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
   const [loadFailed, setLoadFailed] = createSignal(false)
+  const [pendingDelete, setPendingDelete] = createSignal<string>()
+  const [deleting, setDeleting] = createSignal<string>()
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined
+  let disposeConfirm: (() => void) | undefined
   const preview = createTranscriptPreview(props.api)
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
   let insideSearchBox = false
+
+  const cancelDelete = () => {
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = undefined
+    disposeConfirm?.()
+    disposeConfirm = undefined
+    setPendingDelete(undefined)
+  }
+
+  const confirmArmed = (): boolean => {
+    const id = pendingDelete()
+    if (!id) return false
+    const entry = entries().find((e) => e.id === id)
+    if (!entry) cancelDelete()
+    else void deleteEntry(entry)
+    return true
+  }
+
+  const requestDelete = (entry: Entry) => {
+    if (deleting()) return
+    if (pendingDelete() === entry.id) {
+      void deleteEntry(entry)
+      return
+    }
+    setPendingDelete(entry.id)
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = setTimeout(() => setPendingDelete(undefined), 5000)
+  }
+
+  const deleteEntry = async (entry: Entry) => {
+    cancelDelete()
+    if (deleting()) return
+    setDeleting(entry.id)
+    try {
+      const result = await props.api.client.session.delete({
+        sessionID: entry.id,
+        directory: entry.dir || undefined,
+      })
+      if (result && "error" in result && result.error) throw result.error
+      const { entries: remaining } = await fetchEntries(props.api)
+      if (remaining.some((item) => item.id === entry.id)) {
+        setEntries(remaining)
+        props.api.ui.toast({ message: "Session was not deleted", variant: "error" })
+        return
+      }
+      setEntries(remaining)
+      setHovered(undefined)
+      props.api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
+      if ("params" in props.api.route.current && (props.api.route.current.params as any)?.sessionID === entry.id) {
+        props.api.route.navigate("home")
+      }
+    } catch {
+      props.api.ui.toast({ message: "Could not delete session", variant: "error" })
+    } finally {
+      setDeleting(undefined)
+    }
+  }
+
+  createEffect(() => {
+    disposeConfirm?.()
+    disposeConfirm = undefined
+    if (!pendingDelete()) return
+    disposeConfirm = props.api.keymap.registerLayer({
+      mode: "base",
+      priority: 25,
+      bindings: [
+        { key: "y", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
+        { key: "ctrl+x", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
+        { key: "enter", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
+        { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+        { key: "escape", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+      ],
+    })
+  })
 
   const onRootMouseDown = () => {
     if (insideSearchBox) {
@@ -1389,14 +1508,26 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           preventDefault: true,
           cmd: () => preview.open(entry),
         },
+        {
+          key: "ctrl+x",
+          desc: "Delete session",
+          preventDefault: true,
+          cmd: () => {
+            if (!confirmArmed()) requestDelete(entry)
+          },
+        },
         { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
         { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
       ],
     })
   })
 
-  onCleanup(() => disposeSearch?.())
-  onCleanup(() => disposeHoverSpace?.())
+  onCleanup(() => {
+    disposeSearch?.()
+    disposeHoverSpace?.()
+    disposeConfirm?.()
+    if (confirmTimer) clearTimeout(confirmTimer)
+  })
 
   onMount(() => {
     let alive = true
@@ -1497,8 +1628,10 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 color={theme().text}
                 matchColor={theme().warning}
               />
-              <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                {props.pins().directories.includes(entry.dir) ? "★ " : ""}{prettyDir(entry.dir, home)} · {ago(entry.updated)}
+              <text flexShrink={0} style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}>
+                {pendingDelete() === entry.id
+                  ? "ctrl+x again"
+                  : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
               </text>
             </box>
           )}
@@ -1789,10 +1922,20 @@ const tui: TuiPlugin = async (api) => {
     // Delete confirmation lives in its own layer, registered only while a row
     // is armed, so y/n never shadow the search box's typing.
     let disposeConfirm: (() => void) | undefined
+    let confirmTimer: ReturnType<typeof setTimeout> | undefined
     const cancelDelete = () => {
+      if (confirmTimer) clearTimeout(confirmTimer)
+      confirmTimer = undefined
       disposeConfirm?.()
       disposeConfirm = undefined
       setPendingDelete(undefined)
+    }
+
+    const confirmArmed = (): boolean => {
+      const armed = pendingDelete()
+      if (!armed) return false
+      void deleteEntry(armed)
+      return true
     }
 
     // Escape first closes the transcript overlay, then the picker. One Escape
@@ -1804,6 +1947,11 @@ const tui: TuiPlugin = async (api) => {
       if (escapeHandledAt > now) return
       if (showPreview()) {
         setShowPreview(false)
+        escapeHandledAt = now + 150
+        return
+      }
+      if (pendingDelete()) {
+        cancelDelete()
         escapeHandledAt = now + 150
         return
       }
@@ -1827,6 +1975,7 @@ const tui: TuiPlugin = async (api) => {
         }
         setAllEntries(remaining)
         api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
+        if (currentSessionID() === entry.id) api.route.navigate("home")
       } catch {
         api.ui.toast({ message: "Could not delete session", variant: "error" })
       }
@@ -1834,19 +1983,38 @@ const tui: TuiPlugin = async (api) => {
 
     const armDelete = (entry: Entry) => {
       setPendingDelete(entry)
+      if (confirmTimer) clearTimeout(confirmTimer)
+      confirmTimer = setTimeout(cancelDelete, 5000)
       disposeConfirm?.()
       disposeConfirm = api.keymap.registerLayer({
+        priority: 20,
         bindings: [
           {
             key: "y",
             desc: "Confirm delete",
             preventDefault: true,
             cmd: () => {
-              const armed = pendingDelete()
-              if (armed) void deleteEntry(armed)
+              confirmArmed()
+            },
+          },
+          {
+            key: "ctrl+x",
+            desc: "Confirm delete",
+            preventDefault: true,
+            cmd: () => {
+              confirmArmed()
+            },
+          },
+          {
+            key: "enter",
+            desc: "Confirm delete",
+            preventDefault: true,
+            cmd: () => {
+              confirmArmed()
             },
           },
           { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
+          { key: "escape", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
         ],
       })
     }
@@ -1892,7 +2060,15 @@ const tui: TuiPlugin = async (api) => {
           preventDefault: true,
           cmd: () => selectCursor(selectableEntries().length - 1),
         },
-        { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
+        {
+          key: "enter",
+          desc: "Open session",
+          preventDefault: true,
+          cmd: () => {
+            if (confirmArmed()) return
+            choose()
+          },
+        },
         { key: "option+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
         { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
@@ -1907,11 +2083,9 @@ const tui: TuiPlugin = async (api) => {
           desc: "Delete session",
           preventDefault: true,
           cmd: () => {
+            if (confirmArmed()) return
             const target = selectableEntries()[cursor()]
-            if (!target) return
-            const armed = pendingDelete()
-            if (armed && armed.id === target.id) void deleteEntry(target)
-            else armDelete(target)
+            if (target) armDelete(target)
           },
         },
         {
@@ -1946,6 +2120,7 @@ const tui: TuiPlugin = async (api) => {
 
     const cleanup = () => {
       alive = false
+      if (confirmTimer) clearTimeout(confirmTimer)
       pickerState = { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() }
       disposeNav()
       disposeConfirm?.()
@@ -1981,12 +2156,31 @@ const tui: TuiPlugin = async (api) => {
                 focusedBackgroundColor={api.theme.current.backgroundPanel}
                 focusedTextColor={api.theme.current.text}
                 cursorColor={api.theme.current.primary}
-                onInput={setQuery}
-                onSubmit={() => choose()}
+                onInput={(value) => {
+                  if (pendingDelete()) return
+                  setQuery(value)
+                }}
+                onSubmit={() => {
+                  if (confirmArmed()) return
+                  choose()
+                }}
                 onKeyDown={(event) => {
                   if (event.name === "escape") {
                     event.preventDefault()
                     handleEscape()
+                    return
+                  }
+                  if (pendingDelete()) {
+                    if (event.name === "y" || (event.ctrl && event.name === "x") || event.name === "enter" || event.name === "return") {
+                      event.preventDefault()
+                      confirmArmed()
+                      return
+                    }
+                    if (event.name === "n") {
+                      event.preventDefault()
+                      cancelDelete()
+                      return
+                    }
                   }
                 }}
               />

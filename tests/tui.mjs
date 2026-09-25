@@ -92,6 +92,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
   assert.doesNotMatch(source, /pending !== hovered\(\)/)
   assert.match(source, /const confirmArmed = /)
+  assert.match(source, /if \(pendingDelete\(\)\) return\s+setQuery\(value\)/)
 }
 
 // Slash subcommands exist as separate registrations (the command API never
