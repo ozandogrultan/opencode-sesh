@@ -41,8 +41,8 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 - **Resume in place.** Enter `exec`s `opencode --session <id>` in the session's
   own directory. Ctrl-F forks instead. Your terminal becomes the session — no
   tabs, no panes, no window management.
-- **Native TUI, too.** A recent-sessions section in the opencode sidebar plus a
-  `ctrl+o` picker, both themed by your opencode theme.
+- **Native TUI, too.** A recent-sessions section in the opencode sidebar plus an
+  `option+o` picker, both themed by your opencode theme.
 - **Fast.** The database is scanned once per refresh and cached; keystrokes only
   re-render the last snapshot, so typing never triggers a query storm.
 
@@ -87,7 +87,7 @@ sesh              # terminal picker
 
 ```text
 /sesh             # inside opencode — picker (TUI plugin)
-ctrl+o            # inside opencode — picker
+option+o          # inside opencode — picker
 ```
 
 ### Requirements
@@ -169,22 +169,27 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | `/sesh` | Open the full picker |
 | `/sesh-costs` | Per-project cost digest (24h beside lifetime) |
 | `/sesh-needs` | Sessions waiting on you (Enter opens) |
-| `ctrl+o` | Open the full picker (also in the command palette) |
+| `option+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
-| Ctrl-P | Toggle the transcript preview |
+| Option-P | Toggle the transcript preview |
 | Enter | Open the selected session |
 | Ctrl-X | Delete the selected session (asks to confirm) |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
-| Option-W / Option-P | Show only sessions needing input / pinned sessions |
+| Option-W / Option-S | Show only sessions needing input / pinned sessions |
 | Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
-| Esc | Close |
+| Esc | Close the preview first, then the picker |
+
+The picker groups sessions under collapsible directory headings (click ▾/▸).
+Mouse-wheel scrolling moves through the tree without changing the selection
+under a stationary pointer. Option-P opens a full-size transcript preview over
+the picker; use ↑/↓ to preview other sessions, then Esc to return to the list.
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Ctrl-P to preview, Ctrl-S/Ctrl-D to pin, Ctrl-X to delete, Esc to leave). Pinned
+Option-P to preview, Ctrl-S/Ctrl-D to pin, Ctrl-X to delete, Esc to leave). Pinned
 directories rise first, while sessions within each directory are ordered by
 last update, newest first. The section lists every session and scrolls to fill
 the sidebar, so click **▾ hide** to collapse it when you need the room.

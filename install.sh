@@ -298,7 +298,7 @@ fi
 "$LAUNCHER" --check || fail "post-install check failed."
 note "done"
 note "  picker:  run 'sesh' in any terminal, or '/sesh' inside opencode"
-note "  sidebar: ctrl+o opens the full picker"
+note "  sidebar: option+o opens the full picker"
 note_restart
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;

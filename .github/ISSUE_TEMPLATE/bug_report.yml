@@ -39,7 +39,7 @@ body:
       label: Which surface?
       options:
         - "Terminal picker (`sesh`)"
-        - "TUI panel / picker (`/sesh`, ctrl+o)"
+        - "TUI panel / picker (`/sesh`, option+o)"
         - "`sesh-list` agent tool"
         - "Installer (`install.sh`)"
         - Other

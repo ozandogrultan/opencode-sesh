@@ -48,6 +48,30 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
+function loadPickerWindow() {
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const start = source.indexOf("type PickerRow =")
+  const end = source.indexOf("type PinProps =", start)
+  assert.ok(start >= 0 && end > start, "could not locate picker viewport logic")
+  return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return { pickerWindow, pickerLastStart }`)()
+}
+
+// A wheel step moves a stable window through a directory tree; sticky headings,
+// group spacing and excerpts must fit the line budget without dropping rows.
+{
+  const { pickerWindow, pickerLastStart } = loadPickerWindow()
+  const a = { kind: "group", dir: "/a", label: "a", count: 3, pinned: false }
+  const b = { kind: "group", dir: "/b", label: "b", count: 1, pinned: false }
+  const item = (id, last = false) => ({ kind: "item", entry: { id }, last })
+  const rows = [a, item("a1"), item("a2"), item("a3", true), b, item("b1", true)]
+  const names = (window) => window.map((row) => row.kind === "group" ? `${row.dir}${row.continued ? "+" : ""}` : row.entry.id)
+  assert.deepEqual(names(pickerWindow(rows, 0, 5, () => false)), ["/a", "a1", "a2", "a3"])
+  assert.deepEqual(names(pickerWindow(rows, 2, 5, () => false)), ["/a+", "a2", "a3", "/b"])
+  assert.deepEqual(names(pickerWindow(rows, 2, 5, (entry) => entry.id === "a2")), ["/a+", "a2", "a3"])
+  assert.equal(pickerLastStart(rows, 5, () => false), 3)
+  assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
+}
+
 const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails } =
   loadDataLayer()
 
@@ -96,7 +120,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
   const previewKeys = [...source.matchAll(/key: "([^"]+)",\s*desc: "Preview session transcript"/g)]
   assert.equal(previewKeys.length, 3, "expected hover and sidebar navigation preview bindings")
-  assert.ok(previewKeys.every((match) => match[1] === "ctrl+p"), "Space must not open a preview")
+  assert.ok(previewKeys.every((match) => match[1] === "option+p"), "Sidebar preview uses Option-P without stealing Space")
   assert.match(source, /key: "space", preventDefault: true, cmd: \(\) => append\(" "\)/)
 }
 

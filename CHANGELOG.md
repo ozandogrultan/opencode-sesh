@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- OpenCode TUI shortcuts use Option-O for the picker and Option-P for previews;
+  Option-S filters pinned sessions, and the Option-W hint now says "input".
+- The TUI picker groups sessions in collapsible directory trees, with the
+  directory path on a separate heading and branch markers on session rows.
+- Mouse-wheel scrolling follows OpenTUI's native per-event speed without moving
+  the selection under a stationary pointer. The transcript preview now covers
+  the entire picker, with arrow keys to switch sessions while it is open.
+
 ## [0.10.0] - 2026-09-25
 
 ### Changed

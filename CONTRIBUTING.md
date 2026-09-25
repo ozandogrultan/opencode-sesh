@@ -74,7 +74,7 @@ This project follows [Conventional Commits](https://www.conventionalcommits.org/
 Examples:
 
 ```text
-feat(tui): open the picker with ctrl+o
+feat(tui): open the picker with option+o
 fix(preview): show the newest transcript messages first
 docs: document the glow fallback
 feat!: drop support for opencode < 1.18

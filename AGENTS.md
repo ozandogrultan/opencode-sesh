@@ -11,7 +11,7 @@ territory: read this first, then the specific file you need.
    any terminal. Lists **all** sessions across **all** project directories,
    full-text searchable, with transcript preview and resume/fork/delete.
 2. **`tui/sesh-panel.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
-   recent-sessions section in the sidebar plus a `ctrl+o` / `/sesh` picker.
+   recent-sessions section in the sidebar plus an `option+o` / `/sesh` picker.
 3. **`opencode/tools/sesh-list.ts`** — the `sesh-list` custom tool, so the agent
    can list sessions across every directory by querying the global `opencode
    db` store (the native `opencode session list` is project-scoped).
@@ -144,7 +144,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   by recency; sessions within each group sort by last update regardless of pins.
   Row markers alone signal session state: a running agent animates a loading
   spinner marker, the open session shows its own ●, and every other idle row
-  stays neutral (polled every 15 s); Ctrl-P previews
+  stays neutral (polled every 15 s); Option-P previews
   a row and ctrl+x deletes one (armed, then confirmed). The section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
@@ -153,7 +153,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
-  `api.route.navigate("session", …)`. `ctrl+o` and the command palette open it;
+  `api.route.navigate("session", …)`. `option+o` and the command palette open it;
   Ctrl-X arms and then confirms a delete through `api.client.session.delete` and
   removes the row only after the server confirms; Ctrl-F forks through
   `api.client.session.fork`; Ctrl-G scopes the list to the selected session's
@@ -164,7 +164,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
   The header shows indexing progress/coverage. Visible transcript hits get
   short excerpts from the text-only index (never tool or reasoning payloads).
-  Project, needs-input (Option-W), and pinned-session (Option-P) filters compose
+  Project, needs-input (Option-W), and pinned-session (Option-S) filters compose
   with the query; the picker remembers query/scope/filters until plugin restart.
   `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
   question or running-tool timestamp, lists longest-waiting first, and `n`
@@ -181,6 +181,13 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   `dialog.replace(...)`; `replace` resets the size to medium.
 - Use the `backgroundColor` **prop** on boxes, never `style={{backgroundColor}}`.
 - No percentage heights/widths in the picker; size the list window explicitly.
+- The picker windows by visible terminal lines: directory headings take two
+  lines, transcript excerpts can take a second line, and a sticky directory
+  heading keeps a scrolled group identifiable. Wheel scroll follows every
+  OpenTUI delta and changes only the viewport; real mouse movement changes
+  selection without recentering it.
+  Option-P previews in a full-size overlay over the picker; Esc first closes the
+  preview, then the picker on the next press.
 - An inline `<input>` in a slot does **not** receive keyboard focus. Sidebar and
   home search are keymap-captured queries (priority-20 base layer, letters /
   space / backspace, Esc exits); click the box to activate, click elsewhere to

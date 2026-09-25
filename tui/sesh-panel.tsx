@@ -167,8 +167,8 @@ function pinnedFirst(entries: Entry[], pins: Pins): Entry[] {
 // 1. Sidebar (always visible): a compact recent-sessions section appended to
 //    the native sidebar via the `sidebar_content` slot. Native session_list
 //    (<leader>l) is left untouched; this complements it with a cross-project
-//    view. Rows are display-only; ctrl+o opens the full picker.
-// 2. Picker (ctrl+o, `/sesh`, command palette): an xlarge grouped picker over
+//    view. Rows are display-only; option+o opens the full picker.
+// 2. Picker (option+o, `/sesh`, command palette): an xlarge grouped picker over
 //    every session across all project directories, newest first.
 //
 // `/sesh` is registered by this plugin (a markdown command cannot open the
@@ -214,7 +214,7 @@ const HOME_TITLE_WIDTH = 30
 
 // The sidebar lists every session (newest first, pins ahead) and fills
 // whatever vertical space it gets: overflow scrolls inside the stretched
-// scrollbox. The picker (ctrl+o) remains the place for transcript search.
+// scrollbox. The picker (option+o) remains the place for transcript search.
 
 // Uppercase is included deliberately: a search box that silently drops shifted
 // letters cannot be used for acronyms or paths like README.
@@ -729,6 +729,44 @@ type TreeRow =
   | { kind: "group"; dir: string; label: string; count: number }
   | { kind: "item"; entry: Entry; last: boolean }
 
+type PickerRow =
+  | { kind: "group"; dir: string; label: string; count: number; pinned: boolean; continued?: boolean }
+  | { kind: "item"; entry: Entry; last: boolean }
+
+// Window by terminal lines, not session count: group spacing and transcript
+// excerpts each consume an extra line. Carry the directory heading forward
+// when a long group starts above the viewport.
+function pickerWindow(rows: PickerRow[], start: number, height: number, excerpt: (entry: Entry) => boolean): PickerRow[] {
+  if (!rows.length) return []
+  const first = Math.max(0, Math.min(start, rows.length - 1))
+  const shown: PickerRow[] = []
+  let remaining = height
+  if (rows[first].kind === "item") {
+    for (let i = first - 1; i >= 0; i--) {
+      const row = rows[i]
+      if (row.kind !== "group") continue
+      shown.push({ ...row, continued: true })
+      remaining--
+      break
+    }
+  }
+  for (let i = first; i < rows.length; i++) {
+    const row = rows[i]
+    const lines = row.kind === "group" ? 2 : excerpt(row.entry) ? 2 : 1
+    if (lines > remaining && shown.length) break
+    shown.push(row)
+    remaining -= lines
+  }
+  return shown
+}
+
+function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Entry) => boolean): number {
+  if (!rows.length) return 0
+  let start = rows.length - 1
+  while (start > 0 && pickerWindow(rows, start - 1, height, excerpt).at(-1) === rows.at(-1)) start--
+  return start
+}
+
 type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; refreshPins: () => void }
 
 function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
@@ -1021,7 +1059,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "ctrl+p",
+          key: "option+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => openSidebarPreview(entry),
@@ -1065,7 +1103,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         cmd: () => setCursor(Math.max(0, itemRows().length - 1)),
       },
       {
-        key: "ctrl+p",
+        key: "option+p",
         desc: "Preview session transcript",
         preventDefault: true,
         cmd: () => {
@@ -1167,7 +1205,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         when={entries().length > 0}
         fallback={
           <text style={{ fg: theme().textMuted }}>
-            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · ctrl+o to browse"}
+            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · option+o to browse"}
           </text>
         }
       >
@@ -1273,14 +1311,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </For>
         </scrollbox>
         <Show when={remaining() > 0}>
-          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · ctrl+o for all`}</text>
+          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · option+o for all`}</text>
         </Show>
         <Show when={query().trim() && filteredEntries().length === 0}>
-          <text style={{ fg: theme().textMuted }}>No title or directory matches · ctrl+o to search transcripts</text>
+            <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · option+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1346,7 +1384,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "ctrl+p",
+          key: "option+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => preview.open(entry),
@@ -1400,7 +1438,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           <box flexDirection="row" gap={1}>
             <text style={{ fg: theme().textMuted }}>Recent sessions</text>
             <text style={{ fg: theme().textMuted }}>
-              {loadFailed() ? "· list unavailable, will retry" : "· none yet, ctrl+o to browse"}
+              {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
             </text>
           </box>
         }
@@ -1408,7 +1446,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         <box flexDirection="row" justifyContent="space-between" gap={2}>
           <box flexDirection="row" gap={1}>
             <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-            <text style={{ fg: theme().textMuted }}>· ctrl+o for all</text>
+            <text style={{ fg: theme().textMuted }}>· option+o for all</text>
           </box>
           <box
             flexDirection="row"
@@ -1466,7 +1504,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           )}
         </For>
         <Show when={visible().length === 0}>
-          <text style={{ fg: theme().textMuted }}>No title or directory matches · ctrl+o to search transcripts</text>
+            <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
         </Show>
       </Show>
     </box>
@@ -1534,6 +1572,8 @@ const tui: TuiPlugin = async (api) => {
     const [showPreview, setShowPreview] = createSignal(false)
     const [query, setQuery] = createSignal(pickerState.query)
     const [cursor, setCursor] = createSignal(0)
+    const [viewportStart, setViewportStart] = createSignal(0)
+    const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({})
     const [scope, setScope] = createSignal<string | undefined>(
       entries.some((entry) => entry.group === pickerState.scope) ? pickerState.scope : undefined,
     )
@@ -1574,8 +1614,6 @@ const tui: TuiPlugin = async (api) => {
       // while Solid needs a new reference to update search results mid-scan.
       setSearchIndex(new Map(index))
     })
-    type DialogRow = { kind: "group"; label: string; count: number } | { kind: "item"; entry: Entry }
-
     const orderedEntries = createMemo(() => pinnedFirst(allEntries(), pins()))
     const currentProject = () => {
       const route = api.route.current
@@ -1591,21 +1629,23 @@ const tui: TuiPlugin = async (api) => {
       )
       const byGroup = new Map<string, Entry[]>()
       for (const entry of matched) {
-        const list = byGroup.get(entry.group) ?? []
+        const list = byGroup.get(entry.dir) ?? []
         list.push(entry)
-        byGroup.set(entry.group, list)
+        byGroup.set(entry.dir, list)
       }
-      const groups = [...byGroup.entries()].map(([name, list]) => ({ name, list: newestFirst(list) }))
+      const groups = [...byGroup.entries()].map(([dir, list]) => ({ dir, list: newestFirst(list) }))
       const currentPins = pins()
       const rank = (group: (typeof groups)[number]) =>
-        group.list.some((entry) => currentPins.directories.includes(entry.dir)) ? 2
+        currentPins.directories.includes(group.dir) ? 2
           : group.list.some((entry) => currentPins.sessions.includes(entry.id)) ? 1 : 0
       return groups.sort((a, b) =>
         rank(b) - rank(a) || Math.max(...b.list.map((entry) => entry.updated)) - Math.max(...a.list.map((entry) => entry.updated)),
       )
     })
 
-    const selectableEntries = createMemo(() => matchedGroups().flatMap((g) => g.list))
+    const selectableEntries = createMemo(() => matchedGroups().flatMap((g) =>
+      collapsed()[g.dir] && !query().trim() ? [] : g.list,
+    ))
 
     // Visible bounding: say how much transcript text search actually covers and
     // when the metadata walk hit its cap, instead of silently under-reporting.
@@ -1626,21 +1666,15 @@ const tui: TuiPlugin = async (api) => {
       return bits.join(" · ")
     })
 
-    let previousSelection: Entry[] = []
-    createEffect(() => {
-      const rows = selectableEntries()
-      const selected = previousSelection[cursor()]?.id
-      const position = rows.findIndex((entry) => entry.id === selected)
-      if (position >= 0 && position !== cursor()) setCursor(position)
-      else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
-      previousSelection = rows
-    })
-
-    const pickerRows = createMemo<DialogRow[]>(() => {
-      const flat: DialogRow[] = []
+    const pickerRows = createMemo<PickerRow[]>(() => {
+      const flat: PickerRow[] = []
       for (const group of matchedGroups()) {
-        flat.push({ kind: "group", label: group.name, count: group.list.length })
-        for (const entry of group.list) flat.push({ kind: "item", entry })
+        flat.push({ kind: "group", dir: group.dir, label: prettyDir(group.dir, process.env.HOME ?? ""),
+          count: group.list.length, pinned: pins().directories.includes(group.dir) })
+        if (collapsed()[group.dir] && !query().trim()) continue
+        for (let i = 0; i < group.list.length; i++) {
+          flat.push({ kind: "item", entry: group.list[i], last: i === group.list.length - 1 })
+        }
       }
       return flat
     })
@@ -1654,23 +1688,28 @@ const tui: TuiPlugin = async (api) => {
     const listHeight = () => Math.max(6, Math.floor(termHeight * 0.75) - CHROME_ROWS)
     const dialogHeight = () => listHeight() + CHROME_ROWS
     const dialogOffset = () => Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1))
-    const previewWidth = () => Math.max(40, Math.min(94, dialogWidth - 6))
-    const previewHeight = () => Math.max(8, Math.floor(termHeight / 2))
+    const hasExcerpt = (entry: Entry) => !!transcriptMatchExcerpt(searchIndex().get(entry.id), entry, query())
+    const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt))
+    const visiblePickerRows = createMemo(() => pickerWindow(
+      pickerRows(), Math.min(viewportStart(), maxViewportStart()), listHeight(), hasExcerpt,
+    ))
 
-    const visiblePickerRows = createMemo<DialogRow[]>(() => {
-      const flat = pickerRows()
-      // A transcript hit adds a second line to a row; bound by screen height,
-      // not just the number of session IDs.
-      const height = listHeight()
-      const windowSize = query().trim() ? Math.max(2, Math.floor(height / 3)) : height
-      const currentID = selectableEntries()[cursor()]?.id
-      let pos = currentID
-        ? flat.findIndex((row) => row.kind === "item" && row.entry.id === currentID)
-        : 0
-      if (pos < 0) pos = 0
-      let start = Math.max(0, pos - Math.floor(windowSize / 2))
-      start = Math.min(start, Math.max(0, flat.length - windowSize))
-      return flat.slice(start, start + windowSize)
+    let previousSelection: Entry[] = []
+    createEffect(() => {
+      const rows = selectableEntries()
+      const position = rows.findIndex((entry) => entry.id === previousSelection[cursor()]?.id)
+      if (rows !== previousSelection && (rows.length !== previousSelection.length ||
+        rows.some((entry, index) => entry.id !== previousSelection[index]?.id))) {
+        // A search/filter/collapse changed the tree: reveal the retained row or
+        // start at the first result rather than leaving a stale window open.
+        const next = position >= 0 ? position : 0
+        setCursor(next)
+        const id = rows[next]?.id
+        setViewportStart(position < 0 || next === 0 ? 0 : Math.max(0, pickerRows().findIndex(
+          (row) => row.kind === "item" && row.entry.id === id,
+        )))
+      } else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
+      previousSelection = rows
     })
 
     const previewCache = new Map<string, string>()
@@ -1721,11 +1760,30 @@ const tui: TuiPlugin = async (api) => {
 
     const togglePreview = () => setShowPreview((value) => !value)
 
-    const moveCursor = (delta: number) => {
+    const selectCursor = (index: number) => {
       const count = selectableEntries().length
       if (count === 0) return
       cancelDelete()
-      setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
+      const next = Math.max(0, Math.min(count - 1, index))
+      const id = selectableEntries()[next].id
+      const flat = pickerRows()
+      const target = flat.findIndex((row) => row.kind === "item" && row.entry.id === id)
+      let start = Math.min(viewportStart(), maxViewportStart())
+      if (target < start) start = target
+      else while (start < target && !pickerWindow(flat, start, listHeight(), hasExcerpt).some(
+        (row) => row.kind === "item" && row.entry.id === id,
+      )) start++
+      setViewportStart(Math.max(0, Math.min(start, maxViewportStart())))
+      setCursor(next)
+    }
+    const moveCursor = (delta: number) => selectCursor(cursor() + delta)
+
+    // Match OpenTUI's scrollbox: honor every wheel event's delta. The viewport
+    // stays independent of selection, so fast scrolling cannot recenter on hover.
+    const scrollPicker = (scroll?: { direction: string; delta: number }) => {
+      if (showPreview() || !scroll || (scroll.direction !== "up" && scroll.direction !== "down")) return
+      const amount = Math.trunc(scroll.delta) * (scroll.direction === "down" ? 1 : -1)
+      setViewportStart((start) => Math.max(0, Math.min(maxViewportStart(), start + amount)))
     }
 
     // Delete confirmation lives in its own layer, registered only while a row
@@ -1827,15 +1885,15 @@ const tui: TuiPlugin = async (api) => {
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
         { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => moveCursor(-10) },
         { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => moveCursor(10) },
-        { key: "home", desc: "First session", preventDefault: true, cmd: () => setCursor(0) },
+        { key: "home", desc: "First session", preventDefault: true, cmd: () => selectCursor(0) },
         {
           key: "end",
           desc: "Last session",
           preventDefault: true,
-          cmd: () => setCursor(selectableEntries().length - 1),
+          cmd: () => selectCursor(selectableEntries().length - 1),
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
-        { key: "ctrl+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
+        { key: "option+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
         { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("sessions", entry.id)
@@ -1876,7 +1934,7 @@ const tui: TuiPlugin = async (api) => {
           },
         },
         { key: "option+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
-        { key: "option+p", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
+        { key: "option+s", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
         {
           key: "escape",
           desc: "Close",
@@ -1958,41 +2016,45 @@ const tui: TuiPlugin = async (api) => {
             flexDirection="column"
             flexGrow={1}
             overflow="hidden"
-            onMouseScroll={(event: { scroll?: { direction: string } }) => {
-              const direction = event.scroll?.direction
-              if (direction === "down") moveCursor(3)
-              else if (direction === "up") moveCursor(-3)
+            onMouseScroll={(event: { scroll?: { direction: string; delta: number } }) => {
+              scrollPicker(event.scroll)
             }}
           >
             <For each={visiblePickerRows()}>
                 {(row) => {
                   if (row.kind === "group") return (
-                    <box paddingLeft={4}>
-                      <text style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
-                        {matchedGroups().find((group) => group.name === row.label)?.list.some((entry) => pins().directories.includes(entry.dir)) ? "★ " : ""}{row.label} <span style={{ fg: api.theme.current.textMuted }}>({row.count})</span>
+                    <box flexDirection="row" paddingTop={row.continued ? 0 : 1} paddingLeft={4} paddingRight={4}
+                      onMouseDown={() => setCollapsed((state) => ({ ...state, [row.dir]: !state[row.dir] }))}>
+                      <text flexGrow={1} flexShrink={1} wrapMode="none" style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
+                        {collapsed()[row.dir] && !query().trim() ? "▸ " : "▾ "}{row.pinned ? "★ " : ""}{row.label}
                       </text>
+                      <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}> ({row.count})</text>
                     </box>
                   )
                   const excerpt = createMemo(() => transcriptMatchExcerpt(searchIndex().get(row.entry.id), row.entry, query()))
                   return (
                     <box
                       flexDirection="column"
-                      paddingLeft={4}
+                      paddingLeft={6}
                       paddingRight={4}
                       backgroundColor={
                         row.entry.id === selectableEntries()[cursor()]?.id
                           ? api.theme.current.primary
                           : RGBA.fromInts(0, 0, 0, 0)
                       }
-                      onMouseOver={() => {
-                        // Hovering moves the cursor so the highlight, Ctrl-S/Ctrl-D
-                        // and Enter all resolve to the row under the pointer.
+                      onMouseMove={() => {
+                        // Repainting under a stationary pointer must not select
+                        // another row while the wheel is moving the viewport.
                         const index = selectableEntries().findIndex((entry) => entry.id === row.entry.id)
                         if (index >= 0) setCursor(index)
                       }}
                       onMouseDown={() => choose(row.entry)}
                     >
                       <box flexDirection="row" gap={1}>
+                      <text flexShrink={0} style={{ fg: row.entry.id === selectableEntries()[cursor()]?.id
+                        ? api.theme.current.selectedListItemText : api.theme.current.textMuted }}>
+                        {row.last ? "└" : "├"}
+                      </text>
                       <Show when={row.entry.id === currentSessionID()}>
                         <text
                           flexShrink={0}
@@ -2034,7 +2096,7 @@ const tui: TuiPlugin = async (api) => {
                       >
                         {pendingDelete()?.id === row.entry.id
                           ? "press y to delete"
-                          : `${prettyDir(row.entry.dir, process.env.HOME ?? "")} · ${ago(row.entry.updated)}${
+                          : `${ago(row.entry.updated)}${
                               query().trim() &&
                               !`${row.entry.title} ${row.entry.dir}`.toLowerCase().includes(query().trim().toLowerCase())
                                 ? " · transcript match"
@@ -2059,7 +2121,7 @@ const tui: TuiPlugin = async (api) => {
                   )
                 }}
               </For>
-              <Show when={selectableEntries().length === 0}>
+              <Show when={matchedGroups().length === 0}>
                 <box paddingLeft={4} paddingRight={4}>
                   <text style={{ fg: api.theme.current.textMuted }}>
                     {waitingOnly() && waitingCoverage() === "loading"
@@ -2087,7 +2149,7 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ move · enter open · ctrl+g project · option+w needs · option+p pinned · ctrl+p preview"}
+                : "↑↓ move · enter open · ctrl+g project · option+w input · option+s pinned · option+p preview"}
             </text>
             <Show when={!pendingDelete()}>
               <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
@@ -2096,27 +2158,27 @@ const tui: TuiPlugin = async (api) => {
           <Show when={showPreview()}>
             <box
               position="absolute"
-              left={Math.floor((dialogWidth - previewWidth()) / 2)}
-              top={Math.max(0, Math.floor((dialogHeight() - previewHeight()) / 2))}
-              width={previewWidth()}
-              height={previewHeight()}
+              left={0}
+              top={0}
+              width={dialogWidth}
+              height={dialogHeight()}
               flexDirection="column"
               backgroundColor={api.theme.current.backgroundElement}
-              paddingLeft={2}
-              paddingRight={2}
+              paddingLeft={4}
+              paddingRight={4}
               paddingTop={1}
               paddingBottom={1}
               gap={1}
             >
               <box flexDirection="row" justifyContent="space-between">
                 <text attributes={TextAttributes.BOLD}>
-                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, previewWidth() - 8) : "Preview"}
+                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth - 18) : "Preview"}
                 </text>
                 <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
               </box>
               <Show when={previewID()}>
                 <text style={{ fg: api.theme.current.textMuted }}>
-                  {prettyDir(selectableEntries()[cursor()]!.dir, process.env.HOME ?? "")}
+                  {prettyDir(selectableEntries()[cursor()]!.dir, process.env.HOME ?? "")} · {ago(selectableEntries()[cursor()]!.updated)}
                 </text>
               </Show>
               <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }}>
@@ -2136,6 +2198,7 @@ const tui: TuiPlugin = async (api) => {
                   </Show>
                 </Show>
               </scrollbox>
+              <text style={{ fg: api.theme.current.textMuted }}>↑↓ switch session · esc back to picker</text>
             </box>
           </Show>
         </box>
@@ -2436,7 +2499,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
   ])
 
   api.keymap.registerLayer({
-    bindings: [{ key: "ctrl+o", desc: "Pick session", preventDefault: true, cmd: () => void openPicker() }],
+    bindings: [{ key: "option+o", desc: "Pick session", preventDefault: true, cmd: () => void openPicker() }],
   })
 }
 
