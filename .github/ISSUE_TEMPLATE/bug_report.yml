@@ -38,10 +38,10 @@ body:
     attributes:
       label: Which surface?
       options:
-        - Terminal picker (`sesh`)
-        - TUI panel / picker (`/sesh`, ctrl+o)
-        - `sesh-list` agent tool
-        - Installer (`install.sh`)
+        - "Terminal picker (`sesh`)"
+        - "TUI panel / picker (`/sesh`, ctrl+o)"
+        - "`sesh-list` agent tool"
+        - "Installer (`install.sh`)"
         - Other
     validations:
       required: true

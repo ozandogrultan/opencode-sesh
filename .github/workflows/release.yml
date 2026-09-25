@@ -40,7 +40,19 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run test
       - run: bun run typecheck
+      - name: Check whether the version is already published
+        id: published
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').name")
+          if npm view "$pkg@$version" version >/dev/null 2>&1; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+            echo "::notice::$pkg@$version is already on npm; skipping publish."
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish to npm
+        if: steps.published.outputs.exists == '0'
         # npm (not bun) because trusted publishing authenticates with the OIDC
         # id-token and attaches provenance automatically (package Trusted
         # Publisher settings). No token is stored in the repo.
