@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-25
+
 ### Changed
 
 - OpenCode TUI shortcuts use Option-O for the picker and Option-P for previews;
@@ -16,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mouse-wheel scrolling follows OpenTUI's native per-event speed without moving
   the selection under a stationary pointer. The transcript preview now covers
   the entire picker, with arrow keys to switch sessions while it is open.
-
 ## [0.10.0] - 2026-09-25
 
 ### Changed
@@ -370,7 +371,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.8.0...v0.9.0
