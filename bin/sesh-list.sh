@@ -276,7 +276,7 @@ refresh() {
   historical="$scratch/historical.jsonl"; needs_extract="$scratch/needs-extract.json"
   out="$scratch/snapshot.jsonl"
 
-  db_json "SELECT id, directory, title, time_created, time_updated, COALESCE(time_archived, 0) AS archived FROM session ORDER BY time_updated DESC;" > "$sessions" 2>/dev/null || {
+  db_json "SELECT id, directory, title, time_created, time_updated, COALESCE(time_archived, 0) AS archived, COALESCE(parent_id, '') AS parent FROM session ORDER BY time_updated DESC;" > "$sessions" 2>/dev/null || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
     return 0
   }
@@ -388,7 +388,9 @@ refresh() {
     | ($hist | map({key: .sessionId, value: .}) | from_entries) as $histById
     | [$meta[]
        | select((.id | type) == "string" and (.id | test("^ses_[A-Za-z0-9]+$")))
-       | select($archived == 1 or .archived == 0)
+       # Child sessions (fork children, spawned subagents) surface only with
+       # --archived; metadata still sees them, so cache pruning stays safe.
+       | select($archived == 1 or (.archived == 0 and .parent == ""))
        | select($scope == "" or .directory == $scope)
        | . as $m | ($histById[$m.id] // {}) as $h
        | {sessionId: $m.id, malformedRecords: 0, agentId: "", agentState: "",

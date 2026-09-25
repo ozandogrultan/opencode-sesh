@@ -28,7 +28,7 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 
 - **Every session, everywhere.** Sessions are grouped by project directory and
   sorted by pins, then recency — across *all* your projects, not just the current one.
-- **Pin what matters.** Option-S pins a session and Option-D pins its directory in
+- **Pin what matters.** Ctrl-S pins a session and Ctrl-D pins its directory in
   either picker. Pins are shared across the terminal and opencode TUI and
   persist across restarts; pinned directories and sessions sort first.
 - **Full-text search.** Type to match against session titles *and* the text of
@@ -115,7 +115,7 @@ bash install.sh --uninstall   # from source
 | Enter | Resume the selected session in this terminal |
 | Ctrl-F       | Resume as a fork (the original is untouched) |
 | Ctrl-G | Toggle current-directory scope / all sessions |
-| Option-S / Option-D | Pin or unpin the selected session / directory |
+| Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
 | Ctrl-P | Toggle the transcript preview |
 | `?` (empty query) | Toggle shortcut help |
 | Ctrl-X | Delete the selected session (asks to confirm) |
@@ -176,21 +176,21 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
 | Option-W / Option-P | Show only sessions needing input / pinned sessions |
-| Option-S / Option-D | Pin or unpin the selected session / directory |
+| Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
 | Esc | Close |
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Ctrl-P to preview, Option-S/Option-D to pin, Ctrl-X to delete, Esc to leave). Pinned
+Ctrl-P to preview, Ctrl-S/Ctrl-D to pin, Ctrl-X to delete, Esc to leave). Pinned
 directories rise first, while sessions within each directory are ordered by
 last update, newest first. The section lists every session and scrolls to fill
 the sidebar, so click **▾ hide** to collapse it when you need the room.
 Sessions waiting on you (unanswered agent questions, runs stuck mid-tool) pin
 themselves to a **Needs input** group above the directories, with the count in
-the heading; `sesh --needs-input` lists the same set in the terminal. Row titles
-and labels mark waiting (warning), running (success), and the current idle
-session (accent); other sessions stay neutral.
+the heading; `sesh --needs-input` lists the same set in the terminal. Row
+markers are the only status signal: a loading spinner marks the session whose
+agent is working; the open session shows ● and every other row stays neutral.
 Hovering a row while keyboard navigation is active selects it for the next
 shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
 keystroke away.

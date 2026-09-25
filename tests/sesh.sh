@@ -509,6 +509,14 @@ rank_none=$(awk -F'\t' '$2 == "ses_rankbody" || $2 == "ses_ranktitle" { print $2
 [ "$rank_none" = 'ses_rankbody,ses_ranktitle,' ] \
   || { echo "idle order not by recency: $rank_none" >&2; exit 1; }
 
+# 28. Child sessions (fork children, spawned subagents) stay out of the
+# visible picker snapshot; --archived opts them back in.
+child_state="$fixture/child-state"
+"$list" --refresh --state-dir "$child_state" > /dev/null
+"$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_childold") | not)' "$child_state/snapshot.jsonl" >/dev/null
+"$list" --refresh --state-dir "$child_state" --archived > /dev/null
+"$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_childold") != null)' "$child_state/snapshot.jsonl" >/dev/null
+
 # Agent tool contract checks (global store, filter-before-limit) need Node.
 if command -v node >/dev/null 2>&1; then
   node "$PACKAGE_DIR/tests/agent-tool.mjs"

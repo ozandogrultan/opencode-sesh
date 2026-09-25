@@ -31,7 +31,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarActivity, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails }`,
   )
   return factory(
     readExtraction,
@@ -48,7 +48,7 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarActivity, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -116,17 +116,15 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.deepEqual(sorted.map((entry) => entry.id), ["ses_old", "ses_directory", "ses_recent"], "group sorting must not mutate the pinned list")
 }
 
-// Waiting wins over running for unanswered questions, but a live busy agent
-// supersedes a stale running-tool record. Current idle is distinct from both.
+// Sidebar markers: a working agent spins (even when it is the open session),
+// the open session keeps its own dot and every other idle row stays neutral.
 {
-  assert.equal(sidebarActivity(true, "idle"), "active")
-  assert.equal(sidebarActivity(false, "busy"), "running")
-  assert.equal(sidebarActivity(false, "retry"), "running")
-  assert.equal(sidebarActivity(true, "busy", false, "question"), "waiting")
-  assert.equal(sidebarActivity(false, "busy", true), "waiting")
-  assert.equal(sidebarActivity(false, "busy", false, "stuck"), "running")
-  assert.equal(sidebarActivity(false, undefined, false, "stuck"), "waiting")
-  assert.equal(sidebarActivity(false), "idle")
+  assert.equal(sidebarMarker(false, "busy"), "running")
+  assert.equal(sidebarMarker(false, "retry"), "running")
+  assert.equal(sidebarMarker(true, "busy"), "running")
+  assert.equal(sidebarMarker(true, "idle"), "current")
+  assert.equal(sidebarMarker(false, "idle"), "idle")
+  assert.equal(sidebarMarker(false, undefined), "idle")
 }
 
 function sessionsFor(count, { spread = 1_000_000 } = {}) {

@@ -83,8 +83,8 @@ the schema below. Keystrokes never touch the database:
   epoch, not a boolean).
 - Session and directory pins live in `${XDG_DATA_HOME:-$HOME/.local/share}/sesh/pins.json`
   (`SESH_PINS_FILE` overrides it for tests), shared by fzf and the TUI. Writes
-  use a sibling lock directory and atomic rename. Option-S toggles a selected
-  session; Option-D toggles its directory. Pinned directories sort before groups
+  use a sibling lock directory and atomic rename. Ctrl-S toggles a selected
+  session; Ctrl-D toggles its directory. Pinned directories sort before groups
   containing pinned sessions, with pinned sessions first inside each group.
 
 **Output contract** (TSV, 6 fields):
@@ -105,7 +105,8 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 ## Conventions
 
 - Default scope is **all** sessions, every directory. `--cwd`/Ctrl-G narrows.
-  Archived sessions and fork children are hidden unless `--archived`.
+  Archived sessions and child sessions (fork children, spawned subagents) are
+  hidden unless `--archived`; metadata and cache pruning still see them.
 - **Text parts only** in search/preview; reasoning and tool payloads are
   excluded (asserted in tests).
 - Validate session ids (`^ses_[A-Za-z0-9]+$`) before SQL interpolation — never
@@ -141,8 +142,9 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
   sidebar content stays). Pinned directories sort first, then directory groups
   by recency; sessions within each group sort by last update regardless of pins.
-  Waiting, running, and current-idle sessions have distinct title colors and
-  text labels (in addition to row markers), polled every 15 s; Ctrl-P previews
+  Row markers alone signal session state: a running agent animates a loading
+  spinner marker, the open session shows its own ●, and every other idle row
+  stays neutral (polled every 15 s); Ctrl-P previews
   a row and ctrl+x deletes one (armed, then confirmed). The section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.

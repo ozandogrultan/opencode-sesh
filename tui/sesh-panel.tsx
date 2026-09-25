@@ -248,19 +248,20 @@ function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
 
 type Entry = { id: string; title: string; dir: string; group: string; updated: number }
 type EntryResult = { entries: Entry[]; truncated: boolean }
-type SidebarActivity = "waiting" | "running" | "active" | "idle"
+type SidebarMarker = "current" | "running" | "idle"
+
+// Loading-spinner frames for the marker of a session whose agent is working.
+const SIDEBAR_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 function newestFirst(entries: Entry[]): Entry[] {
   return [...entries].sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id))
 }
 
-// A question needs an answer even if the agent is busy. A stale running-tool
-// record, on the other hand, must not hide a currently busy agent.
-function sidebarActivity(current: boolean, live?: string, pending = false, reason?: string): SidebarActivity {
-  if (pending || reason === "question") return "waiting"
+// A working agent is the only state the marker displays: everything that
+// finished goes back to the neutral row, with the open session marked inside.
+function sidebarMarker(current: boolean, live?: string): SidebarMarker {
   if (live === "busy" || live === "retry") return "running"
-  if (reason === "stuck") return "waiting"
-  return current ? "active" : "idle"
+  return current ? "current" : "idle"
 }
 
 const SESSION_PAGE_LIMIT = 200
@@ -808,8 +809,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     const ids = waiting()
     return newestFirst(shownEntries().filter((entry) => ids.has(entry.id)))
   })
-  const waitingReason = (id: string) =>
-    waiting().get(id) === "question" ? "awaiting answer" : waiting().get(id) === "stuck" ? "run stuck" : "needs input"
 
   const tree = createMemo<TreeRow[]>(() => {
     const rows: TreeRow[] = []
@@ -884,26 +883,34 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     previousRows = rows
   })
 
-  const sessionStatus = (id: string): SidebarActivity => {
+  // Marker only: a spinner for a working agent, the open-session dot, and the
+  // neutral row for idle sessions. Titles stay plain and no status text is
+  // rendered.
+  const markerOf = (id: string): SidebarMarker => {
+    let live: string | undefined
     try {
-      const permissions = props.api.state.session.permission(id)
-      const questions = props.api.state.session.question(id)
-      return sidebarActivity(
-        id === currentID(),
-        props.api.state.session.status(id)?.type,
-        (permissions?.length ?? 0) > 0 || (questions?.length ?? 0) > 0,
-        waiting().get(id),
-      )
+      live = props.api.state.session.status(id)?.type
     } catch {}
-    return sidebarActivity(id === currentID(), undefined, false, waiting().get(id))
+    return sidebarMarker(id === currentID(), live)
   }
 
-  const statusColor = (status: SidebarActivity) => {
-    if (status === "running") return theme().success
-    if (status === "waiting") return theme().warning
-    if (status === "active") return theme().accent
-    return theme().textMuted
-  }
+  // The spinner animates only while a listed session is actually running, so
+  // an idle list costs no timer and only running rows re-render per frame.
+  const [spinFrame, setSpinFrame] = createSignal(0)
+  let spinTimer: ReturnType<typeof setInterval> | undefined
+  createEffect(() => {
+    const spinning = itemRows().some((entry) => markerOf(entry.id) === "running")
+    if (spinning && !spinTimer) {
+      spinTimer = setInterval(() => setSpinFrame((value) => (value + 1) % SIDEBAR_SPINNER.length), 120)
+    } else if (!spinning && spinTimer) {
+      clearInterval(spinTimer)
+      spinTimer = undefined
+      setSpinFrame(0)
+    }
+  })
+  onCleanup(() => {
+    if (spinTimer) clearInterval(spinTimer)
+  })
 
   const cancelDelete = () => {
     if (confirmTimer) clearTimeout(confirmTimer)
@@ -1027,8 +1034,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             if (!confirmArmed()) requestDelete(entry)
           },
         },
-        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
         {
           key: "/",
           desc: "Search sessions",
@@ -1077,7 +1084,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "option+s",
+        key: "ctrl+s",
         desc: "Pin session",
         preventDefault: true,
         cmd: () => {
@@ -1086,7 +1093,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "option+d",
+        key: "ctrl+d",
         desc: "Pin directory",
         preventDefault: true,
         cmd: () => {
@@ -1210,7 +1217,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
               </box>
             )
-            const activity = createMemo(() => sessionStatus(row.entry.id))
+            const marker = createMemo(() => markerOf(row.entry.id))
             return (
               <box
                 flexDirection="row"
@@ -1225,7 +1232,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseOver={() => {
                   setHovered(row.entry.id)
                   // The keyboard layer wins over the hover layer while nav is
-                  // active. Keep its cursor on the hovered row so Option-S/Option-D
+                  // active. Keep its cursor on the hovered row so Ctrl-S/Ctrl-D
                   // cannot silently pin a different (often current) session.
                   if (navActive()) {
                     const index = itemRows().findIndex((entry) => entry.id === row.entry.id)
@@ -1241,30 +1248,24 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                     style={{
                       fg: isPendingDelete(row.entry.id)
                         ? theme().error
-                        : row.entry.id === currentID()
+                        : marker() === "current"
                           ? theme().accent
-                          : statusColor(activity()),
+                          : marker() === "running"
+                            ? theme().success
+                            : theme().textMuted,
                     }}
                   >
-                    {row.entry.id === currentID() ? "●" : activity() === "waiting" ? "!" : activity() === "running" ? "▶" : isActive(row.entry.id) ? "▸" : "○"}
+                    {marker() === "current" ? "●" : marker() === "running" ? SIDEBAR_SPINNER[spinFrame()] : isActive(row.entry.id) ? "▸" : "○"}
                   </span>
                 </text>
                 <Highlighted
                   text={`${props.pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, SIDEBAR_TITLE_WIDTH - (props.pins().sessions.includes(row.entry.id) ? 2 : 0))}`}
                   query={query()}
-                  color={isPendingDelete(row.entry.id) ? theme().error : activity() === "idle" ? theme().text : statusColor(activity())}
+                  color={isPendingDelete(row.entry.id) ? theme().error : theme().text}
                   matchColor={theme().warning}
                 />
                 <text flexShrink={0} style={{ fg: isPendingDelete(row.entry.id) ? theme().error : theme().textMuted }}>
-                  {isPendingDelete(row.entry.id) ? (
-                    "ctrl+x again"
-                  ) : activity() !== "idle" ? (
-                    <span>
-                      {ago(row.entry.updated)} · <span style={{ fg: statusColor(activity()) }}>{activity() === "waiting" ? waitingReason(row.entry.id) : activity()}</span>
-                    </span>
-                  ) : (
-                    ago(row.entry.updated)
-                  )}
+                  {isPendingDelete(row.entry.id) ? "ctrl+x again" : ago(row.entry.updated)}
                 </text>
               </box>
             )
@@ -1279,7 +1280,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · option+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · ctrl+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1350,8 +1351,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           preventDefault: true,
           cmd: () => preview.open(entry),
         },
-        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
       ],
     })
   })
@@ -1806,11 +1807,11 @@ const tui: TuiPlugin = async (api) => {
         },
         { key: "enter", desc: "Open session", preventDefault: true, cmd: () => choose() },
         { key: "ctrl+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
-        { key: "option+s", desc: "Pin session", preventDefault: true, cmd: () => {
+        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("sessions", entry.id)
         } },
-        { key: "option+d", desc: "Pin directory", preventDefault: true, cmd: () => {
+        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("directories", entry.dir)
         } },
@@ -2025,7 +2026,7 @@ const tui: TuiPlugin = async (api) => {
                       : waitingOnly() && waitingCoverage() === "unavailable"
                         ? "Needs-input data unavailable · turn off the filter"
                       : pinnedOnly() && pins().sessions.length === 0
-                        ? "No pinned sessions yet · option+s pins a session"
+                        ? "No pinned sessions yet · ctrl+s pins a session"
                       : !indexProgress().complete && query().trim()
                         ? "No matches yet · still searching transcripts…"
                       : scope()
@@ -2072,7 +2073,7 @@ const tui: TuiPlugin = async (api) => {
                 : "↑↓ move · enter open · ctrl+g project · option+w needs · option+p pinned · ctrl+p preview"}
             </text>
             <Show when={!pendingDelete()}>
-              <text style={{ fg: api.theme.current.textMuted }}>option+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
+              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
             </Show>
           </box>
         </box>

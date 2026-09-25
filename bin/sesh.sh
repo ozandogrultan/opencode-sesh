@@ -146,8 +146,8 @@ while :; do
     --bind="$help_bind" \
     --bind="ctrl-x:execute($delete_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
     --bind="ctrl-g:execute($toggle_cmd)+transform-header($header_cmd)+reload($cache_cmd)" \
-    --bind="alt-s:execute-silent($pin_session_cmd)+reload($cache_cmd)" \
-    --bind="alt-d:execute-silent($pin_directory_cmd)+reload($cache_cmd)" \
+    --bind="ctrl-s:execute-silent($pin_session_cmd)+reload($cache_cmd)" \
+    --bind="ctrl-d:execute-silent($pin_directory_cmd)+reload($cache_cmd)" \
     --bind="change:reload:$cache_cmd" \
     --bind="start,every(3):transform-header($header_cmd)+reload-sync:$cache_cmd")
 status=$?

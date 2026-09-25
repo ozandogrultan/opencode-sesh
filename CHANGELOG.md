@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Sidebar rows show state only in the marker column: a running agent animates
+  a loading spinner; idle rows and their titles go back to neutral.
+- Pin keybinds move from Option-S/Option-D to Ctrl-S/Ctrl-D in the terminal
+  picker, the sidebar, and the picker dialog.
+- The terminal picker hides child sessions (fork children, spawned subagents)
+  like the panel does; `--archived` still opts them back in.
+
 ## [0.9.0] - 2026-09-24
 
 ### Added
