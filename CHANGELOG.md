@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid creating `.bak` backup files on install
+
 ## [0.11.1] - 2026-09-25
 
 ### Fixed

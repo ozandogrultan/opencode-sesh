@@ -87,7 +87,7 @@ remove_tui_entry() {
   local tmp
   tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-tui.XXXXXX") || return 0
   if jq 'if (.plugin | type) == "array" then .plugin = [.plugin[] | select(. != "./plugins/sesh-panel.tsx")] else . end' "$TUI_JSON" > "$tmp" 2>/dev/null; then
-    cmp -s "$TUI_JSON" "$tmp" || { cp -p "$TUI_JSON" "$TUI_JSON.bak.$(date +%Y%m%d%H%M%S)"; mv "$tmp" "$TUI_JSON"; }
+    cmp -s "$TUI_JSON" "$tmp" || mv "$tmp" "$TUI_JSON"
     rm -f "$tmp"
   else
     rm -f "$tmp"
@@ -119,10 +119,6 @@ install_file() {
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
     note "up to date $dst"
     return 0
-  fi
-  if [ -f "$dst" ]; then
-    cp -p "$dst" "$dst.bak.$(date +%Y%m%d%H%M%S)"
-    note "backed up existing $(basename "$dst")"
   fi
   cp -p "$src" "$dst"
   note "installed $dst"
@@ -157,7 +153,6 @@ install_tui_panel() {
       note "tui.json already registers the sesh panel"
       rm -f "$tui_tmp"
     else
-      [ "$tui_created" = 1 ] || cp -p "$TUI_JSON" "$TUI_JSON.bak.$(date +%Y%m%d%H%M%S)"
       mv "$tui_tmp" "$TUI_JSON"
       note "registered ./plugins/sesh-panel.tsx in tui.json"
     fi
@@ -190,7 +185,6 @@ install_tui_panel() {
       note "plugin dependencies already present in $PACKAGE_JSON"
       rm -f "$pkg_tmp"
     else
-      [ "$pkg_created" = 1 ] || cp -p "$PACKAGE_JSON" "$PACKAGE_JSON.bak.$(date +%Y%m%d%H%M%S)"
       mv "$pkg_tmp" "$PACKAGE_JSON"
       note "declared plugin dependencies in $PACKAGE_JSON (opencode installs them on next start)"
     fi
