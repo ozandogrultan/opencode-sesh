@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The TUI session picker is taller (about three quarters of the screen) and
+  stays vertically centred; hovering a row moves the selection.
+- `ctrl+p` opens the transcript preview as a centred overlay on top of the
+  picker that follows the hovered session and closes with Esc.
+
 ## [0.9.1] - 2026-09-25
 
 ### Changed

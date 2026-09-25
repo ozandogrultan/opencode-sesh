@@ -1646,13 +1646,23 @@ const tui: TuiPlugin = async (api) => {
     })
 
     const termHeight = api.renderer.height
-    const listHeight = Math.max(6, Math.floor(termHeight / 2) - 12)
+    // The dialog host anchors content a quarter of the way down the screen and
+    // lets it size to content, so a taller picker drifts downward. Pin the
+    // content height and offset it up by the same amount to keep it centred.
+    const dialogWidth = Math.min(116, api.renderer.width - 2)
+    const CHROME_ROWS = 12
+    const listHeight = () => Math.max(6, Math.floor(termHeight * 0.75) - CHROME_ROWS)
+    const dialogHeight = () => listHeight() + CHROME_ROWS
+    const dialogOffset = () => Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1))
+    const previewWidth = () => Math.max(40, Math.min(94, dialogWidth - 6))
+    const previewHeight = () => Math.max(8, Math.floor(termHeight / 2))
 
     const visiblePickerRows = createMemo<DialogRow[]>(() => {
       const flat = pickerRows()
       // A transcript hit adds a second line to a row; bound by screen height,
       // not just the number of session IDs.
-      const windowSize = query().trim() ? Math.max(2, Math.floor(listHeight / 3)) : listHeight
+      const height = listHeight()
+      const windowSize = query().trim() ? Math.max(2, Math.floor(height / 3)) : height
       const currentID = selectableEntries()[cursor()]?.id
       let pos = currentID
         ? flat.findIndex((row) => row.kind === "item" && row.entry.id === currentID)
@@ -1727,6 +1737,22 @@ const tui: TuiPlugin = async (api) => {
       setPendingDelete(undefined)
     }
 
+    // Escape first closes the transcript overlay, then the picker. One Escape
+    // can reach both the focused search input and the key layer (sometimes in
+    // separate ticks), so ignore the duplicate that trails right behind.
+    let escapeHandledAt = 0
+    const handleEscape = () => {
+      const now = Date.now()
+      if (escapeHandledAt > now) return
+      if (showPreview()) {
+        setShowPreview(false)
+        escapeHandledAt = now + 150
+        return
+      }
+      cancelDelete()
+      close()
+    }
+
     const deleteEntry = async (entry: Entry) => {
       cancelDelete()
       try {
@@ -1793,6 +1819,9 @@ const tui: TuiPlugin = async (api) => {
     }
 
     const disposeNav = api.keymap.registerLayer({
+      // Outrank the built-in dialog layer so Escape reaches this picker before
+      // the dialog host closes the whole thing.
+      priority: 1,
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
@@ -1852,10 +1881,7 @@ const tui: TuiPlugin = async (api) => {
           key: "escape",
           desc: "Close",
           preventDefault: true,
-          cmd: () => {
-            cancelDelete()
-            close()
-          },
+          cmd: handleEscape,
         },
       ],
     })
@@ -1871,7 +1897,14 @@ const tui: TuiPlugin = async (api) => {
 
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" flexGrow={1} paddingBottom={1} gap={1}>
+        <box
+          flexDirection="column"
+          height={dialogHeight()}
+          marginTop={dialogOffset()}
+          paddingBottom={1}
+          gap={1}
+          backgroundColor={api.theme.current.backgroundPanel}
+        >
           <box paddingLeft={4} paddingRight={4}>
             <box flexDirection="row" justifyContent="space-between">
               <text attributes={TextAttributes.BOLD}>
@@ -1895,7 +1928,7 @@ const tui: TuiPlugin = async (api) => {
                 onKeyDown={(event) => {
                   if (event.name === "escape") {
                     event.preventDefault()
-                    close()
+                    handleEscape()
                   }
                 }}
               />
@@ -1923,6 +1956,8 @@ const tui: TuiPlugin = async (api) => {
           </box>
           <box
             flexDirection="column"
+            flexGrow={1}
+            overflow="hidden"
             onMouseScroll={(event: { scroll?: { direction: string } }) => {
               const direction = event.scroll?.direction
               if (direction === "down") moveCursor(3)
@@ -1932,7 +1967,7 @@ const tui: TuiPlugin = async (api) => {
             <For each={visiblePickerRows()}>
                 {(row) => {
                   if (row.kind === "group") return (
-                    <box paddingTop={1} paddingLeft={4}>
+                    <box paddingLeft={4}>
                       <text style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
                         {matchedGroups().find((group) => group.name === row.label)?.list.some((entry) => pins().directories.includes(entry.dir)) ? "★ " : ""}{row.label} <span style={{ fg: api.theme.current.textMuted }}>({row.count})</span>
                       </text>
@@ -1949,6 +1984,12 @@ const tui: TuiPlugin = async (api) => {
                           ? api.theme.current.primary
                           : RGBA.fromInts(0, 0, 0, 0)
                       }
+                      onMouseOver={() => {
+                        // Hovering moves the cursor so the highlight, Ctrl-S/Ctrl-D
+                        // and Enter all resolve to the row under the pointer.
+                        const index = selectableEntries().findIndex((entry) => entry.id === row.entry.id)
+                        if (index >= 0) setCursor(index)
+                      }}
                       onMouseDown={() => choose(row.entry)}
                     >
                       <box flexDirection="row" gap={1}>
@@ -2038,11 +2079,46 @@ const tui: TuiPlugin = async (api) => {
                 </box>
               </Show>
             </box>
+          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column">
+            <text
+              style={{
+                fg: pendingDelete() ? api.theme.current.warning : api.theme.current.textMuted,
+              }}
+            >
+              {pendingDelete()
+                ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
+                : "↑↓ move · enter open · ctrl+g project · option+w needs · option+p pinned · ctrl+p preview"}
+            </text>
+            <Show when={!pendingDelete()}>
+              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
+            </Show>
+          </box>
           <Show when={showPreview()}>
-            <box flexShrink={0} flexDirection="column" paddingLeft={4} paddingRight={4} height={12}>
-              <text style={{ fg: api.theme.current.textMuted }} attributes={TextAttributes.BOLD}>
-                {previewID() ? `Preview · ${truncate(selectableEntries()[cursor()]!.title, 48)}` : "Preview"}
-              </text>
+            <box
+              position="absolute"
+              left={Math.floor((dialogWidth - previewWidth()) / 2)}
+              top={Math.max(0, Math.floor((dialogHeight() - previewHeight()) / 2))}
+              width={previewWidth()}
+              height={previewHeight()}
+              flexDirection="column"
+              backgroundColor={api.theme.current.backgroundElement}
+              paddingLeft={2}
+              paddingRight={2}
+              paddingTop={1}
+              paddingBottom={1}
+              gap={1}
+            >
+              <box flexDirection="row" justifyContent="space-between">
+                <text attributes={TextAttributes.BOLD}>
+                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, previewWidth() - 8) : "Preview"}
+                </text>
+                <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
+              </box>
+              <Show when={previewID()}>
+                <text style={{ fg: api.theme.current.textMuted }}>
+                  {prettyDir(selectableEntries()[cursor()]!.dir, process.env.HOME ?? "")}
+                </text>
+              </Show>
               <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }}>
                 <Show when={previewID()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Select a session to preview</text>}>
                   <Show when={previewText()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Loading…</text>}>
@@ -2062,20 +2138,6 @@ const tui: TuiPlugin = async (api) => {
               </scrollbox>
             </box>
           </Show>
-          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column">
-            <text
-              style={{
-                fg: pendingDelete() ? api.theme.current.warning : api.theme.current.textMuted,
-              }}
-            >
-              {pendingDelete()
-                ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ move · enter open · ctrl+g project · option+w needs · option+p pinned · ctrl+p preview"}
-            </text>
-            <Show when={!pendingDelete()}>
-              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
-            </Show>
-          </box>
         </box>
       ),
       () => {
