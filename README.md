@@ -1,5 +1,7 @@
 # sesh
 
+[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
+
 **A session browser for [opencode](https://opencode.ai).** Search every session
 across every project, preview the transcript, and resume in place — from your
 terminal or from inside the TUI.

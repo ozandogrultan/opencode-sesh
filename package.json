@@ -1,8 +1,8 @@
 {
   "name": "opencode-sesh",
   "version": "0.9.1",
-  "type": "module",
   "description": "Browse, search, preview and resume opencode sessions from the terminal and the TUI.",
+  "type": "module",
   "license": "MIT",
   "author": "Ozan Dogrultan",
   "repository": {
@@ -44,12 +44,13 @@
   },
   "scripts": {
     "prepare": "husky",
-    "postinstall": "bash install.sh --sync-panel || true",
     "test": "bash tests/sesh.sh && bash tests/changelog.sh",
+    "test:unit": "bash tests/sesh.sh",
     "test:changelog": "bash tests/changelog.sh",
     "test:picker": "python3 tests/picker.py",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
     "lint:sh": "for script in bin/*.sh bin/sesh install.sh tests/*.sh scripts/*.sh; do bash -n \"$script\" || exit; done",
+    "postinstall": "bash install.sh --sync-panel || true",
     "prepublishOnly": "bun run test && bun run typecheck"
   },
   "devDependencies": {

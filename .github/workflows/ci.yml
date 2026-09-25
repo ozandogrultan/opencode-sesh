@@ -24,8 +24,8 @@ jobs:
       - name: CHANGELOG structure
         run: bash scripts/changelog.sh check
 
-  typecheck:
-    name: tui typecheck
+  test:
+    name: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
