@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-30
+
 ### Changed
 
 - Right-clicking a session in the TUI sidebar opens a floating menu at the click
@@ -14,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pin/Unpin and Delete (with confirmation). It stays inside the terminal, moves
   with ↑/↓/Enter, and closes on Esc or a click elsewhere. The home list and
   picker keep the direct cmux action.
-
 ## [0.12.0] - 2026-09-30
 
 ### Added
@@ -396,7 +397,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
-[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v0.10.0...v0.11.0
