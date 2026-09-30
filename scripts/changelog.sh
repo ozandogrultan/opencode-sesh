@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 # Changelog and release-notes tooling for this repository.
 #
-# Cutting a release used to be manual bookkeeping: promote the [Unreleased]
-# section, stamp it with a date, insert the new compare link, and hand-write a
-# GitHub release body. This script owns those mechanical parts, and can draft
-# the section from conventional commits when nobody wrote entries by hand.
-#
-#   changelog.sh draft [--write] [--all] [--force]
-#   changelog.sh promote <version>
+#   changelog.sh draft [--all]
+#   changelog.sh release <version>
 #   changelog.sh notes [<version>]
+#   changelog.sh last
 #   changelog.sh check
 #
 # Run from the repository root. Reads and writes ./CHANGELOG.md (override with
@@ -18,26 +14,24 @@ set -euo pipefail
 
 CHANGELOG=${CHANGELOG_FILE:-CHANGELOG.md}
 TODAY=${CHANGELOG_TODAY:-$(date +%Y-%m-%d)}
-UNRELEASED='Unreleased'
-UNRELEASED_HEADING="## [$UNRELEASED]"
 
 usage() {
   cat >&2 <<'USAGE'
-usage: changelog.sh draft [--write] [--all] [--force]
-       changelog.sh promote <version>
+usage: changelog.sh draft [--all]
+       changelog.sh release <version>
        changelog.sh notes [<version>]
+       changelog.sh last
        changelog.sh check
 
   draft     classify commits since the last release tag into Keep a Changelog
-            sections and print them for [Unreleased]. Prints only; --write
-            replaces the section (--force to overwrite entries already there,
-            --all to include docs/test/build/ci/chore commits).
-  promote   turn [Unreleased] into [<version>] - today, start a fresh
-            [Unreleased], and move the compare links.
-  notes     print the release-notes body for <version> (default: Unreleased).
+            sections and print them. Prints only (--all to include
+            docs/test/build/ci/chore commits).
+  release   draft commits since the previous tag, insert ## [<version>] - today,
+            and add the compare link.
+  notes     print the release-notes body for <version> (default: latest version).
             Exits non-zero when the section is missing or empty.
-  check     structural checks: the Unreleased heading and link exist, the link
-            ends in HEAD, and every released version has a link definition.
+  last      print the most recent released version.
+  check     structural checks: every released version heading has a link definition.
 USAGE
   exit 2
 }
@@ -71,12 +65,12 @@ section_body() { # start end → the trimmed body between them
 }
 
 version_headings() {
-  grep -E '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$CHANGELOG" | sed -E 's/^## \[([^]]+)\].*/\1/'
+  grep -E '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$CHANGELOG" | sed -E 's/^## \[([^]]+)\].*/\1/' || true
 }
 
 last_version() { version_headings | head -n 1; }
 
-link_url() { # version (or Unreleased) → URL from its link definition
+link_url() { # version → URL from its link definition
   grep -F -m1 -- "[$1]: " "$CHANGELOG" | sed -E 's/^\[[^]]+\]: //' || true
 }
 
@@ -90,44 +84,19 @@ repo_url() {
     # before the scheme is added, or the replacement would hit "https:".
     git@*:*)
       url=${url#git@}
-      url="https://${url/:/\/}"
+      url="https://${url%%:*}/${url#*:}"
       ;;
     ssh://git@*) url="https://${url#ssh://git@}" ;;
   esac
   printf '%s' "${url%.git}"
 }
 
-# Replace lines [start, end) with stdin. Every rewrite goes through here so the
-# file is never edited by a regex that could match somewhere else.
-splice() { # start end
-  local start=$1 end=$2 tmp
-  tmp=$(mktemp "${TMPDIR:-/tmp}/changelog.XXXXXX")
-  head -n "$(( start - 1 ))" "$CHANGELOG" > "$tmp"
-  cat >> "$tmp"
-  tail -n "+$end" "$CHANGELOG" >> "$tmp"
-  mv "$tmp" "$CHANGELOG"
-}
+# --- drafting from commits --------------------------------------------------
 
-# --- draft ------------------------------------------------------------------
-
-cmd_draft() {
-  local write=0 all=0 force=0
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --write) write=1 ;;
-      --all) all=1 ;;
-      --force) force=1 ;;
-      *) usage ;;
-    esac
-    shift
-  done
-
-  local start end last range subjects breaking
-  start=$(heading_line "$UNRELEASED_HEADING")
-  [ -n "$start" ] || die "no '$UNRELEASED_HEADING' heading in $CHANGELOG"
-  end=$(section_end "$start")
-
+draft_body() {
+  local all=${1:-0} range subjects breaking
   git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository; draft needs the commit log"
+  local last
   last=$(last_version)
   if [ -n "$last" ] && git rev-parse -q --verify "refs/tags/v$last" >/dev/null; then
     range="v$last..HEAD"
@@ -138,12 +107,11 @@ cmd_draft() {
   subjects=$(git log --no-merges --pretty=format:'%s' "$range")
   # A breaking change marks its commit twice: `type!:` in the subject, or a
   # BREAKING CHANGE footer in the body (which git matches per message line).
-  breaking=$(git log --no-merges -E --grep='^BREAKING[ -]CHANGE:' --pretty=format:'%s' "$range" || true)
+  breaking=$(git log --no-merges -E --grep='^BREAKING[ -]CHANGE:' --pretty=format:'%s' "$range" | paste -sd '|' -)
 
-  local body
-  body=$(printf '%s\n' "$subjects" | awk -v all="$all" -v breaking="$breaking" '
+  printf '%s\n' "$subjects" | awk -v all="$all" -v breaking="$breaking" '
     BEGIN {
-      n = split(breaking, list, "\n")
+      n = split(breaking, list, "|")
       for (i = 1; i <= n; i++) isBreaking[list[i]] = 1
       order[1] = "Breaking changes"; order[2] = "Added"; order[3] = "Changed"
       order[4] = "Fixed"; order[5] = "Internal"
@@ -167,8 +135,8 @@ cmd_draft() {
       else if (type == "fix") section = "Fixed"
       else if (type == "perf" || type == "refactor" || type == "revert") section = "Changed"
       else section = "Internal"
-      if (section == "Internal" && !all) { skipped++; next }
       if (bang || isBreaking[subject]) section = "Breaking changes"
+      if (section == "Internal" && !all) { skipped++; next }
 
       bullet = (scope == "" ? "- " text : "- **" scope ":** " text)
       if (section == "Breaking changes") bullet = bullet " _(breaking)_"
@@ -181,140 +149,158 @@ cmd_draft() {
         printf "### %s\n\n%s\n", s, lines[s]
       }
     }
-  ')
-
-  local new
-  new=$(printf '## [%s]\n\n%s' "$UNRELEASED" "$body")
-  if [ -z "$body" ]; then
-    echo "changelog: no notable commits in $range" >&2
-  fi
-
-  if [ "$write" = 0 ]; then
-    printf '%s\n' "$new"
-    return 0
-  fi
-
-  local existing
-  existing=$(section_body "$start" "$end")
-  if [ -n "$existing" ] && [ "$force" = 0 ]; then
-    die "[$UNRELEASED] already has entries; pass --force to replace them, or edit by hand"
-  fi
-  printf '%s\n' "$new" | splice "$start" "$end"
-  echo "changelog: rewrote [$UNRELEASED] from $range" >&2
+  '
 }
 
-# --- promote ----------------------------------------------------------------
+cmd_draft() {
+  local all=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --all) all=1 ;;
+      *) usage ;;
+    esac
+    shift
+  done
+  draft_body "$all"
+}
 
-cmd_promote() {
+# --- release ---------------------------------------------------------------
+
+cmd_release() {
   local raw=${1:-} version prev url body
-  [ -n "$raw" ] || usage
+  [ -n "$raw" ] && [ "$#" -eq 1 ] || usage
   version=${raw#v}
-  case "$version" in
-    [0-9]*.[0-9]*.[0-9]*) ;;
-    *) die "version must look like X.Y.Z (got '$raw')" ;;
-  esac
-  case "$version" in *[!0-9.]*) die "version must look like X.Y.Z (got '$raw')" ;; esac
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must look like X.Y.Z (got '$raw')"
   if grep -q -F -- "## [$version]" "$CHANGELOG"; then
     die "$version already has a section"
   fi
 
-  local start end
-  start=$(heading_line "$UNRELEASED_HEADING")
-  [ -n "$start" ] || die "no '$UNRELEASED_HEADING' heading in $CHANGELOG"
-  end=$(section_end "$start")
+  prev=$(last_version)
+  body=$(draft_body 0)
+  [ -n "$body" ] || die "no notable commits since the last release"
+  url=$(repo_url)
+  [ -n "$url" ] || die "no repository URL (no origin remote)"
 
-  prev=$(version_headings | head -n 1)
-  body=$(section_body "$start" "$end")
-  if [ -z "$body" ]; then
-    echo "changelog: warning: [$UNRELEASED] is empty; releasing $version anyway" >&2
+  local insert_heading="## [$version] - $TODAY"
+  local section_content
+  if [ -n "$body" ]; then
+    section_content=$(printf '%s\n\n%s\n' "$insert_heading" "$body")
+  else
+    section_content=$(printf '%s\n' "$insert_heading")
   fi
 
-  # The released section keeps its body; a fresh, empty Unreleased goes above it.
-  {
-    printf '## [%s]\n\n## [%s] - %s\n\n' "$UNRELEASED" "$version" "$TODAY"
-    if [ -n "$body" ]; then printf '%s\n' "$body"; fi
-  } | splice "$start" "$end"
-
-  url=$(repo_url)
-  if [ -z "$url" ]; then
-    echo "changelog: warning: no repository URL (no origin remote); compare links not updated" >&2
+  local insert_line
+  if [ -n "$prev" ]; then
+    insert_line=$(heading_line "## [$prev]")
   else
+    insert_line=$(grep -n -m1 -E '^\[[0-9]+\.[0-9]+\.[0-9]+\]: ' "$CHANGELOG" | cut -d: -f1 || true)
+  fi
+
+  local tmp
+  tmp=$(mktemp "${TMPDIR:-/tmp}/changelog.XXXXXX")
+  if [ -n "$insert_line" ]; then
+    head -n "$(( insert_line - 1 ))" "$CHANGELOG" > "$tmp"
+    printf '%s\n\n' "$section_content" >> "$tmp"
+    tail -n "+$insert_line" "$CHANGELOG" >> "$tmp"
+  else
+    cat "$CHANGELOG" > "$tmp"
+    printf '\n%s\n' "$section_content" >> "$tmp"
+  fi
+  mv "$tmp" "$CHANGELOG"
+
+  if [ -n "$url" ]; then
     local new_link
     if [ -n "$prev" ]; then
       new_link="[$version]: $url/compare/v$prev...v$version"
     else
       new_link="[$version]: $url/releases/tag/v$version"
     fi
-    awk -v url="$url" -v version="$version" -v new_link="$new_link" '
-      /^\[Unreleased\]: / {
-        print "[" "Unreleased]: " url "/compare/v" version "...HEAD"
-        print new_link
-        next
-      }
-      { print }
-    ' "$CHANGELOG" > "$CHANGELOG.tmp"
-    mv "$CHANGELOG.tmp" "$CHANGELOG"
+    local first_link_line
+    first_link_line=$(grep -n -m1 -E '^\[[0-9]+\.[0-9]+\.[0-9]+\]: ' "$CHANGELOG" | cut -d: -f1 || true)
+    tmp=$(mktemp "${TMPDIR:-/tmp}/changelog.XXXXXX")
+    if [ -n "$first_link_line" ]; then
+      head -n "$(( first_link_line - 1 ))" "$CHANGELOG" > "$tmp"
+      printf '%s\n' "$new_link" >> "$tmp"
+      tail -n "+$first_link_line" "$CHANGELOG" >> "$tmp"
+    else
+      cat "$CHANGELOG" > "$tmp"
+      printf '\n%s\n' "$new_link" >> "$tmp"
+    fi
+    mv "$tmp" "$CHANGELOG"
   fi
 
-  echo "changelog: [$version] - $TODAY promoted${prev:+ (after $prev)}" >&2
+  echo "changelog: [$version] - $TODAY released${prev:+ (after $prev)}" >&2
 }
 
 # --- notes ------------------------------------------------------------------
 
 cmd_notes() {
-  local raw=${1:-$UNRELEASED} version start end body url
-  version=${raw#v}
-  if [ "$version" = "unreleased" ]; then version=$UNRELEASED; fi
-
-  if [ "$version" = "$UNRELEASED" ]; then
-    start=$(heading_line "$UNRELEASED_HEADING")
+  local target=${1:-} version start end body url
+  if [ -n "$target" ]; then
+    version=${target#v}
   else
-    start=$(heading_line "## [$version]")
+    version=$(last_version)
+    [ -n "$version" ] || die "no versions found in $CHANGELOG"
   fi
-  [ -n "$start" ] || { echo "changelog: no section for $raw" >&2; return 1; }
+
+  start=$(heading_line "## [$version]")
+  [ -n "$start" ] || die "no '## [$version]' heading in $CHANGELOG"
+
   end=$(section_end "$start")
   body=$(section_body "$start" "$end")
-  [ -n "$body" ] || { echo "changelog: section for $raw is empty" >&2; return 1; }
+  [ -n "$body" ] || die "section [$version] is empty"
 
   printf '%s\n' "$body"
-  if [ "$version" != "$UNRELEASED" ]; then
-    url=$(link_url "$version")
-    [ -n "$url" ] || url=$(repo_url)
-    printf '\n---\n\n'
-    if [ -n "$url" ]; then
-      printf 'Full changelog: %s\n' "$url"
-    else
-      printf 'Full changelog: %s\n' "$CHANGELOG"
-    fi
+
+  url=$(link_url "$version")
+  [ -n "$url" ] || url=$(repo_url)
+  printf '\n---\n\n'
+  if [ -n "$url" ]; then
+    printf 'Full changelog: %s\n' "$url"
+  else
+    printf 'Full changelog: %s\n' "$CHANGELOG"
   fi
+}
+
+# --- last -------------------------------------------------------------------
+
+cmd_last() {
+  local last
+  last=$(last_version)
+  [ -n "$last" ] || die "no versions found in $CHANGELOG"
+  printf '%s\n' "$last"
 }
 
 # --- check ------------------------------------------------------------------
 
 cmd_check() {
-  local start version problems=0 url
-  start=$(heading_line "$UNRELEASED_HEADING")
-  if [ -z "$start" ]; then
-    echo "changelog: missing '$UNRELEASED_HEADING' heading" >&2
+  local version problems=0
+  local count=0
+  if grep -Eq '^## \[Unreleased\]([[:space:]]|$)|^\[Unreleased\]: ' "$CHANGELOG"; then
+    echo "changelog: [Unreleased] is not a released version" >&2
     problems=$(( problems + 1 ))
   fi
-  url=$(link_url "$UNRELEASED")
-  if [ -z "$url" ]; then
-    echo "changelog: missing '[$UNRELEASED]:' link definition" >&2
+  if grep -E '^## \[' "$CHANGELOG" | grep -Ev '^## \[[0-9]+\.[0-9]+\.[0-9]+\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$' | grep -q .; then
+    echo "changelog: invalid released version heading" >&2
     problems=$(( problems + 1 ))
-  else
-    case "$url" in
-      *HEAD) ;;
-      *) echo "changelog: '[$UNRELEASED]:' link must end in HEAD (got $url)" >&2; problems=$(( problems + 1 )) ;;
-    esac
+  fi
+  if [ -n "$(version_headings | sort | uniq -d)" ]; then
+    echo "changelog: duplicate released version heading" >&2
+    problems=$(( problems + 1 ))
   fi
   while IFS= read -r version; do
     [ -n "$version" ] || continue
+    count=$(( count + 1 ))
     if [ -z "$(link_url "$version")" ]; then
       echo "changelog: [$version] has no link definition" >&2
       problems=$(( problems + 1 ))
     fi
   done < <(version_headings)
+
+  if [ "$count" -eq 0 ]; then
+    echo "changelog: no version headings found" >&2
+    problems=$(( problems + 1 ))
+  fi
 
   if [ "$problems" -gt 0 ]; then
     echo "changelog: $problems problem(s) found" >&2
@@ -330,11 +316,13 @@ if [ "$#" -gt 0 ]; then
   command=$1
   shift
 fi
+
 case "$command" in
   draft) cmd_draft "$@" ;;
-  promote) cmd_promote "$@" ;;
+  release) cmd_release "$@" ;;
   notes) cmd_notes "$@" ;;
-  check) cmd_check ;;
-  help|-h|--help) usage ;;
+  last) cmd_last "$@" ;;
+  check) cmd_check "$@" ;;
+  -h|--help|help) usage ;;
   *) usage ;;
 esac

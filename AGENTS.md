@@ -49,8 +49,8 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
   window management to sesh itself.
 - `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
 - `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
-- `scripts/changelog.sh` — release tooling: drafts `[Unreleased]` from
-  conventional commits, promotes it to a dated version, prints release notes and
+- `scripts/changelog.sh` — release tooling: drafts conventional commits,
+  writes a dated version, prints release notes and
   checks the compare links. `tests/changelog.sh` covers it in a throwaway repo.
 - `themes/`, `tests/`, `install.sh`, `README.md`.
 
@@ -132,12 +132,10 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   (`feat`, `fix`, `docs`, `ci`, …). See
   [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages) for the types and the
   version mapping.
-- `CHANGELOG.md` follows Keep a Changelog: notable changes are written under
-  `[Unreleased]` as the work lands, and the Release workflow promotes that
-  section (dated, relinked) into the published version, using it verbatim as the
-  GitHub release body. `scripts/changelog.sh draft` can seed entries from
-  conventional commits, but hand-written prose is the expected form — never let
-  a draft overwrite curated entries.
+- `CHANGELOG.md` follows Keep a Changelog and contains released versions only.
+  The Release workflow drafts notable Conventional Commits since the last tag
+  and writes the new dated version and compare link. The released section is
+  used as the GitHub release body.
 
 ## TUI panel (`tui/sesh-panel.tsx`)
 

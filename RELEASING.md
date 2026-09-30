@@ -39,11 +39,11 @@ Pick the bump from the [Conventional Commits](CONTRIBUTING.md#commit-messages)
 since the last release — the highest impact wins: `feat` → minor,
 `fix`/`perf` → patch, `!`/`BREAKING CHANGE` → major.
 
-Keep releasable entries under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md)
-and do not promote them yourself: the workflow runs
-`scripts/changelog.sh promote` during the release commit, and promoting
-beforehand makes it fail (`0.x.y already has a section`). `changelog.sh check`
-validates the structure; `changelog.sh notes` previews the release body.
+The workflow drafts notable Conventional Commits since the last release tag,
+then runs `scripts/changelog.sh release` to write the new version section in
+[CHANGELOG.md](CHANGELOG.md). `changelog.sh draft` previews the next release;
+`changelog.sh check` validates links, and `changelog.sh notes` reads the latest
+released body. A dispatch with no notable new commits does nothing.
 
 ## One-time setup
 
