@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Right-clicking a session in the TUI sidebar opens a floating menu at the click
+  with Open, Preview transcript, Open in new cmux workspace (inside cmux), Fork,
+  Pin/Unpin and Delete (with confirmation). It stays inside the terminal, moves
+  with ↑/↓/Enter, and closes on Esc or a click elsewhere. The home list and
+  picker keep the direct cmux action.
+
 ## [0.12.0] - 2026-09-30
 
 ### Added

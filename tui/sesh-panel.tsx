@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { Project, Session } from "@opencode-ai/sdk/v2"
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { spawn } from "node:child_process"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
+import { Portal } from "@opentui/solid"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
 
@@ -251,6 +252,7 @@ type Entry = { id: string; title: string; dir: string; group: string; updated: n
 type EntryResult = { entries: Entry[]; truncated: boolean }
 type SidebarMarker = "current" | "running" | "idle"
 
+const LEFT_BUTTON = 0
 const RIGHT_BUTTON = 2
 
 function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
@@ -265,6 +267,128 @@ function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
   child.on("exit", (code) => {
     if (code) api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" })
   })
+}
+
+type MenuAction = "open" | "preview" | "workspace" | "fork" | "pin" | "delete" | "confirm" | "cancel"
+type MenuItem = { id: MenuAction; label: string }
+type MenuState = { entry: Entry; x: number; y: number; items: MenuItem[]; index: number; confirming: boolean }
+type MenuLayer = {
+  mode: "base"
+  priority: number
+  bindings: { key: string; desc: string; preventDefault: boolean; cmd: () => void }[]
+}
+type ContextMenuHost = {
+  registerLayer: (layer: MenuLayer) => () => void
+  actions: Record<"open" | "preview" | "workspace" | "fork" | "pin" | "delete", (entry: Entry) => void>
+  pinned: (entry: Entry) => boolean
+  cmux: () => boolean
+  blocked: () => boolean
+  onChange: (state: MenuState | undefined) => void
+}
+
+const CONTEXT_MENU_LAYER_PRIORITY = 30
+
+function contextMenuItems(pinned: boolean, cmux: boolean): MenuItem[] {
+  return [
+    { id: "open", label: "Open" },
+    { id: "preview", label: "Preview transcript" },
+    ...(cmux ? [{ id: "workspace" as const, label: "Open in new cmux workspace" }] : []),
+    { id: "fork", label: "Fork" },
+    { id: "pin", label: pinned ? "Unpin" : "Pin" },
+    { id: "delete", label: "Delete" },
+  ]
+}
+
+function contextMenuSize(items: MenuItem[]): { width: number; height: number } {
+  return { width: Math.max(...items.map((item) => item.label.length)) + 4, height: items.length + 2 }
+}
+
+function contextMenuBox(
+  anchor: { x: number; y: number; width: number; height: number },
+  cols: number,
+  rows: number,
+): { left: number; top: number; width: number; height: number } {
+  const width = Math.max(1, Math.min(anchor.width, cols))
+  const height = Math.max(1, Math.min(anchor.height, rows))
+  const left = Math.max(0, Math.min(anchor.x, cols - width))
+  const below = anchor.y + 1
+  const top = below + height <= rows ? below : Math.max(0, anchor.y - height)
+  return { left, top, width, height }
+}
+
+function createContextMenu(host: ContextMenuHost) {
+  let state: MenuState | undefined
+  let dispose: (() => void) | undefined
+
+  const publish = (next: MenuState | undefined) => {
+    state = next
+    host.onChange(next)
+  }
+
+  const close = () => {
+    dispose?.()
+    dispose = undefined
+    if (state) publish(undefined)
+  }
+
+  const select = (index: number) => {
+    if (state) publish({ ...state, index: Math.max(0, Math.min(state.items.length - 1, index)) })
+  }
+
+  const move = (delta: number) => {
+    if (!state) return
+    const count = state.items.length
+    publish({ ...state, index: (state.index + delta + count) % count })
+  }
+
+  const activate = (index?: number) => {
+    if (!state) return
+    const current = state
+    const item = current.items[index ?? current.index]
+    if (!item) return
+    if (item.id === "delete") {
+      publish({
+        ...current,
+        confirming: true,
+        items: [
+          { id: "confirm", label: "Confirm delete" },
+          { id: "cancel", label: "Cancel" },
+        ],
+        index: 1,
+      })
+      return
+    }
+    close()
+    if (item.id === "confirm") host.actions.delete(current.entry)
+    else if (item.id !== "cancel") host.actions[item.id](current.entry)
+  }
+
+  const click = (index: number, button?: number) => {
+    if ((button ?? LEFT_BUTTON) === LEFT_BUTTON) activate(index)
+  }
+
+  const guarded = (run: () => void) => () => {
+    if (host.blocked()) close()
+    else run()
+  }
+
+  const open = (entry: Entry, x: number, y: number) => {
+    if (host.blocked()) return
+    publish({ entry, x, y, items: contextMenuItems(host.pinned(entry), host.cmux()), index: 0, confirming: false })
+    if (dispose) return
+    dispose = host.registerLayer({
+      mode: "base",
+      priority: CONTEXT_MENU_LAYER_PRIORITY,
+      bindings: [
+        { key: "up", desc: "Previous menu item", preventDefault: true, cmd: guarded(() => move(-1)) },
+        { key: "down", desc: "Next menu item", preventDefault: true, cmd: guarded(() => move(1)) },
+        { key: "enter", desc: "Choose menu item", preventDefault: true, cmd: guarded(() => activate()) },
+        { key: "escape", desc: "Close menu", preventDefault: true, cmd: close },
+      ],
+    })
+  }
+
+  return { open, close, select, activate, click, current: () => state }
 }
 
 // Loading-spinner frames for the marker of a session whose agent is working.
@@ -784,6 +908,14 @@ function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Ent
   return start
 }
 
+type PortalContainer = {
+  position?: string
+  left?: number
+  top?: number
+  zIndex?: number
+  destroyRecursively?: () => void
+}
+
 type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; refreshPins: () => void }
 
 function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
@@ -802,6 +934,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [cursor, setCursor] = createSignal(0)
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
+  const [menuState, setMenuState] = createSignal<MenuState>()
+  let portalContainer: PortalContainer | undefined
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
@@ -907,6 +1041,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   }
 
   const toggleSection = () => {
+    menu.close()
     if (!sectionCollapsed()) {
       cancelDelete()
       setNavActive(false)
@@ -917,6 +1052,47 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   }
 
   const openSession = (entry: Entry) => props.api.route.navigate("session", { sessionID: entry.id })
+
+  const forkEntry = async (entry: Entry) => {
+    try {
+      const result = await props.api.client.session.fork({
+        sessionID: entry.id,
+        directory: entry.dir || undefined,
+      })
+      const created = (result?.data ?? result) as Session | undefined
+      if (!created?.id) throw new Error("fork returned no session")
+      props.api.route.navigate("session", { sessionID: created.id })
+      props.api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
+    } catch {
+      props.api.ui.toast({ message: "Could not fork session", variant: "error" })
+    }
+  }
+
+  const menu = createContextMenu({
+    registerLayer: (layer) => props.api.keymap.registerLayer(layer),
+    actions: {
+      open: (entry) => void openSession(entry),
+      preview: (entry) => preview.open(entry),
+      workspace: (entry) => openInCmuxWorkspace(props.api, entry),
+      fork: (entry) => void forkEntry(entry),
+      pin: (entry) => props.onTogglePin("sessions", entry.id),
+      delete: (entry) => void deleteEntry(entry),
+    },
+    pinned: (entry) => props.pins().sessions.includes(entry.id),
+    cmux: () => Boolean(process.env.CMUX_WORKSPACE_ID),
+    blocked: () => props.api.ui.dialog.open,
+    onChange: setMenuState,
+  })
+
+  const menuBox = createMemo(() => {
+    const state = menuState()
+    if (!state) return undefined
+    return contextMenuBox(
+      { x: state.x, y: state.y, ...contextMenuSize(state.items) },
+      props.api.renderer.width,
+      props.api.renderer.height,
+    )
+  })
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
   // mouse hover resolve to the same row.
@@ -936,6 +1112,20 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     if (position >= 0 && position !== cursor()) setCursor(position)
     else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
     previousRows = rows
+  })
+
+  const routeKey = createMemo(() => {
+    const route = props.api.route.current
+    const id = route.name === "session" && typeof route.params?.sessionID === "string" ? route.params.sessionID : ""
+    return `${route.name}:${id}`
+  })
+  createEffect(on(routeKey, () => menu.close(), { defer: true }))
+  createEffect(() => {
+    const state = menuState()
+    if (state && !itemRows().some((entry) => entry.id === state.entry.id)) menu.close()
+  })
+  createEffect(() => {
+    if (props.api.ui.dialog.open) menu.close()
   })
 
   // Marker only: a spinner for a working agent, the open-session dot, and the
@@ -1072,6 +1262,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   const onRootMouseDown = () => {
+    menu.close()
     if (insideSearchBox) {
       insideSearchBox = false
       return
@@ -1082,7 +1273,12 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   onMount(() => {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
-    onCleanup(() => rootMouseHandlers.delete(onRootMouseDown))
+    const closeMenu = () => menu.close()
+    props.api.renderer.on("resize", closeMenu)
+    onCleanup(() => {
+      rootMouseHandlers.delete(onRootMouseDown)
+      props.api.renderer.off("resize", closeMenu)
+    })
   })
 
   const appendQuery = (input: string) => {
@@ -1236,6 +1432,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     disposeSearch?.()
     disposeNav?.()
     disposeConfirm?.()
+    menu.close()
+    const container = portalContainer
+    portalContainer = undefined
+    process.nextTick(() => container?.destroyRecursively?.())
     if (confirmTimer) clearTimeout(confirmTimer)
   })
 
@@ -1299,6 +1499,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           flexShrink={1}
           verticalScrollbarOptions={{ visible: false }}
           horizontalScrollbarOptions={{ visible: false }}
+          onMouseScroll={() => menu.close()}
         >
           <For each={tree()}>
           {(row) => {
@@ -1336,9 +1537,12 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   }
                 }}
                 onMouseOut={() => setHovered(undefined)}
-                onMouseDown={(event: { button?: number }) =>
-                  event.button === RIGHT_BUTTON ? openInCmuxWorkspace(props.api, row.entry) : void openSession(row.entry)
-                }
+                onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
+                  if (event.button === RIGHT_BUTTON) {
+                    event.stopPropagation()
+                    menu.open(row.entry, event.x, event.y)
+                  } else void openSession(row.entry)
+                }}
               >
                 <text flexShrink={0}>
                   <span style={{ fg: theme().textMuted }}>{row.last ? "└" : "├"}</span>
@@ -1383,6 +1587,62 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
       </Show>
       </Show>
+      <Portal
+        mount={props.api.renderer.root as never}
+        ref={(container: PortalContainer) => {
+          portalContainer = container
+          container.position = "absolute"
+          container.left = 0
+          container.top = 0
+          container.zIndex = 1000
+        }}
+      >
+        <Show when={menuState()}>
+          <box
+            position="absolute"
+            left={menuBox()!.left}
+            top={menuBox()!.top}
+            width={menuBox()!.width}
+            height={menuBox()!.height}
+            flexDirection="column"
+            border
+            borderStyle="rounded"
+            borderColor={theme().borderActive}
+            backgroundColor={theme().backgroundPanel}
+            paddingLeft={1}
+            paddingRight={1}
+            onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+          >
+            <For each={menuState()!.items}>
+              {(item, index) => (
+                <box
+                  height={1}
+                  backgroundColor={menuState()!.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                  onMouseOver={() => menu.select(index())}
+                  onMouseDown={(event: { button?: number; stopPropagation: () => void }) => {
+                    event.stopPropagation()
+                    menu.click(index(), event.button)
+                  }}
+                >
+                  <text
+                    wrapMode="none"
+                    style={{
+                      fg:
+                        item.id === "delete" || item.id === "confirm"
+                          ? theme().error
+                          : menuState()!.index === index()
+                            ? theme().text
+                            : theme().textMuted,
+                    }}
+                  >
+                    {item.label}
+                  </text>
+                </box>
+              )}
+            </For>
+          </box>
+        </Show>
+      </Portal>
     </box>
   )
 }

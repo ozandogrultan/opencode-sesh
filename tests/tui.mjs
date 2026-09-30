@@ -31,7 +31,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, contextMenuItems, contextMenuBox, createContextMenu }`,
   )
   return factory(
     readExtraction,
@@ -72,7 +72,7 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, contextMenuItems, contextMenuBox, createContextMenu } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -285,6 +285,194 @@ function makeApi(sessions, { latency = 0 } = {}) {
   } finally {
     sqlite.close()
   }
+}
+
+{
+  const labels = (items) => items.map((item) => item.label)
+  assert.deepEqual(labels(contextMenuItems(false, false)), ["Open", "Preview transcript", "Fork", "Pin", "Delete"])
+  assert.deepEqual(labels(contextMenuItems(true, true)), [
+    "Open", "Preview transcript", "Open in new cmux workspace", "Fork", "Unpin", "Delete",
+  ])
+
+  const box = (x, y, width, height, cols = 80, rows = 24) => contextMenuBox({ x, y, width, height }, cols, rows)
+  assert.deepEqual(box(10, 5, 20, 7), { left: 10, top: 6, width: 20, height: 7 })
+  assert.deepEqual(box(70, 5, 20, 7), { left: 60, top: 6, width: 20, height: 7 })
+  assert.deepEqual(box(10, 22, 20, 7), { left: 10, top: 15, width: 20, height: 7 })
+  assert.deepEqual(box(0, 0, 200, 7), { left: 0, top: 1, width: 80, height: 7 })
+  assert.deepEqual(box(3, 2, 20, 40), { left: 3, top: 0, width: 20, height: 24 })
+
+  const entry = { id: "ses_menu", title: "Menu", dir: "/p", group: "p", updated: 1 }
+  const harness = ({ pinned = false, cmux = false } = {}) => {
+    const block = { on: false }
+    const layers = new Set()
+    const calls = []
+    const states = []
+    let registered = 0
+    const actions = Object.fromEntries(
+      ["open", "preview", "fork", "pin", "workspace", "delete"].map((name) => [name, (e) => calls.push([name, e.id])]),
+    )
+    const menu = createContextMenu({
+      registerLayer: (layer) => {
+        registered += 1
+        layers.add(layer)
+        return () => layers.delete(layer)
+      },
+      actions,
+      pinned: () => pinned,
+      cmux: () => cmux,
+      blocked: () => block.on,
+      onChange: (state) => states.push(state),
+    })
+    const press = (key) => {
+      assert.equal(layers.size, 1, `keymap layer must be live to receive ${key}`)
+      const [layer] = layers
+      layer.bindings.find((binding) => binding.key === key).cmd()
+    }
+    return { menu, layers, calls, states, press, block, registered: () => registered }
+  }
+
+  {
+    const h = harness()
+    assert.equal(h.layers.size, 0, "no keymap layer before the menu opens")
+    h.menu.open(entry, 12, 4)
+    assert.equal(h.layers.size, 1)
+    assert.deepEqual([h.menu.current().x, h.menu.current().y, h.menu.current().index], [12, 4, 0])
+    h.press("down")
+    h.press("down")
+    assert.equal(h.menu.current().items[h.menu.current().index].id, "fork")
+    h.press("up")
+    assert.equal(h.menu.current().items[h.menu.current().index].id, "preview")
+    h.press("up")
+    h.press("up")
+    assert.equal(h.menu.current().items[h.menu.current().index].id, "delete", "navigation wraps")
+    h.press("down")
+    h.press("down")
+    h.press("enter")
+    assert.deepEqual(h.calls, [["preview", "ses_menu"]])
+    assert.equal(h.menu.current(), undefined)
+    assert.equal(h.layers.size, 0, "activating an action releases the keymap layer")
+    assert.equal(h.states.at(-1), undefined)
+  }
+
+  {
+    const h = harness()
+    h.menu.open(entry, 1, 1)
+    h.press("escape")
+    assert.equal(h.menu.current(), undefined)
+    assert.equal(h.layers.size, 0)
+    assert.deepEqual(h.calls, [])
+    h.menu.close()
+    h.menu.open(entry, 1, 1)
+    h.menu.open(entry, 5, 5)
+    assert.equal(h.layers.size, 1, "reopening never stacks keymap layers")
+    assert.equal(h.registered(), 2)
+    assert.deepEqual([h.menu.current().x, h.menu.current().y], [5, 5])
+    h.menu.close()
+    h.menu.close()
+    assert.equal(h.layers.size, 0)
+  }
+
+  {
+    const h = harness({ pinned: true, cmux: true })
+    h.menu.open(entry, 1, 1)
+    h.menu.select(2)
+    assert.equal(h.menu.current().index, 2)
+    h.menu.activate()
+    h.menu.open(entry, 1, 1)
+    h.menu.select(4)
+    h.menu.activate()
+    h.menu.open(entry, 1, 1)
+    h.menu.activate(0)
+    assert.deepEqual(h.calls, [["workspace", "ses_menu"], ["pin", "ses_menu"], ["open", "ses_menu"]])
+    assert.equal(h.layers.size, 0)
+  }
+
+  {
+    const h = harness()
+    h.menu.open(entry, 1, 1)
+    h.menu.click(0, 2)
+    h.menu.click(0, 1)
+    assert.deepEqual(h.calls, [], "only the left button activates an item")
+    assert.ok(h.menu.current(), "ignored buttons leave the menu open")
+    h.menu.click(1, 0)
+    assert.deepEqual(h.calls, [["preview", "ses_menu"]])
+    assert.equal(h.layers.size, 0)
+    h.menu.open(entry, 1, 1)
+    h.menu.click(0)
+    assert.deepEqual(h.calls.at(-1), ["open", "ses_menu"])
+  }
+
+  {
+    const h = harness()
+    h.block.on = true
+    h.menu.open(entry, 1, 1)
+    assert.equal(h.menu.current(), undefined, "no menu while a dialog is open")
+    assert.equal(h.layers.size, 0)
+    h.block.on = false
+    h.menu.open(entry, 1, 1)
+    h.block.on = true
+    const [layer] = h.layers
+    layer.bindings.find((binding) => binding.key === "enter").cmd()
+    assert.deepEqual(h.calls, [], "a blocked menu never runs an action")
+    assert.equal(h.menu.current(), undefined)
+    assert.equal(h.layers.size, 0, "a dialog opening releases the menu layer")
+    h.block.on = false
+    h.menu.open(entry, 1, 1)
+    h.block.on = true
+    ;[...h.layers][0].bindings.find((binding) => binding.key === "down").cmd()
+    assert.equal(h.layers.size, 0)
+  }
+
+  {
+    const h = harness()
+    h.menu.open(entry, 1, 1)
+    h.menu.select(4)
+    h.menu.activate()
+    assert.equal(h.menu.current().confirming, true)
+    assert.deepEqual(h.calls, [], "delete waits for confirmation")
+    assert.equal(h.layers.size, 1)
+    h.press("enter")
+    assert.deepEqual(h.calls, [], "the confirmation defaults to cancel")
+    assert.equal(h.menu.current(), undefined)
+    assert.equal(h.layers.size, 0)
+
+    h.menu.open(entry, 1, 1)
+    h.menu.select(4)
+    h.menu.activate()
+    h.press("escape")
+    assert.deepEqual(h.calls, [])
+    assert.equal(h.layers.size, 0)
+
+    h.menu.open(entry, 1, 1)
+    h.menu.select(4)
+    h.menu.activate()
+    h.press("up")
+    h.press("enter")
+    assert.deepEqual(h.calls, [["delete", "ses_menu"]])
+    assert.equal(h.layers.size, 0)
+  }
+}
+
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const sidebar = source.slice(source.indexOf("function SidebarSessions"), source.indexOf("function HomeSessions"))
+  assert.ok(sidebar.length > 1000, "could not locate the sidebar component")
+  assert.match(sidebar, /event\.button === RIGHT_BUTTON[\s\S]{0,120}menu\.open\(row\.entry, event\.x, event\.y\)/)
+  assert.doesNotMatch(sidebar, /openInCmuxWorkspace\(props\.api, row\.entry\)/)
+  assert.match(sidebar, /const onRootMouseDown = \(\) => \{\s+menu\.close\(\)/)
+  assert.match(sidebar, /<Portal\s+mount=/)
+  assert.match(sidebar, /<Portal[\s\S]*?<Show when=\{menuState\(\)\}>[\s\S]*?<\/Show>\s*<\/Portal>/)
+  assert.doesNotMatch(sidebar, /<Show when=\{menuState\(\)\}>\s*<Portal/)
+  assert.match(sidebar, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
+  assert.match(sidebar, /on\(routeKey, \(\) => menu\.close\(\), \{ defer: true \}\)/)
+  assert.match(sidebar, /itemRows\(\)\.some\(\(entry\) => entry\.id === state\.entry\.id\)\) menu\.close\(\)/)
+  assert.match(sidebar, /if \(props\.api\.ui\.dialog\.open\) menu\.close\(\)/)
+  assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open/)
+  assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
+  assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
+  assert.match(sidebar, /menu\.click\(index\(\), event\.button\)/)
+  assert.doesNotMatch(sidebar, /menu\.activate\(index\(\)\)/)
+  assert.match(sidebar, /onCleanup\(\(\) => \{[\s\S]{0,120}menu\.close\(\)/)
 }
 
 // Remote transcript fetches run in a bounded pool, not all at once.

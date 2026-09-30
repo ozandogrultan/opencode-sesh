@@ -185,7 +185,11 @@ The picker groups sessions under collapsible directory headings (click ▾/▸).
 Mouse-wheel scrolling moves through the tree without changing the selection
 under a stationary pointer. Option-P opens a full-size transcript preview over
 the picker; use ↑/↓ to preview other sessions, then Esc to return to the list.
-Right-click a session (sidebar, home list or picker) to open it in a new cmux
+Right-click a sidebar session to open its action menu: open, preview, fork,
+pin/unpin, or delete with confirmation. Inside cmux, the menu also offers opening
+the session in a new workspace at its directory. Use ↑/↓ and Enter to choose an
+action, or Esc to dismiss the menu.
+Right-click a session in the home list or picker to open it in a new cmux
 workspace at its directory; outside cmux it shows a toast instead.
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
