@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Right-clicking a session in the TUI sidebar, home list or picker opens it in a
+  new cmux workspace at its directory; outside cmux it shows a toast.
+
 ### Fixed
 
 - Avoid creating `.bak` backup files on install
