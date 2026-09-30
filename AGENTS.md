@@ -17,6 +17,8 @@ territory: read this first, then the specific file you need.
    db` store (the native `opencode session list` is project-scoped).
 
 No iTerm2, no AppleScript, no panes, no window management — **never add any.**
+The one exception is the TUI's right-click action, which shells out to
+`cmux new-workspace` when running inside cmux.
 opencode has no persistent-sidebar API, so the "sidebar" is a `sidebar_content`
 slot section plus an xlarge modal picker; the terminal UI is fullscreen fzf.
 

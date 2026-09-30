@@ -1,8 +1,8 @@
 # sesh ↔ cmux
 
 Optional glue for running sesh inside [cmux](https://cmux.dev). Nothing here is
-bundled into the picker: sesh has no window-management code, and these recipes
-keep it that way. cmux calls sesh; sesh never calls cmux.
+bundled into the picker: these recipes are caller-side. The only place sesh
+calls cmux is the TUI's right-click action, which runs `cmux new-workspace`.
 
 ## Command palette + shortcuts
 

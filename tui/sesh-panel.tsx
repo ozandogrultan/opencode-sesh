@@ -4,6 +4,7 @@ import type { Project, Session } from "@opencode-ai/sdk/v2"
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { spawn } from "node:child_process"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
@@ -249,6 +250,22 @@ function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
 type Entry = { id: string; title: string; dir: string; group: string; updated: number }
 type EntryResult = { entries: Entry[]; truncated: boolean }
 type SidebarMarker = "current" | "running" | "idle"
+
+const RIGHT_BUTTON = 2
+
+function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
+  if (!process.env.CMUX_WORKSPACE_ID) {
+    api.ui.toast({ message: "Right-click opens a new workspace only inside cmux", variant: "info" })
+    return
+  }
+  const args = ["new-workspace", "--name", entry.title || entry.id, "--command", `opencode --session ${entry.id}`, "--focus", "true"]
+  if (entry.dir) args.push("--cwd", entry.dir)
+  const child = spawn("cmux", args, { stdio: "ignore" })
+  child.on("error", () => api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" }))
+  child.on("exit", (code) => {
+    if (code) api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" })
+  })
+}
 
 // Loading-spinner frames for the marker of a session whose agent is working.
 const SIDEBAR_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -1319,7 +1336,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   }
                 }}
                 onMouseOut={() => setHovered(undefined)}
-                onMouseDown={() => void openSession(row.entry)}
+                onMouseDown={(event: { button?: number }) =>
+                  event.button === RIGHT_BUTTON ? openInCmuxWorkspace(props.api, row.entry) : void openSession(row.entry)
+                }
               >
                 <text flexShrink={0}>
                   <span style={{ fg: theme().textMuted }}>{row.last ? "└" : "├"}</span>
@@ -1617,7 +1636,11 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
               backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
               onMouseOver={() => setHovered(entry.id)}
               onMouseOut={() => setHovered(undefined)}
-              onMouseDown={() => props.api.route.navigate("session", { sessionID: entry.id })}
+              onMouseDown={(event: { button?: number }) =>
+                event.button === RIGHT_BUTTON
+                  ? openInCmuxWorkspace(props.api, entry)
+                  : props.api.route.navigate("session", { sessionID: entry.id })
+              }
             >
               <text flexShrink={0} style={{ fg: theme().textMuted }}>
                 ○
@@ -2242,7 +2265,9 @@ const tui: TuiPlugin = async (api) => {
                         const index = selectableEntries().findIndex((entry) => entry.id === row.entry.id)
                         if (index >= 0) setCursor(index)
                       }}
-                      onMouseDown={() => choose(row.entry)}
+                      onMouseDown={(event: { button?: number }) =>
+                        event.button === RIGHT_BUTTON ? (cleanup(), api.ui.dialog.clear(), openInCmuxWorkspace(api, row.entry)) : choose(row.entry)
+                      }
                     >
                       <box flexDirection="row" gap={1}>
                       <text flexShrink={0} style={{ fg: row.entry.id === selectableEntries()[cursor()]?.id

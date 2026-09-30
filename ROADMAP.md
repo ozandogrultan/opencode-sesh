@@ -35,10 +35,9 @@ candidate summary; non-TTY runs require `--yes`; `--dry-run` lists only.
 
 ## 3. sesh ↔ cmux bridge (done)
 
-**Approach:** kept caller-side. sesh has no window-management code (a hard
-repo rule), so [`contrib/cmux/`](contrib/cmux/README.md) ships the cmux
+**Approach:** [`contrib/cmux/`](contrib/cmux/README.md) ships the cmux
 actions, shortcuts and a `--print --json` recipe that resumes a session in its
-own workspace. cmux calls sesh; sesh never calls cmux.
+own workspace; the TUI's right-click action opens one directly.
 
 ## 4. Per-project cost digest (done)
 

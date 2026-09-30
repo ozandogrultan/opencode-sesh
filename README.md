@@ -185,6 +185,8 @@ The picker groups sessions under collapsible directory headings (click ▾/▸).
 Mouse-wheel scrolling moves through the tree without changing the selection
 under a stationary pointer. Option-P opens a full-size transcript preview over
 the picker; use ↑/↓ to preview other sessions, then Esc to return to the list.
+Right-click a session (sidebar, home list or picker) to open it in a new cmux
+workspace at its directory; outside cmux it shows a toast instead.
 
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
@@ -228,7 +230,7 @@ All variables are optional.
 
 ## Integrations
 
-sesh is terminal-agnostic on purpose: it has no window-management code. The
+sesh is terminal-agnostic apart from the TUI's right-click action. The
 [`contrib/cmux/`](contrib/cmux/README.md) directory shows how to drive it from
 cmux — command-palette entries, shortcuts, resuming a session in its own
 workspace, and a global "resume from anywhere" hotkey — all caller-side.
