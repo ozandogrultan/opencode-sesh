@@ -471,8 +471,19 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
   assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
   assert.match(sidebar, /menu\.click\(index\(\), event\.button\)/)
+  assert.match(
+    sidebar,
+    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*menu\.click\(index\(\), event\.button\)/,
+    "context menu items must activate on mouseUp so the trailing mouse release does not hit the dialog backdrop",
+  )
   assert.doesNotMatch(sidebar, /menu\.activate\(index\(\)\)/)
   assert.match(sidebar, /onCleanup\(\(\) => \{[\s\S]{0,120}menu\.close\(\)/)
+}
+
+// Transcript preview esc label allows closing on click
+{
+  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  assert.match(source, /<text style=\{\{ fg: api\.theme\.current\.textMuted \}\} onMouseUp=\{close\}>esc<\/text>/)
 }
 
 // Remote transcript fetches run in a bounded pool, not all at once.

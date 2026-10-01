@@ -818,7 +818,7 @@ function createTranscriptPreview(api: TuiPluginApi) {
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
           <box flexDirection="row" justifyContent="space-between">
             <text attributes={TextAttributes.BOLD}>{entry.title}</text>
-            <text style={{ fg: api.theme.current.textMuted }}>esc</text>
+            <text style={{ fg: api.theme.current.textMuted }} onMouseUp={close}>esc</text>
           </box>
           <text style={{ fg: api.theme.current.textMuted }}>
             {prettyDir(entry.dir, process.env.HOME ?? "")} · {ago(entry.updated)}
@@ -1612,6 +1612,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             paddingLeft={1}
             paddingRight={1}
             onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+            onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
           >
             <For each={menuState()!.items}>
               {(item, index) => (
@@ -1619,7 +1620,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   height={1}
                   backgroundColor={menuState()!.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
                   onMouseOver={() => menu.select(index())}
-                  onMouseDown={(event: { button?: number; stopPropagation: () => void }) => {
+                  onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+                  onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
                     event.stopPropagation()
                     menu.click(index(), event.button)
                   }}
