@@ -1843,88 +1843,90 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   return (
-    <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={1} gap={1}>
-      <Show
-        when={entries().length > 0}
-        fallback={
-          <box flexDirection="row" gap={1}>
-            <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-            <text style={{ fg: theme().textMuted }}>
-              {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
-            </text>
-          </box>
-        }
-      >
-        <box flexDirection="row" justifyContent="space-between" gap={2}>
-          <box flexDirection="row" gap={1}>
-            <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-            <text style={{ fg: theme().textMuted }}>· option+o for all</text>
-          </box>
-          <box
-            flexDirection="row"
-            gap={1}
-            paddingLeft={1}
-            paddingRight={1}
-            backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-            onMouseDown={() => {
-              insideSearchBox = true
-              setSearching(true)
-            }}
-          >
-            <box width={24}>
-              <text
-                flexGrow={1}
-                flexShrink={1}
-                overflow="hidden"
-                wrapMode="none"
-                style={{ fg: query() ? theme().text : theme().textMuted }}
-              >
-                {query() || "search…"}
-                {searching() ? "▏" : ""}
+    <box width="100%" alignItems="center">
+      <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={1} gap={1}>
+        <Show
+          when={entries().length > 0}
+          fallback={
+            <box flexDirection="row" gap={1}>
+              <text style={{ fg: theme().textMuted }}>Recent sessions</text>
+              <text style={{ fg: theme().textMuted }}>
+                {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
               </text>
             </box>
-            <Show when={query()}>
-              <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={() => setQuery("")}>
-                ✕
-              </text>
-            </Show>
-          </box>
-        </box>
-        <For each={visible()}>
-          {(entry) => (
+          }
+        >
+          <box flexDirection="row" justifyContent="space-between" gap={2}>
+            <box flexDirection="row" gap={1}>
+              <text style={{ fg: theme().textMuted }}>Recent sessions</text>
+              <text style={{ fg: theme().textMuted }}>· option+o for all</text>
+            </box>
             <box
               flexDirection="row"
               gap={1}
-              backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-              onMouseOver={() => setHovered(entry.id)}
-              onMouseOut={() => setHovered(undefined)}
-              onMouseDown={(event: { button?: number }) =>
-                event.button === RIGHT_BUTTON
-                  ? openInCmuxWorkspace(props.api, entry)
-                  : props.api.route.navigate("session", { sessionID: entry.id })
-              }
+              paddingLeft={1}
+              paddingRight={1}
+              backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+              onMouseDown={() => {
+                insideSearchBox = true
+                setSearching(true)
+              }}
             >
-              <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                ○
-              </text>
-              <Highlighted
-                text={`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${truncate(entry.title, HOME_TITLE_WIDTH - (props.pins().sessions.includes(entry.id) ? 2 : 0))}`}
-                query={query()}
-                color={theme().text}
-                matchColor={theme().warning}
-              />
-              <text flexShrink={0} style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}>
-                {pendingDelete() === entry.id
-                  ? "ctrl+x again"
-                  : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
-              </text>
+              <box width={24}>
+                <text
+                  flexGrow={1}
+                  flexShrink={1}
+                  overflow="hidden"
+                  wrapMode="none"
+                  style={{ fg: query() ? theme().text : theme().textMuted }}
+                >
+                  {query() || "search…"}
+                  {searching() ? "▏" : ""}
+                </text>
+              </box>
+              <Show when={query()}>
+                <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={() => setQuery("")}>
+                  ✕
+                </text>
+              </Show>
             </box>
-          )}
-        </For>
-        <Show when={visible().length === 0}>
-            <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+          </box>
+          <For each={visible()}>
+            {(entry) => (
+              <box
+                flexDirection="row"
+                gap={1}
+                backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                onMouseOver={() => setHovered(entry.id)}
+                onMouseOut={() => setHovered(undefined)}
+                onMouseDown={(event: { button?: number }) =>
+                  event.button === RIGHT_BUTTON
+                    ? openInCmuxWorkspace(props.api, entry)
+                    : props.api.route.navigate("session", { sessionID: entry.id })
+                }
+              >
+                <text flexShrink={0} style={{ fg: theme().textMuted }}>
+                  ○
+                </text>
+                <Highlighted
+                  text={`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${truncate(entry.title, HOME_TITLE_WIDTH - (props.pins().sessions.includes(entry.id) ? 2 : 0))}`}
+                  query={query()}
+                  color={theme().text}
+                  matchColor={theme().warning}
+                />
+                <text flexShrink={0} style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}>
+                  {pendingDelete() === entry.id
+                    ? "ctrl+x again"
+                    : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
+                </text>
+              </box>
+            )}
+          </For>
+          <Show when={visible().length === 0}>
+              <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+          </Show>
         </Show>
-      </Show>
+      </box>
     </box>
   )
 }
