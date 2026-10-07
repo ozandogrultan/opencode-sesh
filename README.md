@@ -2,9 +2,11 @@
 
 [![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
 
-**A session browser for [opencode](https://opencode.ai).** Search every session
+**An [OpenCode V2](https://opencode.ai/v2/) plugin and terminal session browser.** Search every session
 across every project, preview the transcript, and resume in place — from your
 terminal or from inside the TUI.
+
+The TUI plugin and agent tool require OpenCode V2 and are not compatible with V1.
 
 `opencode` keeps a growing pile of sessions, and its native lists (`<leader>l`,
 `/sessions`) are scoped to the current project. `sesh` shows all of them —
