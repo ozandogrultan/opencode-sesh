@@ -48,6 +48,39 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  const start = source.indexOf("function adaptTheme")
+  const end = source.indexOf("function createApi", start)
+  assert.ok(start >= 0 && end > start, "could not locate V2 theme adapter")
+  const rgba = (r, g, b, a = 1) => ({ r, g, b, a })
+  const adapt = new Function("RGBA", `${stripTypeScriptTypes(source.slice(start, end))}; return adaptTheme`)({ fromValues: rgba })
+  for (const value of [0.1, 0.9]) {
+    const text = rgba(value, value, value)
+    const accent = rgba(0.2, 0.7, 0.8)
+    const string = rgba(0.3, 0.8, 0.2)
+    const theme = {
+      text: { base: text, muted: text, action: { secondary: { base: text } }, feedback: Object.fromEntries(["error", "warning", "success", "info"].map((key) => [key, { base: accent }])) },
+      background: { base: rgba(0, 0, 0, 0), raised: { base: rgba(value, value, value, 0), high: rgba(value, value, value, 0.5) } },
+      border: { base: text },
+      hue: { accent: { 200: accent } },
+      syntax: Object.fromEntries(["comment", "keyword", "function", "variable", "string", "number", "type", "operator", "punctuation"].map((key) => [key, key === "string" ? string : accent])),
+      markdown: { link: accent, linkText: accent, blockQuote: accent },
+    }
+    const mapped = adapt(theme)
+    assert.equal(mapped.backgroundPanel.a, 1)
+    assert.equal(mapped.backgroundElement.a, 1)
+    assert.equal(mapped.backgroundPanel.r, value)
+    assert.equal(theme.background.base.a, 0)
+    assert.equal(theme.background.raised.base.a, 0)
+    assert.equal(mapped.text, text)
+    assert.equal(mapped.accent, accent)
+    assert.equal(mapped.syntaxString, string)
+    assert.notEqual(mapped.syntaxString, mapped.text)
+    assert.ok(Object.values(mapped).every((color) => color !== undefined))
+  }
+}
+
 function loadPickerWindow() {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("type PickerRow =")

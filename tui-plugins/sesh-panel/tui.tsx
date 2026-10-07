@@ -73,7 +73,7 @@ function buildMarkdownStyle(theme: ThemeColors): SyntaxStyle {
     { scope: ["markup.list"], style: { foreground: theme.syntaxKeyword } },
     { scope: ["markup.quote"], style: { foreground: theme.markdownBlockQuote, italic: true } },
     { scope: ["markup.raw", "markup.raw.block"], style: { foreground: theme.syntaxString } },
-    { scope: ["markup.raw.inline"], style: { foreground: theme.syntaxString, background: theme.background } },
+    { scope: ["markup.raw.inline"], style: { foreground: theme.syntaxString, background: theme.backgroundElement } },
     {
       scope: ["markup.link", "markup.link.url", "string.special", "string.special.url"],
       style: { foreground: theme.markdownLink, underline: true },
@@ -822,7 +822,7 @@ function createTranscriptPreview(api: TuiPluginApi) {
     })
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1}>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
           <box flexDirection="row" justifyContent="space-between">
             <text attributes={TextAttributes.BOLD}>{entry.title}</text>
             <text style={{ fg: api.theme.current.textMuted }} onMouseUp={close}>esc</text>
@@ -2660,7 +2660,7 @@ const tui: TuiPlugin = async (api) => {
               width={dialogWidth}
               height={dialogHeight()}
               flexDirection="column"
-              backgroundColor={api.theme.current.backgroundElement}
+              backgroundColor={api.theme.current.backgroundPanel}
               paddingLeft={4}
               paddingRight={4}
               paddingTop={1}
@@ -2775,7 +2775,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
     })
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1}>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
           <text attributes={TextAttributes.BOLD}>
             Cost digest{" "}
             <span style={{ fg: api.theme.current.textMuted }}>(24h · lifetime)</span>
@@ -2888,7 +2888,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
     const home = process.env.HOME ?? ""
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1}>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
           <text attributes={TextAttributes.BOLD}>
             Needs input{" "}
             <span style={{ fg: api.theme.current.textMuted }}>({items.length} · longest waiting first)</span>
@@ -3002,12 +3002,52 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
 
 let hostOwner: ReturnType<typeof getOwner> = null
 
+function adaptTheme(theme: Plugin.Context["theme"]) {
+  const opaque = (color: RGBA) => RGBA.fromValues(color.r, color.g, color.b, 1)
+  return {
+    text: theme.text.base,
+    textMuted: theme.text.muted,
+    background: theme.background.base,
+    backgroundPanel: opaque(theme.background.raised.base),
+    backgroundElement: opaque(theme.background.raised.high),
+    border: theme.border.base,
+    borderActive: theme.hue.accent[200],
+    borderSubtle: theme.border.base,
+    accent: theme.hue.accent[200],
+    primary: theme.hue.accent[200],
+    secondary: theme.text.action.secondary.base,
+    error: theme.text.feedback.error.base,
+    warning: theme.text.feedback.warning.base,
+    success: theme.text.feedback.success.base,
+    info: theme.text.feedback.info.base,
+    selectedListItemText: theme.text.base,
+    syntaxComment: theme.syntax.comment,
+    syntaxString: theme.syntax.string,
+    syntaxNumber: theme.syntax.number,
+    syntaxKeyword: theme.syntax.keyword,
+    syntaxType: theme.syntax.type,
+    syntaxFunction: theme.syntax.function,
+    syntaxOperator: theme.syntax.operator,
+    syntaxVariable: theme.syntax.variable,
+    syntaxPunctuation: theme.syntax.punctuation,
+    markdownLink: theme.markdown.link,
+    markdownLinkText: theme.markdown.linkText,
+    markdownBlockQuote: theme.markdown.blockQuote,
+  }
+}
+
 function createApi(ctx: Plugin.Context): TuiPluginApi {
   const [dialogOpen, setDialogOpen] = createSignal(false)
+  let sourceTheme: Plugin.Context["theme"] | undefined
+  let currentTheme: ReturnType<typeof adaptTheme>
   return {
     theme: {
       get current() {
-        return ctx.theme as any
+        if (sourceTheme !== ctx.theme) {
+          sourceTheme = ctx.theme
+          currentTheme = adaptTheme(sourceTheme)
+        }
+        return currentTheme!
       },
     },
     ui: {
