@@ -40,7 +40,7 @@ The product is named `sesh` and described as a session browser for opencode. The
 
 - `README.md` documents the user workflows, keyboard shortcuts, requirements, installation, and a text example of the picker.
 - `AGENTS.md` records behavior contracts and technical constraints for the terminal picker and TUI panel.
-- `tui/sesh-panel.tsx`, `bin/`, and `opencode/tools/sesh-list.ts` are the implemented product surfaces.
+- `tui-plugins/sesh-panel/tui.tsx`, `bin/`, and `plugins/sesh-list.ts` are the implemented product surfaces.
 
 ## Product Principles
 

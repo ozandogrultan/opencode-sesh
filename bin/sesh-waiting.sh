@@ -13,7 +13,7 @@
 #
 # Usage: sesh-waiting.sh [--json]
 #   default prints a human table; --json prints [{id,reason,title,directory,updated}]
-# Keep NEEDS_INPUT_SQL in sync with the TUI sidebar copy in tui/sesh-panel.tsx.
+# Keep NEEDS_INPUT_SQL in sync with the TUI sidebar copy in tui-plugins/sesh-panel/tui.tsx.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,7 +52,7 @@ DB_PATH=$(resolve_db) || { echo 'sesh: session database unavailable' >&2; exit 1
 NOW_MS=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || date +%s000)
 STUCK_BEFORE=$((NOW_MS - 600000))
 
-# NEEDS_INPUT_SQL (shared heuristic — keep in sync with tui/sesh-panel.tsx).
+# NEEDS_INPUT_SQL (shared heuristic — keep in sync with tui-plugins/sesh-panel/tui.tsx).
 read -r -d '' QUERY <<SQL || true
 SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS updated,
   CASE WHEN EXISTS (

@@ -253,7 +253,7 @@ any SQL interpolation.
 Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
 (`sesh-list.sh`, driven by a per-picker `sesh-refresh-worker.sh` that serializes
 scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
-shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui/sesh-panel.tsx`) is a
+shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui-plugins/sesh-panel/tui.tsx`) is a
 SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
 `sesh-list` agent tool reads it through `opencode db`.
 

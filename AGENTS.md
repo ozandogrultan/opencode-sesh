@@ -10,9 +10,9 @@ territory: read this first, then the specific file you need.
 1. **`bin/`** — a fullscreen [fzf](https://github.com/junegunn/fzf) picker for
    any terminal. Lists **all** sessions across **all** project directories,
    full-text searchable, with transcript preview and resume/fork/delete.
-2. **`tui/sesh-panel.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
-   recent-sessions section in the sidebar plus an `option+o` / `/sesh` picker.
-3. **`opencode/tools/sesh-list.ts`** — the `sesh-list` custom tool, so the agent
+2. **`tui-plugins/sesh-panel/tui.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
+   recent-sessions section in the sidebar plus an `alt+o` / `/sesh` picker.
+3. **`plugins/sesh-list.ts`** — the `sesh_list` custom tool, so the agent
    can list sessions across every directory by querying the global `opencode
    db` store (the native `opencode session list` is project-scoped).
 
@@ -29,7 +29,7 @@ bun install            # dev deps (TypeScript, opencode/OpenTUI types)
 bun run test           # fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite (needs fzf >= 0.73)
-bun run typecheck      # tsc over tui/ and opencode/
+bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.config)
 ```
@@ -47,15 +47,14 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
   stay on `opencode session delete`.
 - `contrib/` — caller-side integrations (currently cmux). Nothing here may add
   window management to sesh itself.
-- `tui/sesh-panel.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
-- `opencode/tools/sesh-list.ts` — the agent-facing `sesh-list` tool.
+- `tui-plugins/sesh-panel/tui.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
+- `plugins/sesh-list.ts` — the agent-facing `sesh_list` tool.
 - `scripts/changelog.sh` — release tooling: drafts conventional commits,
   writes a dated version, prints release notes and
   checks the compare links. `tests/changelog.sh` covers it in a throwaway repo.
 - `themes/`, `tests/`, `install.sh`, `README.md`.
 
-The **filename becomes the tool name** in opencode, so `sesh-list.ts` is the
-`sesh-list` tool. Do not rename it without updating the docs.
+The tool name in opencode is `sesh_list`. Do not rename it without updating the docs.
 
 ## Data flow (fzf picker)
 
@@ -137,7 +136,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   and writes the new dated version and compare link. The released section is
   used as the GitHub release body.
 
-## TUI panel (`tui/sesh-panel.tsx`)
+## TUI panel (`tui-plugins/sesh-panel/tui.tsx`)
 
 - **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
   sidebar content stays). Pinned directories sort first, then directory groups
@@ -231,5 +230,5 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - `bun run typecheck` — `tsc` over `tui/` and `opencode/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.
-- Keep `tui/sesh-panel.tsx` and any installed copy byte-identical when testing
+- Keep `tui-plugins/sesh-panel/tui.tsx` and any installed copy byte-identical when testing
   the panel locally.

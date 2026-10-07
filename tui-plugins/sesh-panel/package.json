@@ -1,0 +1,9 @@
+{
+  "name": "opencode-tui-sesh-panel",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./server.ts",
+    "./tui": "./tui.tsx"
+  }
+}

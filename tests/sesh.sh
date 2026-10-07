@@ -317,9 +317,9 @@ XDG_CONFIG_HOME="$inst_home/.config" HOME="$inst_home" PATH="$inst_home/fakebin:
 sync_home="$fixture/sync-home"; mkdir -p "$sync_home"
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --sync-panel > "$fixture/sync-noop.out" 2>&1
 grep -Fq 'not installed' "$fixture/sync-noop.out"
-[ ! -e "$sync_home/.config/opencode/plugins/sesh-panel.tsx" ]
+[ ! -e "$sync_home/.config/opencode/tui-plugins/sesh-panel/tui.tsx" ]
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
-panel="$sync_home/.config/opencode/plugins/sesh-panel.tsx"
+panel="$sync_home/.config/opencode/tui-plugins/sesh-panel/tui.tsx"
 [ -f "$panel" ]
 cp "$panel" "$fixture/panel.orig"
 printf '\n// stale marker\n' >> "$panel"

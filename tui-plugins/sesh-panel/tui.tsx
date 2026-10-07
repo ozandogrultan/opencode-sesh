@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { Project, Session } from "@opencode-ai/sdk/v2"
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
+import { Plugin } from "@opencode/plugin/tui"
+import type { Project, SessionInfo as Session } from "@opencode/client"
+import type { Accessor } from "solid-js"
+
+type TuiPluginApi = any
+type TuiPlugin = (api: TuiPluginApi) => Promise<void>
+import { createEffect, createMemo, createRoot, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { spawn } from "node:child_process"
@@ -80,10 +84,10 @@ function buildMarkdownStyle(theme: ThemeColors): SyntaxStyle {
 }
 
 function getMarkdownStyle(theme: ThemeColors): SyntaxStyle | undefined {
-  if (markdownStyleCache?.theme === theme) return markdownStyleCache.style
+  if (markdownStyleCache?.theme === theme) return markdownStyleCache?.style
   try {
     markdownStyleCache = { theme, style: buildMarkdownStyle(theme) }
-    return markdownStyleCache.style
+    return markdownStyleCache?.style
   } catch {
     try {
       return SyntaxStyle.create()
@@ -391,6 +395,14 @@ function createContextMenu(host: ContextMenuHost) {
   return { open, close, select, activate, click, current: () => state }
 }
 
+type PortalContainer = {
+  position?: string
+  left?: number
+  top?: number
+  zIndex?: number
+  destroyRecursively?: () => void
+}
+
 // Loading-spinner frames for the marker of a session whose agent is working.
 const SIDEBAR_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -401,7 +413,7 @@ function newestFirst(entries: Entry[]): Entry[] {
 // A working agent is the only state the marker displays: everything that
 // finished goes back to the neutral row, with the open session marked inside.
 function sidebarMarker(current: boolean, live?: string): SidebarMarker {
-  if (live === "busy" || live === "retry") return "running"
+  if (live === "running" || live === "busy" || live === "retry") return "running"
   return current ? "current" : "idle"
 }
 
@@ -413,7 +425,7 @@ async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
   const projectResult = await api.client.project.list({})
   const projects = ((projectResult?.data ?? projectResult) as Project[]) ?? []
   const projectName = new Map<string, string>(
-    projects.map((p) => [p.id, p.name?.trim() || shortDir(p.worktree ?? "", home)]),
+    projects.map((p) => [p.id, p.name?.trim() || shortDir(p.canonical, home)]),
   )
   const sessions: Session[] = []
   let cursor: number | undefined
@@ -448,12 +460,13 @@ async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
     .sort((a, b) => b.time.updated - a.time.updated)
     .map((s) => {
       const projectLabel = s.projectID ? projectName.get(s.projectID) : undefined
+      const sDir = (s as any).directory ?? s.location?.directory ?? ""
       return {
         id: s.id,
         title: s.title?.trim() || "(untitled)",
-        dir: s.directory ?? "",
+        dir: sDir,
         group:
-          (projectLabel && projectLabel !== "other" ? projectLabel : shortDir(s.directory ?? "", home)) ||
+          (projectLabel && projectLabel !== "other" ? projectLabel : shortDir(sDir, home)) ||
           "other",
         updated: s.time.updated,
       }
@@ -490,40 +503,33 @@ async function openTranscriptDb(): Promise<any | undefined> {
 // the TUI sync layer only sees permission/question state for sessions owned
 // by the current server, which is invisible cross-project.
 const STUCK_AFTER_MS = 600000
-const NEEDS_INPUT_SQL = (stuckBefore: number) => `
+const LIVE_TOOLS_CTE = (sessionFilter: string) => `
+WITH live AS (
+  SELECT m.session_id AS session_id, m.seq AS seq,
+    json_extract(c.value, '$.name') AS name,
+    json_extract(c.value, '$.state.status') AS status,
+    COALESCE(json_extract(c.value, '$.time.created'), m.time_created) AS created
+  FROM session_message m, json_each(m.data, '$.content') c
+  WHERE m.type = 'assistant'
+    AND (m.data LIKE '%"status":"running"%' OR m.data LIKE '%"status":"pending"%')
+    AND json_extract(c.value, '$.type') = 'tool'
+    AND json_extract(c.value, '$.state.status') IN ('pending', 'running')${sessionFilter}
+)`
+const QUESTION_OPEN = `live.name = 'question'
+  AND NOT EXISTS (
+    SELECT 1 FROM session_message u
+    WHERE u.session_id = live.session_id AND u.type = 'user' AND u.seq > live.seq)`
+const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE("")}
 SELECT s.id AS id,
-  CASE WHEN EXISTS (
-    SELECT 1 FROM part p
-    WHERE p.session_id = s.id
-      AND json_extract(p.data, '$.type') = 'tool'
-      AND json_extract(p.data, '$.tool') = 'question'
-      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
-      AND NOT EXISTS (
-        SELECT 1 FROM message m
-        WHERE m.session_id = s.id
-          AND json_extract(m.data, '$.role') = 'user'
-          AND m.time_created > p.time_created)
-  ) THEN 'question' ELSE 'stuck' END AS reason
-FROM session s
+  CASE WHEN EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
+    THEN 'question' ELSE 'stuck' END AS reason
+FROM session_v2 s
 WHERE COALESCE(s.time_archived, 0) = 0
   AND s.parent_id IS NULL
-  AND (EXISTS (
-    SELECT 1 FROM part p
-    WHERE p.session_id = s.id
-      AND json_extract(p.data, '$.type') = 'tool'
-      AND json_extract(p.data, '$.tool') = 'question'
-      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
-      AND NOT EXISTS (
-        SELECT 1 FROM message m
-        WHERE m.session_id = s.id
-          AND json_extract(m.data, '$.role') = 'user'
-          AND m.time_created > p.time_created)
-  ) OR EXISTS (
-    SELECT 1 FROM part p2
-    WHERE p2.session_id = s.id
-      AND json_extract(p2.data, '$.type') = 'tool'
-      AND json_extract(p2.data, '$.state.status') = 'running'
-      AND p2.time_created < ${stuckBefore}))
+  AND (EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
+    OR EXISTS (
+      SELECT 1 FROM live
+      WHERE live.session_id = s.id AND live.status = 'running' AND live.created < ${stuckBefore}))
 ORDER BY s.time_updated DESC`
 
 async function queryWaitingIds(db: any): Promise<Map<string, string>> {
@@ -558,19 +564,12 @@ async function queryWaitingDetails(db: any): Promise<Map<string, WaitingDetail>>
   const cutoff = Date.now() - STUCK_AFTER_MS
   for (let i = 0; i < ids.length; i += 200) {
     const batch = ids.slice(i, i + 200)
-    const rows = (db.query(`
- SELECT p.session_id AS id,
-   MIN(CASE WHEN json_extract(p.data, '$.tool') = 'question'
-      AND COALESCE(json_extract(p.data, '$.state.status'), 'pending') != 'completed'
-      AND NOT EXISTS (SELECT 1 FROM message m WHERE m.session_id = p.session_id
-        AND json_extract(m.data, '$.role') = 'user' AND m.time_created > p.time_created)
-     THEN p.time_created END) AS question_since,
-   MIN(CASE WHEN json_extract(p.data, '$.state.status') = 'running'
-      AND p.time_created < ${cutoff} THEN p.time_created END) AS stuck_since
- FROM part p
- WHERE p.session_id IN (${batch.map(() => "?").join(",")})
-   AND json_extract(p.data, '$.type') = 'tool'
- GROUP BY p.session_id`).all(...batch) ?? []) as { id: string; question_since: number | null; stuck_since: number | null }[]
+    const rows = (db.query(`${LIVE_TOOLS_CTE(` AND m.session_id IN (${batch.map(() => "?").join(",")})`)}
+SELECT live.session_id AS id,
+  MIN(CASE WHEN ${QUESTION_OPEN} THEN live.created END) AS question_since,
+  MIN(CASE WHEN live.status = 'running' AND live.created < ${cutoff} THEN live.created END) AS stuck_since
+FROM live
+GROUP BY live.session_id`).all(...batch) ?? []) as { id: string; question_since: number | null; stuck_since: number | null }[]
     for (const row of rows) {
       const detail = details.get(row.id)
       if (!detail) continue
@@ -583,12 +582,20 @@ async function queryWaitingDetails(db: any): Promise<Map<string, WaitingDetail>>
 
 function addTranscript(index: Map<string, string>, sid: string, data: string): void {
   try {
-    const part = JSON.parse(data) as { type?: unknown; text?: unknown }
-    if (part?.type !== "text" || typeof part.text !== "string") return
-    const base = index.get(sid) ?? ""
-    index.set(sid, `${base} ${part.text.toLowerCase()}`.trim())
+    const message = JSON.parse(data) as { text?: unknown; content?: unknown }
+    const texts: string[] = []
+    if (typeof message?.text === "string") texts.push(message.text)
+    if (Array.isArray(message?.content)) {
+      for (const part of message.content as { type?: unknown; text?: unknown }[]) {
+        if (part?.type === "text" && typeof part.text === "string") texts.push(part.text)
+      }
+    }
+    for (const text of texts) {
+      const base = index.get(sid) ?? ""
+      index.set(sid, `${base} ${text.toLowerCase()}`.trim())
+    }
   } catch {
-    // ignore malformed parts
+    // ignore malformed messages
   }
 }
 
@@ -619,7 +626,7 @@ async function buildSearchIndex(
         const placeholders = batch.map(() => "?").join(",")
         const rows = (db
           .query(
-            `SELECT session_id AS sid, data FROM part WHERE session_id IN (${placeholders}) AND json_extract(data, '$.type') = 'text' ORDER BY time_created`,
+            `SELECT session_id AS sid, data FROM session_message WHERE session_id IN (${placeholders}) AND type IN ('user', 'assistant') ORDER BY seq`,
           )
           .all(...batch) ?? []) as { sid: string; data: string }[]
         for (const row of rows) addTranscript(index, row.sid, row.data)
@@ -676,10 +683,10 @@ async function buildSearchIndexRemote(
           const result = await api.client.session.messages({ sessionID: id })
           const messages = result.data ?? []
           const text = messages
-            .flatMap((message) =>
+            .flatMap((message: any) =>
               message.parts
-                .filter((part) => part.type === "text")
-                .map((part) => (part as { text: string }).text),
+                .filter((part: any) => part.type === "text")
+                .map((part: any) => (part as { text: string }).text),
             )
             .join(" ")
             .toLowerCase()
@@ -769,10 +776,10 @@ async function fetchTranscriptText(api: TuiPluginApi, sessionID: string): Promis
     const result = await api.client.session.messages({ sessionID })
     const messages = result.data ?? []
     const blocks = messages
-      .map((message) => {
+      .map((message: any) => {
         const text = message.parts
-          .filter((part) => part.type === "text")
-          .map((part) => (part as { text: string }).text)
+          .filter((part: any) => part.type === "text")
+          .map((part: any) => (part as { text: string }).text)
           .join("\n")
           .trim()
         if (!text) return ""
@@ -908,14 +915,6 @@ function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Ent
   return start
 }
 
-type PortalContainer = {
-  position?: string
-  left?: number
-  top?: number
-  zIndex?: number
-  destroyRecursively?: () => void
-}
-
 type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; refreshPins: () => void }
 
 function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
@@ -926,6 +925,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [collapsed, setCollapsed] = createSignal<Record<string, boolean>>({})
   const [hovered, setHovered] = createSignal<string>()
   const preview = createTranscriptPreview(props.api)
+  const [menuState, setMenuState] = createSignal<MenuState>()
+  let portalContainer: PortalContainer | undefined
   const [query, setQuery] = createSignal("")
   const [deleting, setDeleting] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
@@ -934,8 +935,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [cursor, setCursor] = createSignal(0)
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
-  const [menuState, setMenuState] = createSignal<MenuState>()
-  let portalContainer: PortalContainer | undefined
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
@@ -1041,78 +1040,23 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   }
 
   const toggleSection = () => {
-    menu.close()
     if (!sectionCollapsed()) {
       cancelDelete()
       setNavActive(false)
       setSearching(false)
       setHovered(undefined)
+      menu.close()
     }
     setSectionCollapsed((value) => !value)
   }
 
   const openSession = (entry: Entry) => props.api.route.navigate("session", { sessionID: entry.id })
 
-  const forkEntry = async (entry: Entry) => {
-    try {
-      const result = await props.api.client.session.fork({
-        sessionID: entry.id,
-        directory: entry.dir || undefined,
-      })
-      const created = (result?.data ?? result) as Session | undefined
-      if (!created?.id) throw new Error("fork returned no session")
-      props.api.route.navigate("session", { sessionID: created.id })
-      props.api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
-    } catch {
-      props.api.ui.toast({ message: "Could not fork session", variant: "error" })
-    }
-  }
-
-  const menu = createContextMenu({
-    registerLayer: (layer) => props.api.keymap.registerLayer(layer),
-    actions: {
-      open: (entry) => void openSession(entry),
-      preview: (entry) => preview.open(entry),
-      workspace: (entry) => openInCmuxWorkspace(props.api, entry),
-      fork: (entry) => void forkEntry(entry),
-      pin: (entry) => props.onTogglePin("sessions", entry.id),
-      delete: (entry) => void deleteEntry(entry),
-    },
-    pinned: (entry) => props.pins().sessions.includes(entry.id),
-    cmux: () => Boolean(process.env.CMUX_WORKSPACE_ID),
-    blocked: () => props.api.ui.dialog.open,
-    onChange: setMenuState,
-  })
-
-  const menuBox = createMemo(() => {
-    const state = menuState()
-    if (!state) return undefined
-    return contextMenuBox(
-      { x: state.x, y: state.y, ...contextMenuSize(state.items) },
-      props.api.renderer.width,
-      props.api.renderer.height,
-    )
-  })
-
   // Flat order of the rows a cursor can land on, so keyboard navigation and
   // mouse hover resolve to the same row.
   const itemRows = createMemo(() => tree().flatMap((row) => (row.kind === "item" ? [row.entry] : [])))
   const isActive = (id: string) => (navActive() ? itemRows()[cursor()]?.id === id : hovered() === id)
   const isPendingDelete = (id: string) => pendingDelete() === id
-  const moveCursor = (delta: number) => {
-    const count = itemRows().length
-    if (count === 0) return
-    setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
-  }
-  let previousRows: Entry[] = []
-  createEffect(() => {
-    const rows = itemRows()
-    const selected = previousRows[cursor()]?.id
-    const position = rows.findIndex((entry) => entry.id === selected)
-    if (position >= 0 && position !== cursor()) setCursor(position)
-    else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
-    previousRows = rows
-  })
 
   const routeKey = createMemo(() => {
     const route = props.api.route.current
@@ -1128,13 +1072,28 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     if (props.api.ui.dialog.open) menu.close()
   })
 
+  const moveCursor = (delta: number) => {
+    const count = itemRows().length
+    if (count === 0) return
+    setCursor((value) => Math.max(0, Math.min(count - 1, value + delta)))
+  }
+  let previousRows: Entry[] = []
+  createEffect(() => {
+    const rows = itemRows()
+    const selected = previousRows[cursor()]?.id
+    const position = rows.findIndex((entry) => entry.id === selected)
+    if (position >= 0 && position !== cursor()) setCursor(position)
+    else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
+    previousRows = rows
+  })
+
   // Marker only: a spinner for a working agent, the open-session dot, and the
   // neutral row for idle sessions. Titles stay plain and no status text is
   // rendered.
   const markerOf = (id: string): SidebarMarker => {
     let live: string | undefined
     try {
-      live = props.api.state.session.status(id)?.type
+      live = props.api.state.session.status(id)
     } catch {}
     return sidebarMarker(id === currentID(), live)
   }
@@ -1216,6 +1175,47 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       setDeleting(undefined)
     }
   }
+
+  const forkEntry = async (entry: Entry) => {
+    try {
+      const result = await props.api.client.session.fork({
+        sessionID: entry.id,
+        directory: entry.dir || undefined,
+      })
+      const created = (result?.data ?? result) as Session | undefined
+      if (!created?.id) throw new Error("fork returned no session")
+      props.api.route.navigate("session", { sessionID: created.id })
+      props.api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
+    } catch {
+      props.api.ui.toast({ message: "Could not fork session", variant: "error" })
+    }
+  }
+
+  const menu = createContextMenu({
+    registerLayer: (layer) => props.api.keymap.registerLayer(layer),
+    actions: {
+      open: (entry) => void openSession(entry),
+      preview: (entry) => preview.open(entry),
+      workspace: (entry) => openInCmuxWorkspace(props.api, entry),
+      fork: (entry) => void forkEntry(entry),
+      pin: (entry) => props.onTogglePin("sessions", entry.id),
+      delete: (entry) => void deleteEntry(entry),
+    },
+    pinned: (entry) => props.pins().sessions.includes(entry.id),
+    cmux: () => Boolean(process.env.CMUX_WORKSPACE_ID),
+    blocked: () => props.api.ui.dialog.open,
+    onChange: setMenuState,
+  })
+
+  const menuBox = createMemo(() => {
+    const state = menuState()
+    if (!state) return undefined
+    return contextMenuBox(
+      { x: state.x, y: state.y, ...contextMenuSize(state.items) },
+      props.api.renderer.width,
+      props.api.renderer.height,
+    )
+  })
 
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
@@ -1311,7 +1311,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "option+p",
+          key: "alt+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => openSidebarPreview(entry),
@@ -1355,7 +1355,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         cmd: () => setCursor(Math.max(0, itemRows().length - 1)),
       },
       {
-        key: "option+p",
+        key: "alt+p",
         desc: "Preview session transcript",
         preventDefault: true,
         cmd: () => {
@@ -1463,7 +1463,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         when={entries().length > 0}
         fallback={
           <text style={{ fg: theme().textMuted }}>
-            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · option+o to browse"}
+            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · alt+o to browse"}
           </text>
         }
       >
@@ -1575,14 +1575,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </For>
         </scrollbox>
         <Show when={remaining() > 0}>
-          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · option+o for all`}</text>
+          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · alt+o for all`}</text>
         </Show>
         <Show when={query().trim() && filteredEntries().length === 0}>
-            <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+            <text style={{ fg: theme().textMuted }}>No title or directory matches · alt+o to search transcripts</text>
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · option+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · alt+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1784,7 +1784,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 20,
       bindings: [
         {
-          key: "option+p",
+          key: "alt+p",
           desc: "Preview session transcript",
           preventDefault: true,
           cmd: () => preview.open(entry),
@@ -1851,7 +1851,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             <box flexDirection="row" gap={1}>
               <text style={{ fg: theme().textMuted }}>Recent sessions</text>
               <text style={{ fg: theme().textMuted }}>
-                {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
+                {loadFailed() ? "· list unavailable, will retry" : "· none yet, alt+o to browse"}
               </text>
             </box>
           }
@@ -1859,7 +1859,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           <box flexDirection="row" justifyContent="space-between" gap={2}>
             <box flexDirection="row" gap={1}>
               <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <text style={{ fg: theme().textMuted }}>· option+o for all</text>
+              <text style={{ fg: theme().textMuted }}>· alt+o for all</text>
             </box>
             <box
               flexDirection="row"
@@ -1923,7 +1923,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             )}
           </For>
           <Show when={visible().length === 0}>
-              <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+              <text style={{ fg: theme().textMuted }}>No title or directory matches · alt+o to search transcripts</text>
           </Show>
         </Show>
       </box>
@@ -2334,6 +2334,7 @@ const tui: TuiPlugin = async (api) => {
     const disposeNav = api.keymap.registerLayer({
       // Outrank the built-in dialog layer so Escape reaches this picker before
       // the dialog host closes the whole thing.
+      mode: "global",
       priority: 1,
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
@@ -2356,7 +2357,7 @@ const tui: TuiPlugin = async (api) => {
             choose()
           },
         },
-        { key: "option+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
+        { key: "alt+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
         { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
           const entry = selectableEntries()[cursor()]
           if (entry) onTogglePin("sessions", entry.id)
@@ -2394,8 +2395,8 @@ const tui: TuiPlugin = async (api) => {
             else if (target) setScope(target.group)
           },
         },
-        { key: "option+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
-        { key: "option+s", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
+        { key: "alt+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
+        { key: "alt+s", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
         {
           key: "escape",
           desc: "Close",
@@ -2457,8 +2458,21 @@ const tui: TuiPlugin = async (api) => {
                     handleEscape()
                     return
                   }
+                  if (event.ctrl && event.name === "x") {
+                    event.preventDefault()
+                    if (confirmArmed()) return
+                    const target = selectableEntries()[cursor()]
+                    if (target) armDelete(target)
+                    return
+                  }
+                  if (event.ctrl && event.name === "f") {
+                    event.preventDefault()
+                    const target = selectableEntries()[cursor()]
+                    if (target) void forkEntry(target)
+                    return
+                  }
                   if (pendingDelete()) {
-                    if (event.name === "y" || (event.ctrl && event.name === "x") || event.name === "enter" || event.name === "return") {
+                    if (event.name === "y" || event.name === "enter" || event.name === "return") {
                       event.preventDefault()
                       confirmArmed()
                       return
@@ -2588,7 +2602,7 @@ const tui: TuiPlugin = async (api) => {
                       </text>
                       </box>
                       <Show when={excerpt()}>
-                        {(match) => (
+                        {(match: Accessor<string>) => (
                           <box flexDirection="row" gap={1} paddingLeft={2}>
                             <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>↳</text>
                             <Highlighted
@@ -2632,7 +2646,7 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ move · enter open · ctrl+g project · option+w input · option+s pinned · option+p preview"}
+                : "↑↓ move · enter open · ctrl+g project · alt+w input · alt+s pinned · alt+p preview"}
             </text>
             <Show when={!pendingDelete()}>
               <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
@@ -2667,7 +2681,7 @@ const tui: TuiPlugin = async (api) => {
               <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }}>
                 <Show when={previewID()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Select a session to preview</text>}>
                   <Show when={previewText()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Loading…</text>}>
-                    {(text) =>
+                    {(text: Accessor<string>) =>
                       getMarkdownStyle(api.theme.current) ? (
                         <markdown
                           content={text()}
@@ -2712,9 +2726,9 @@ SELECT s.directory AS directory,
   ROUND(SUM(CASE WHEN m.time_created >= ${cutoff} THEN COALESCE(json_extract(m.data, '$.cost'), 0) ELSE 0 END), 4) AS window_cost,
   ROUND(SUM(COALESCE(json_extract(m.data, '$.cost'), 0)), 4) AS lifetime_cost,
   COUNT(DISTINCT s.id) AS sessions
-FROM message m
-JOIN session s ON s.id = m.session_id
-WHERE json_extract(m.data, '$.role') = 'assistant'
+FROM session_message m
+JOIN session_v2 s ON s.id = m.session_id
+WHERE m.type = 'assistant'
   AND json_extract(m.data, '$.cost') IS NOT NULL
 GROUP BY s.directory
 ORDER BY lifetime_cost DESC`).all() ?? []) as {
@@ -2982,8 +2996,245 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
   ])
 
   api.keymap.registerLayer({
-    bindings: [{ key: "option+o", desc: "Pick session", preventDefault: true, cmd: () => void openPicker() }],
+    bindings: [{ key: "alt+o", desc: "Pick session", preventDefault: true, cmd: () => void openPicker() }],
   })
 }
 
-export default { id: "sesh-panel", tui }
+let hostOwner: ReturnType<typeof getOwner> = null
+
+function createApi(ctx: Plugin.Context): TuiPluginApi {
+  const [dialogOpen, setDialogOpen] = createSignal(false)
+  return {
+    theme: {
+      get current() {
+        return ctx.theme as any
+      },
+    },
+    ui: {
+      toast(opts: { message: string; variant?: "info" | "warning" | "error" | "success" }) {
+        ctx.ui.toast.show({
+          title: "Session",
+          message: opts.message,
+          variant: opts.variant ?? "info",
+        })
+      },
+      dialog: {
+        clear() {
+          ctx.ui.dialog.clear()
+          setDialogOpen(false)
+        },
+        replace(render: () => any) {
+          setDialogOpen(true)
+          ctx.ui.dialog.show(render, () => setDialogOpen(false))
+        },
+        setSize(size: string) {
+          ctx.ui.dialog.set({ size: size as any })
+        },
+        // V2's Dialog has no reactive open/isOpen accessor; track it locally
+        // from the replace/clear calls above and the host's onClose callback.
+        get open() {
+          return dialogOpen()
+        },
+      },
+    },
+    route: {
+      get current() {
+        const r = ctx.ui.router.current()
+        if (r.type === "session") {
+          return { name: "session", params: { sessionID: r.sessionID } }
+        }
+        return { name: r.type, params: {} }
+      },
+      navigate(name: string, params?: { sessionID?: string }) {
+        if (name === "session" && params?.sessionID) {
+          ctx.ui.router.navigate({ type: "session", sessionID: params.sessionID })
+        } else if (name === "home") {
+          ctx.ui.router.navigate({ type: "home" })
+        }
+      },
+    },
+    state: {
+      path: {
+        get directory() {
+          return ctx.location?.directory ?? process.cwd()
+        },
+      },
+      session: {
+        status(id: string) {
+          return ctx.data.session.status(id)
+        },
+      },
+    },
+    mode: {
+      current() {
+        return ctx.keymap.mode.current()
+      },
+    },
+    renderer: {
+      get height() {
+        return ctx.renderer?.height ?? 40
+      },
+      get width() {
+        return ctx.renderer?.width ?? 120
+      },
+      get root() {
+        return ctx.renderer.root
+      },
+      get currentFocusedEditor() {
+        return ctx.renderer.currentFocusedEditor
+      },
+      on(event: string, handler: (...args: any[]) => void) {
+        ctx.renderer.on(event, handler)
+      },
+      off(event: string, handler: (...args: any[]) => void) {
+        ctx.renderer.off(event, handler)
+      },
+    },
+    keymap: {
+      registerLayer(layer: {
+        mode?: string
+        priority?: number
+        bindings?: Array<{ key: string; desc?: string; preventDefault?: boolean; cmd: () => void }>
+      }) {
+        return runWithOwner(hostOwner, () => createRoot((dispose) => {
+          ctx.keymap.layer(() => ({
+            mode: layer.mode ?? "base",
+            priority: layer.priority ?? 20,
+            commands: (layer.bindings ?? []).map((b, i) => ({
+              id: `sesh-cmd-${Math.random().toString(36).slice(2)}-${i}`,
+              title: b.desc,
+              bind: b.key,
+              run: () => {
+                b.cmd()
+              },
+            })),
+          }))
+          return dispose
+        }))
+      },
+    },
+    slots: {
+      register(cfg: { order?: number; slots: Record<string, () => any> }) {
+        if (cfg.slots.sidebar_content) {
+          ctx.ui.slot({
+            prepend: "sidebar.content",
+            render: cfg.slots.sidebar_content as any,
+          })
+        }
+        if (cfg.slots.home_bottom) {
+          ctx.ui.slot({
+            prepend: "home.footer",
+            render: cfg.slots.home_bottom as any,
+          })
+        }
+      },
+    },
+    command: {
+      register(factory: () => Array<{
+        title: string
+        value: string
+        description?: string
+        category?: string
+        slash?: { name: string }
+        onSelect: () => void
+      }>) {
+        ctx.keymap.layer(() => ({
+          mode: "global",
+          priority: 20,
+          commands: factory().map((cmd) => ({
+            id: cmd.value,
+            title: cmd.title,
+            description: cmd.description,
+            group: cmd.category,
+            palette: true,
+            slash: cmd.slash ? { name: cmd.slash.name } : undefined,
+            run: () => {
+              cmd.onSelect()
+            },
+          })),
+        }))
+      },
+    },
+    client: {
+      project: {
+        async list() {
+          const res: any = await ctx.client.project.list()
+          return { data: Array.isArray(res) ? res : (res?.data ?? []) }
+        },
+      },
+      session: {
+        async delete(req: { sessionID: string; directory?: string }) {
+          await ctx.client.session.remove({ sessionID: req.sessionID })
+          return { data: undefined }
+        },
+        async fork(req: { path: { id: string } }) {
+          const res: any = await ctx.client.session.fork({ sessionID: req.path.id })
+          return { data: res?.data ?? res }
+        },
+        async messages(req: { path?: { id?: string }; sessionID?: string }) {
+          const sessionID = req.sessionID ?? req.path?.id ?? ""
+          const res = await ctx.client.message.list({ sessionID, order: "asc", limit: 100 })
+          const messages = (res.data ?? []).map((m: any) => {
+            let text = ""
+            if (m.type === "user") text = m.text ?? ""
+            else if (m.type === "assistant") {
+              text = (m.content ?? [])
+                .filter((c: any) => c.type === "text")
+                .map((c: any) => c.text)
+                .join("\n")
+            }
+            return {
+              id: m.id,
+              info: { role: m.type },
+              parts: [{ type: "text", text }],
+            }
+          })
+          return { data: messages }
+        },
+      },
+      experimental: {
+        session: {
+          async list(input: any) {
+            // V1 paged the global list with a numeric `time.updated` cursor and a
+            // descending order. V2 returns an opaque cursor per location, so
+            // fetch once and page in memory to keep the caller's loop intact.
+            const limit = Number(input?.limit) > 0 ? Number(input.limit) : 200
+            const cursor = typeof input?.cursor === "number" ? input.cursor : undefined
+            const res: any = await ctx.client.session.list({ limit: 5000, order: "desc" })
+            const all: any[] = Array.isArray(res) ? res : (res?.data ?? [])
+            const normalized = all
+              .map((s: any) => ({
+                ...s,
+                directory: s.directory ?? s.location?.directory ?? "",
+              }))
+              .sort((a: any, b: any) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
+            const page =
+              cursor === undefined
+                ? normalized.slice(0, limit)
+                : normalized.filter((s: any) => (s.time?.updated ?? 0) < cursor).slice(0, limit)
+            return { data: page }
+          },
+        },
+      },
+    },
+  } as any
+}
+
+export default Plugin.define({
+  id: "sesh-panel",
+  async setup(ctx) {
+    const api = createApi(ctx)
+    let initialized = false
+    return ctx.ui.slot({
+      append: "app",
+      render: () => {
+        if (!initialized) {
+          initialized = true
+          hostOwner = getOwner()
+          void tui(api)
+        }
+        return <box />
+      },
+    })
+  },
+})

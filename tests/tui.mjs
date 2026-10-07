@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Contract regressions for the TUI data layer (tui/sesh-panel.tsx): global
+// Contract regressions for the TUI data layer (tui-plugins/sesh-panel/tui.tsx): global
 // session pagination, full transcript-index coverage, bounded remote
 // concurrency, and progress reporting. The panel is TSX, so the pure data
 // functions are extracted and evaluated with stubbed client/readFile.
@@ -21,7 +21,7 @@ if (typeof stripTypeScriptTypes !== "function") {
 }
 
 function loadDataLayer(readExtraction = async () => { throw new Error("no local cache") }) {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("function shortDir")
   const end = source.indexOf("const TRANSCRIPT_PREVIEW_TURNS")
   assert.ok(start >= 0 && end > start, "could not locate the TUI data layer; update this test")
@@ -41,7 +41,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
 }
 
 function loadPinnedSort() {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("function pinnedFirst")
   const end = source.indexOf("// Sessions panel", start)
   assert.ok(start >= 0 && end > start, "could not locate TUI pin sorting")
@@ -49,7 +49,7 @@ function loadPinnedSort() {
 }
 
 function loadPickerWindow() {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("type PickerRow =")
   const end = source.indexOf("type PinProps =", start)
   assert.ok(start >= 0 && end > start, "could not locate picker viewport logic")
@@ -80,7 +80,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // The sidebar lists every session without a row cap: all filtered entries
 // reach the tree, and overflow scrolls inside the stretched scrollbox.
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.doesNotMatch(source, /slice\(0, SIDEBAR_LIMIT\)/)
   assert.doesNotMatch(source, /sidebarRowBudget/)
   assert.match(source, /const shownEntries = createMemo\(\(\) => filteredEntries\(\)\)/)
@@ -89,7 +89,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // The delete confirm targets the armed row wherever the pointer is: leaving
 // the armed row (edge-hover flicker) must not disarm the pending delete.
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.doesNotMatch(source, /pending !== hovered\(\)/)
   assert.match(source, /const confirmArmed = /)
   assert.match(source, /if \(pendingDelete\(\)\) return\s+setQuery\(value\)/)
@@ -99,7 +99,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // passes arguments), each read-only: costs renders a digest, needs opens the
 // waiting set. Destructive actions stay CLI-only.
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.match(source, /slash: \{ name: "sesh-costs" \}/)
   assert.match(source, /slash: \{ name: "sesh-needs" \}/)
   assert.match(source, /const openCosts = /)
@@ -109,7 +109,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // The sidebar surfaces needs-input triage: a virtual group above the
 // directory groups, fed by the shared NEEDS_INPUT_SQL heuristic.
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.match(source, /__needs_input__/)
   assert.match(source, /NEEDS_INPUT_SQL/)
   assert.match(source, /need input/)
@@ -118,10 +118,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Space must remain available to both search boxes and the main prompt even
 // when a session row is hovered or selected in the sidebar.
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const previewKeys = [...source.matchAll(/key: "([^"]+)",\s*desc: "Preview session transcript"/g)]
   assert.equal(previewKeys.length, 3, "expected hover and sidebar navigation preview bindings")
-  assert.ok(previewKeys.every((match) => match[1] === "option+p"), "Sidebar preview uses Option-P without stealing Space")
+  assert.ok(previewKeys.every((match) => match[1] === "alt+p"), "Sidebar preview uses Alt/Option-P without stealing Space")
   assert.match(source, /key: "space", preventDefault: true, cmd: \(\) => append\(" "\)/)
 }
 
@@ -144,8 +144,10 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Sidebar markers: a working agent spins (even when it is the open session),
 // the open session keeps its own dot and every other idle row stays neutral.
 {
+  assert.equal(sidebarMarker(false, "running"), "running")
   assert.equal(sidebarMarker(false, "busy"), "running")
   assert.equal(sidebarMarker(false, "retry"), "running")
+  assert.equal(sidebarMarker(true, "running"), "running")
   assert.equal(sidebarMarker(true, "busy"), "running")
   assert.equal(sidebarMarker(true, "idle"), "current")
   assert.equal(sidebarMarker(false, "idle"), "idle")
@@ -259,23 +261,25 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const sqlite = new DatabaseSync(":memory:")
   try {
-    sqlite.exec(`CREATE TABLE session (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER);
-      CREATE TABLE part (session_id TEXT, time_created INTEGER, data TEXT);
-      CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT);`)
-    const addSession = sqlite.prepare("INSERT INTO session VALUES (?, 0, NULL, ?)")
-    const addPart = sqlite.prepare("INSERT INTO part VALUES (?, ?, ?)")
-    const addMessage = sqlite.prepare("INSERT INTO message VALUES (?, ?, ?)")
+    sqlite.exec(`CREATE TABLE session_v2 (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER);
+      CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, time_created INTEGER, data TEXT);`)
+    const addSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, NULL, ?)")
+    const addMessage = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)")
     const now = Date.now()
     for (const id of ["ses_question", "ses_stuck", "ses_answered", "ses_fresh"]) addSession.run(id, now)
-    const question = JSON.stringify({ type: "tool", tool: "question", state: { status: "pending" } })
-    const running = JSON.stringify({ type: "tool", tool: "shell", state: { status: "running" } })
-    addPart.run("ses_question", now - 3_600_000, question)
-    addPart.run("ses_question", now - 1_800_000, question)
-    addPart.run("ses_stuck", now - 7_200_000, running)
-    addPart.run("ses_answered", now - 8_000_000, question)
-    addMessage.run("ses_answered", now - 100_000, JSON.stringify({ role: "user" }))
-    addPart.run("ses_fresh", now - 1_000, running)
-    const details = await queryWaitingDetails({ query: (sql) => sqlite.prepare(sql) })
+    const question = (created) => JSON.stringify({
+      content: [{ type: "tool", name: "question", state: { status: "pending" }, time: { created } }]
+    })
+    const running = (created) => JSON.stringify({
+      content: [{ type: "tool", name: "shell", state: { status: "running" }, time: { created } }]
+    })
+    addMessage.run("ses_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
+    addMessage.run("ses_question", 2, "assistant", now - 1_800_000, question(now - 1_800_000))
+    addMessage.run("ses_stuck", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
+    addMessage.run("ses_answered", 1, "assistant", now - 8_000_000, question(now - 8_000_000))
+    addMessage.run("ses_answered", 2, "user", now - 100_000, JSON.stringify({}))
+    addMessage.run("ses_fresh", 1, "assistant", now - 1_000, running(now - 1_000))
+    const details = await queryWaitingDetails({ query: (sql) => ({ all: (...args) => sqlite.prepare(sql).all(...args) }) })
     assert.equal(details.get("ses_question")?.reason, "question")
     assert.equal(details.get("ses_question")?.since, now - 3_600_000)
     assert.equal(details.get("ses_stuck")?.reason, "stuck")
@@ -454,7 +458,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
 }
 
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const sidebar = source.slice(source.indexOf("function SidebarSessions"), source.indexOf("function HomeSessions"))
   assert.ok(sidebar.length > 1000, "could not locate the sidebar component")
   assert.match(sidebar, /event\.button === RIGHT_BUTTON[\s\S]{0,120}menu\.open\(row\.entry, event\.x, event\.y\)/)
@@ -482,7 +486,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
 
 // Transcript preview esc label allows closing on click
 {
-  const source = readFileSync(join(root, "tui/sesh-panel.tsx"), "utf8")
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.match(source, /<text style=\{\{ fg: api\.theme\.current\.textMuted \}\} onMouseUp=\{close\}>esc<\/text>/)
 }
 

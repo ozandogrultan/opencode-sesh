@@ -12,5 +12,5 @@
     "allowImportingTsExtensions": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["tui/**/*.tsx", "opencode/**/*.ts"]
+  "include": ["tui-plugins/**/*.tsx", "tui-plugins/**/*.ts", "plugins/**/*.ts"]
 }

@@ -11,8 +11,8 @@ cd opencode-sesh
 bun install
 ```
 
-There is no build step. `bin/` holds flat shell scripts, `tui/sesh-panel.tsx`
-is the OpenTUI plugin, and `opencode/tools/sesh-list.ts` is the agent tool.
+There is no build step. `bin/` holds flat shell scripts, `tui-plugins/sesh-panel/tui.tsx`
+is the OpenTUI plugin, and `plugins/sesh-list.ts` is the agent tool.
 
 ## Before you open a PR
 

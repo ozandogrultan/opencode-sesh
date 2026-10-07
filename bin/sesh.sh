@@ -41,8 +41,8 @@ if [ "${1:-}" = --check ]; then
   # The TUI panel is a copied file that opencode imports once at startup. Report
   # when the installed copy has fallen behind this package so upgrades are not
   # silently stale.
-  panel_bundled="$SCRIPT_DIR/../tui/sesh-panel.tsx"
-  panel_installed="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/sesh-panel.tsx"
+  panel_bundled="$SCRIPT_DIR/../tui-plugins/sesh-panel/tui.tsx"
+  panel_installed="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/tui-plugins/sesh-panel/tui.tsx"
   if [ -f "$panel_installed" ] && [ -f "$panel_bundled" ]; then
     if cmp -s "$panel_bundled" "$panel_installed"; then
       echo 'sesh: sidebar panel is current'
