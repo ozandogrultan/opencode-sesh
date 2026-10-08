@@ -11,6 +11,19 @@ import { DatabaseSync } from "node:sqlite"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 
+const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
+for (const entry of Object.values(manifest.exports)) {
+  const source = readFileSync(join(root, entry), "utf8")
+  const imports = [...source.matchAll(/^import (?!type\b).* from "([^"]+)"/gm)].map((match) => match[1])
+  const jsxSource = source.match(/@jsxImportSource (\S+)/)?.[1]
+  if (jsxSource) imports.push(jsxSource)
+  for (const specifier of imports) {
+    if (specifier.startsWith("node:") || specifier.startsWith(".")) continue
+    const name = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]
+    assert.ok(manifest.peerDependencies?.[name] || manifest.dependencies?.[name], `${entry}: runtime import ${name} must be declared`)
+  }
+}
+
 let stripTypeScriptTypes
 try {
   ;({ stripTypeScriptTypes } = await import("node:module"))
