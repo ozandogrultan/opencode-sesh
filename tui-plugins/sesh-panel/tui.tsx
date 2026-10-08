@@ -1149,6 +1149,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     return true
   }
 
+  let sidebarScroll: { scrollTop: number } | undefined
+
   const deleteEntry = async (entry: Entry) => {
     cancelDelete()
     if (deleting()) return
@@ -1165,8 +1167,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         props.api.ui.toast({ message: "Session was not deleted", variant: "error" })
         return
       }
+      const scrollTop = sidebarScroll?.scrollTop ?? 0
       setEntries(remaining)
       setHovered(undefined)
+      const restore = () => {
+        if (sidebarScroll) sidebarScroll.scrollTop = scrollTop
+      }
+      queueMicrotask(restore)
+      setTimeout(restore, 0)
       props.api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
       if (currentID() === entry.id) props.api.route.navigate("home")
     } catch {
@@ -1240,7 +1248,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           },
         },
         {
-          key: "ctrl+x",
+          key: "alt+d",
           desc: "Confirm delete",
           preventDefault: true,
           cmd: () => {
@@ -1317,7 +1325,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           cmd: () => openSidebarPreview(entry),
         },
         {
-          key: "ctrl+x",
+          key: "alt+d",
           desc: "Delete session",
           preventDefault: true,
           cmd: () => {
@@ -1364,7 +1372,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "ctrl+x",
+        key: "alt+d",
         desc: "Delete session",
         preventDefault: true,
         cmd: () => {
@@ -1463,7 +1471,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         when={entries().length > 0}
         fallback={
           <text style={{ fg: theme().textMuted }}>
-            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · alt+o to browse"}
+            {loadFailed() ? "Session list unavailable · will retry" : "No sessions yet · option+o to browse"}
           </text>
         }
       >
@@ -1495,6 +1503,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           </Show>
         </box>
         <scrollbox
+          ref={(node: { scrollTop: number }) => (sidebarScroll = node)}
           flexGrow={1}
           flexShrink={1}
           verticalScrollbarOptions={{ visible: false }}
@@ -1567,7 +1576,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   matchColor={theme().warning}
                 />
                 <text flexShrink={0} style={{ fg: isPendingDelete(row.entry.id) ? theme().error : theme().textMuted }}>
-                  {isPendingDelete(row.entry.id) ? "ctrl+x again" : ago(row.entry.updated)}
+                  {isPendingDelete(row.entry.id) ? "option+d again" : ago(row.entry.updated)}
                 </text>
               </box>
             )
@@ -1575,14 +1584,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </For>
         </scrollbox>
         <Show when={remaining() > 0}>
-          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · alt+o for all`}</text>
+          <text style={{ fg: theme().textMuted }}>{`… ${remaining()} more · option+o for all`}</text>
         </Show>
         <Show when={query().trim() && filteredEntries().length === 0}>
-            <text style={{ fg: theme().textMuted }}>No title or directory matches · alt+o to search transcripts</text>
+            <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · alt+p preview · ctrl+s/d pin · ctrl+x delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · option+p preview · ctrl+s/d pin · option+d delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1734,7 +1743,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       priority: 25,
       bindings: [
         { key: "y", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
-        { key: "ctrl+x", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
+        { key: "alt+d", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
         { key: "enter", desc: "Confirm delete", preventDefault: true, cmd: () => { confirmArmed() } },
         { key: "n", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
         { key: "escape", desc: "Cancel delete", preventDefault: true, cmd: cancelDelete },
@@ -1790,7 +1799,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           cmd: () => preview.open(entry),
         },
         {
-          key: "ctrl+x",
+          key: "alt+d",
           desc: "Delete session",
           preventDefault: true,
           cmd: () => {
@@ -1851,7 +1860,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             <box flexDirection="row" gap={1}>
               <text style={{ fg: theme().textMuted }}>Recent sessions</text>
               <text style={{ fg: theme().textMuted }}>
-                {loadFailed() ? "· list unavailable, will retry" : "· none yet, alt+o to browse"}
+                {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
               </text>
             </box>
           }
@@ -1859,7 +1868,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           <box flexDirection="row" justifyContent="space-between" gap={2}>
             <box flexDirection="row" gap={1}>
               <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <text style={{ fg: theme().textMuted }}>· alt+o for all</text>
+              <text style={{ fg: theme().textMuted }}>· option+o for all</text>
             </box>
             <box
               flexDirection="row"
@@ -1916,14 +1925,14 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 />
                 <text flexShrink={0} style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}>
                   {pendingDelete() === entry.id
-                    ? "ctrl+x again"
+                    ? "option+d again"
                     : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
                 </text>
               </box>
             )}
           </For>
           <Show when={visible().length === 0}>
-              <text style={{ fg: theme().textMuted }}>No title or directory matches · alt+o to search transcripts</text>
+              <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
           </Show>
         </Show>
       </box>
@@ -2104,7 +2113,7 @@ const tui: TuiPlugin = async (api) => {
     // lets it size to content, so a taller picker drifts downward. Pin the
     // content height and offset it up by the same amount to keep it centred.
     const dialogWidth = Math.min(116, api.renderer.width - 2)
-    const CHROME_ROWS = 12
+    const CHROME_ROWS = 13
     const listHeight = () => Math.max(6, Math.floor(termHeight * 0.75) - CHROME_ROWS)
     const dialogHeight = () => listHeight() + CHROME_ROWS
     const dialogOffset = () => Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1))
@@ -2115,6 +2124,7 @@ const tui: TuiPlugin = async (api) => {
     ))
 
     let previousSelection: Entry[] = []
+    let deletedAt: number | undefined
     createEffect(() => {
       const rows = selectableEntries()
       const position = rows.findIndex((entry) => entry.id === previousSelection[cursor()]?.id)
@@ -2122,12 +2132,17 @@ const tui: TuiPlugin = async (api) => {
         rows.some((entry, index) => entry.id !== previousSelection[index]?.id))) {
         // A search/filter/collapse changed the tree: reveal the retained row or
         // start at the first result rather than leaving a stale window open.
-        const next = position >= 0 ? position : 0
-        setCursor(next)
-        const id = rows[next]?.id
-        setViewportStart(position < 0 || next === 0 ? 0 : Math.max(0, pickerRows().findIndex(
-          (row) => row.kind === "item" && row.entry.id === id,
-        )))
+        if (deletedAt !== undefined) {
+          setCursor(Math.max(0, Math.min(deletedAt, rows.length - 1)))
+          deletedAt = undefined
+        } else {
+          const next = position >= 0 ? position : 0
+          setCursor(next)
+          const id = rows[next]?.id
+          setViewportStart(position < 0 || next === 0 ? 0 : Math.max(0, pickerRows().findIndex(
+            (row) => row.kind === "item" && row.entry.id === id,
+          )))
+        }
       } else if (cursor() >= rows.length) setCursor(Math.max(0, rows.length - 1))
       previousSelection = rows
     })
@@ -2260,6 +2275,8 @@ const tui: TuiPlugin = async (api) => {
           api.ui.toast({ message: "Session was not deleted", variant: "error" })
           return
         }
+        deletedAt = selectableEntries().findIndex((item) => item.id === entry.id)
+        if (deletedAt < 0) deletedAt = undefined
         setAllEntries(remaining)
         api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
         if (currentSessionID() === entry.id) api.route.navigate("home")
@@ -2285,7 +2302,7 @@ const tui: TuiPlugin = async (api) => {
             },
           },
           {
-            key: "ctrl+x",
+            key: "alt+d",
             desc: "Confirm delete",
             preventDefault: true,
             cmd: () => {
@@ -2367,7 +2384,7 @@ const tui: TuiPlugin = async (api) => {
           if (entry) onTogglePin("directories", entry.dir)
         } },
         {
-          key: "ctrl+x",
+          key: "alt+d",
           desc: "Delete session",
           preventDefault: true,
           cmd: () => {
@@ -2422,6 +2439,7 @@ const tui: TuiPlugin = async (api) => {
           flexDirection="column"
           height={dialogHeight()}
           marginTop={dialogOffset()}
+          paddingTop={1}
           paddingBottom={1}
           gap={1}
           backgroundColor={api.theme.current.backgroundPanel}
@@ -2534,7 +2552,7 @@ const tui: TuiPlugin = async (api) => {
                       paddingRight={4}
                       backgroundColor={
                         row.entry.id === selectableEntries()[cursor()]?.id
-                          ? api.theme.current.primary
+                          ? api.theme.current.backgroundElement
                           : RGBA.fromInts(0, 0, 0, 0)
                       }
                       onMouseMove={() => {
@@ -2549,7 +2567,7 @@ const tui: TuiPlugin = async (api) => {
                     >
                       <box flexDirection="row" gap={1}>
                       <text flexShrink={0} style={{ fg: row.entry.id === selectableEntries()[cursor()]?.id
-                        ? api.theme.current.selectedListItemText : api.theme.current.textMuted }}>
+                        ? api.theme.current.text : api.theme.current.textMuted }}>
                         {row.last ? "└" : "├"}
                       </text>
                       <Show when={row.entry.id === currentSessionID()}>
@@ -2558,7 +2576,7 @@ const tui: TuiPlugin = async (api) => {
                           style={{
                             fg:
                               row.entry.id === selectableEntries()[cursor()]?.id
-                                ? api.theme.current.selectedListItemText
+                                ? api.theme.current.text
                                 : api.theme.current.primary,
                           }}
                         >
@@ -2571,12 +2589,12 @@ const tui: TuiPlugin = async (api) => {
                         bold={row.entry.id === selectableEntries()[cursor()]?.id}
                         color={
                           row.entry.id === selectableEntries()[cursor()]?.id
-                            ? api.theme.current.selectedListItemText
+                            ? api.theme.current.text
                             : api.theme.current.text
                         }
                         matchColor={
                           row.entry.id === selectableEntries()[cursor()]?.id
-                            ? api.theme.current.selectedListItemText
+                            ? api.theme.current.text
                             : api.theme.current.warning
                         }
                       />
@@ -2587,7 +2605,7 @@ const tui: TuiPlugin = async (api) => {
                             pendingDelete()?.id === row.entry.id
                               ? api.theme.current.error
                               : row.entry.id === selectableEntries()[cursor()]?.id
-                                ? api.theme.current.selectedListItemText
+                                ? api.theme.current.text
                                 : api.theme.current.textMuted,
                         }}
                       >
@@ -2608,7 +2626,7 @@ const tui: TuiPlugin = async (api) => {
                             <Highlighted
                               text={match()}
                               query={query()}
-                              color={row.entry.id === selectableEntries()[cursor()]?.id ? api.theme.current.selectedListItemText : api.theme.current.textMuted}
+                              color={row.entry.id === selectableEntries()[cursor()]?.id ? api.theme.current.text : api.theme.current.textMuted}
                               matchColor={api.theme.current.warning}
                             />
                           </box>
@@ -2646,10 +2664,10 @@ const tui: TuiPlugin = async (api) => {
             >
               {pendingDelete()
                 ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ move · enter open · ctrl+g project · alt+w input · alt+s pinned · alt+p preview"}
+                : "↑↓ move · enter open · ctrl+g project · option+w input · option+s pinned · option+p preview"}
             </text>
             <Show when={!pendingDelete()}>
-              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · ctrl+x delete · ctrl+f fork · esc close</text>
+              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · option+d delete · ctrl+f fork · esc close</text>
             </Show>
           </box>
           <Show when={showPreview()}>
@@ -2903,7 +2921,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                   paddingRight={1}
                   backgroundColor={
                     index() === cursor()
-                      ? api.theme.current.primary
+                      ? api.theme.current.backgroundElement
                       : RGBA.fromInts(0, 0, 0, 0)
                   }
                   onMouseDown={() => {
@@ -2918,7 +2936,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                     style={{
                       fg:
                         index() === cursor()
-                          ? api.theme.current.selectedListItemText
+                          ? api.theme.current.text
                           : api.theme.current.text,
                     }}
                   >
@@ -2929,7 +2947,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                     style={{
                       fg:
                         index() === cursor()
-                          ? api.theme.current.selectedListItemText
+                          ? api.theme.current.text
                           : api.theme.current.warning,
                     }}
                   >
@@ -2940,7 +2958,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
                     style={{
                       fg:
                         index() === cursor()
-                          ? api.theme.current.selectedListItemText
+                          ? api.theme.current.text
                           : api.theme.current.textMuted,
                     }}
                   >

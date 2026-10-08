@@ -122,7 +122,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   action must come **before** `reload`/`reload-sync`: placed after, fzf silently
   publishes an empty list (verified on 0.74.3).
 - Destructive actions confirm. `sesh-delete.sh` prompts on a TTY and refuses
-  without `--yes` when stdin is not one; the TUI arms on the first Ctrl-X and
+  without `--yes` when stdin is not one; the TUI arms on the first Option-D and
   commits on the second (or `y`).
 - The installer prefers the local opencode version for `@opencode-ai/*` and
   merges (never clobbers) the config `package.json`; opencode runs `bun install`
@@ -144,7 +144,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   Row markers alone signal session state: a running agent animates a loading
   spinner marker, the open session shows its own ●, and every other idle row
   stays neutral (polled every 15 s); Option-P previews
-  a row and ctrl+x deletes one (armed, then confirmed). The section lists every
+  a row and option+d deletes one (armed, then confirmed). The section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
@@ -153,7 +153,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `option+o` and the command palette open it;
-  Ctrl-X arms and then confirms a delete through `api.client.session.delete` and
+  Option-D arms and then confirms a delete through `api.client.session.delete` and
   removes the row only after the server confirms; Ctrl-F forks through
   `api.client.session.fork`; Ctrl-G scopes the list to the selected session's
   project.
@@ -207,7 +207,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   same row. The section lists every session with no row cap
   (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the
   stretched section.
-- **Delete in the TUI is two-step.** The first `ctrl+x` arms `pendingDelete`,
+- **Delete in the TUI is two-step.** The first `option+d` arms `pendingDelete`,
   the second (or `y`, or Enter in the picker footer) commits the armed row
   wherever the pointer or cursor is, and `n`/Esc (or a five-second timeout)
   cancels. Moving the pointer must never disarm: edge-hover flicker ate the
