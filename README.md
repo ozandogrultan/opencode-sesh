@@ -201,7 +201,7 @@ workspace at its directory; outside cmux it shows a toast instead.
 Click the sidebar's `search…` box to filter recent sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Option-P to preview, Ctrl-S/Ctrl-D to pin, Option-D to delete, Esc to leave). Pinned
+Option-P to preview, Option-S/Option-R to pin, Option-D to delete, Esc to leave). Pinned
 directories rise first, while sessions within each directory are ordered by
 last update, newest first. The section lists every session and scrolls to fill
 the sidebar, so click **▾ hide** to collapse it when you need the room.

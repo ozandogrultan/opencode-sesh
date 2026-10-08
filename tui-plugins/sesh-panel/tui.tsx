@@ -1089,6 +1089,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   })
   createEffect(() => {
     if (props.api.ui.dialog.open) menu.close()
+    // A modal dialog owns input while open: yield the sidebar's keyboard
+    // captures too, so its layers cannot double-fire with the dialog's own.
+    if (props.api.ui.dialog.open) {
+      cancelDelete()
+      setNavActive(false)
+      setSearching(false)
+      setHovered(undefined)
+    }
   })
 
   const moveCursor = (delta: number) => {
@@ -1357,8 +1365,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             if (!confirmArmed()) requestDelete(entry)
           },
         },
-        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "alt+r", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
         {
           key: "/",
           desc: "Search sessions",
@@ -1409,7 +1417,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "ctrl+s",
+        key: "alt+s",
         desc: "Pin session",
         preventDefault: true,
         cmd: () => {
@@ -1418,7 +1426,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
       },
       {
-        key: "ctrl+d",
+        key: "alt+r",
         desc: "Pin directory",
         preventDefault: true,
         cmd: () => {
@@ -1639,7 +1647,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
         <Show when={navActive()}>
           <box paddingTop={1}>
-            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · option+p preview · ctrl+s/d pin · option+d delete · esc done</text>
+            <text style={{ fg: theme().textMuted }}>↑↓ move · enter open · option+p preview · option+s/r pin · option+d delete · esc done</text>
           </box>
         </Show>
       </Show>
@@ -1807,6 +1815,16 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     if (searching()) setSearching(false)
   }
 
+  // A modal dialog owns input while open: yield this list's keyboard captures
+  // too, so its layers cannot double-fire with the dialog's own.
+  createEffect(() => {
+    if (props.api.ui.dialog.open) {
+      cancelDelete()
+      setSearching(false)
+      setHovered(undefined)
+    }
+  })
+
   onMount(() => {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
@@ -1854,8 +1872,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             if (!confirmArmed()) requestDelete(entry)
           },
         },
-        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
-        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
+        { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
+        { key: "alt+r", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
       ],
     })
   })

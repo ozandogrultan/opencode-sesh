@@ -85,7 +85,10 @@ the schema below. Keystrokes never touch the database:
 - Session and directory pins live in `${XDG_DATA_HOME:-$HOME/.local/share}/sesh/pins.json`
   (`SESH_PINS_FILE` overrides it for tests), shared by fzf and the TUI. Writes
   use a sibling lock directory and atomic rename. Ctrl-S toggles a selected
-  session; Ctrl-D toggles its directory. Pinned directories sort before groups
+  session; Ctrl-D toggles its directory (terminal picker and option+o picker).
+  The sidebar and home lists use Option-S / Option-R instead: opencode binds
+  `ctrl+d` itself (composer delete-char, session delete), so ctrl pins would
+  shadow the composer. Pinned directories sort before groups
   containing pinned sessions, with pinned sessions first inside each group.
 
 **Output contract** (TSV, 6 fields):
