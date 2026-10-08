@@ -203,6 +203,10 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - **The sidebar never binds arrow keys globally.** Keyboard navigation is
   opt-in: clicking the *Sessions* heading (or its search box) activates a
   priority-20 layer, because a global `↑`/`↓` would hijack the main prompt.
+  Clicking outside the sidebar, opening a session, or navigating releases it
+  again (with search, hover and any armed delete), so the sidebar cannot
+  shadow the composer afterwards. Sidebar-internal clicks stop propagation so
+  the outside-click release cannot undo them.
   Cursor state is derived from `itemRows()`, so hover and cursor resolve to the
   same row. The section lists every session with no row cap
   (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the

@@ -1050,7 +1050,17 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setSectionCollapsed((value) => !value)
   }
 
-  const openSession = (entry: Entry) => props.api.route.navigate("session", { sessionID: entry.id })
+  const openSession = (entry: Entry) => {
+    // Opening a session hands input back to the main view: release every
+    // sidebar capture first, so its key layers cannot shadow the composer's
+    // once the new session is open.
+    menu.close()
+    cancelDelete()
+    setNavActive(false)
+    setSearching(false)
+    setHovered(undefined)
+    props.api.route.navigate("session", { sessionID: entry.id })
+  }
 
   // Flat order of the rows a cursor can land on, so keyboard navigation and
   // mouse hover resolve to the same row.
@@ -1064,6 +1074,15 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     return `${route.name}:${id}`
   })
   createEffect(on(routeKey, () => menu.close(), { defer: true }))
+  // Navigating away also releases the sidebar's keyboard captures: a nav,
+  // search, hover or armed delete left over from the previous session must
+  // not shadow the composer's keys in the next one.
+  createEffect(on(routeKey, () => {
+    cancelDelete()
+    setNavActive(false)
+    setSearching(false)
+    setHovered(undefined)
+  }, { defer: true }))
   createEffect(() => {
     const state = menuState()
     if (state && !itemRows().some((entry) => entry.id === state.entry.id)) menu.close()
@@ -1276,6 +1295,12 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       return
     }
     if (searching()) setSearching(false)
+    // A click anywhere outside the sidebar means input is back in the main
+    // view: release the nav layer, hover shortcuts and any armed delete so
+    // the sidebar's keys and rows stop shadowing the composer.
+    cancelDelete()
+    if (navActive()) setNavActive(false)
+    setHovered(undefined)
   }
 
   onMount(() => {
@@ -1346,6 +1371,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 
   // Keyboard navigation is opt-in (click the "Sessions" heading or the search
   // box) so the sidebar never steals the arrow keys from the main prompt.
+  // Clicking anywhere outside the sidebar, opening a session, or navigating
+  // releases it again, so its layers cannot shadow the composer afterwards.
   createEffect(() => {
     disposeNav?.()
     disposeNav = undefined
@@ -1450,7 +1477,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   return (
     <box flexDirection="column" paddingRight={1} flexGrow={1} flexShrink={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
-        <text flexShrink={1} onMouseDown={() => {
+        <text flexShrink={1} onMouseDown={(event: { stopPropagation: () => void }) => {
+          // Sidebar-internal: keep this click from reaching the root handler,
+          // which would release the nav layer this toggle just activated.
+          event.stopPropagation()
           if (!sectionCollapsed()) setNavActive((value) => !value)
         }}>
           <b>Sessions</b>
@@ -1462,7 +1492,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             <span style={{ fg: theme().warning }}> · {waitingEntries().length} need input</span>
           </Show>
         </text>
-        <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={toggleSection}>
+        <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={(event: { stopPropagation: () => void }) => {
+          event.stopPropagation()
+          toggleSection()
+        }}>
           {sectionCollapsed() ? "▸ show" : "▾ hide"}
         </text>
       </box>
@@ -1481,7 +1514,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           paddingLeft={1}
           paddingRight={1}
           backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-          onMouseDown={() => {
+          onMouseDown={(event: { stopPropagation: () => void }) => {
+            // Sidebar-internal: the root handler must not see this click, or
+            // it would clear the search this box just activated.
+            event.stopPropagation()
             insideSearchBox = true
             setSearching(true)
           }}
@@ -1497,7 +1533,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             {searching() ? "▏" : ""}
           </text>
           <Show when={query()}>
-            <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={() => setQuery("")}>
+            <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={(event: { stopPropagation: () => void }) => {
+              event.stopPropagation()
+              setQuery("")
+            }}>
               ✕
             </text>
           </Show>
@@ -1513,7 +1552,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           <For each={tree()}>
           {(row) => {
             if (row.kind === "group") return (
-              <box flexDirection="row" paddingTop={1} onMouseDown={() => toggleGroup(row.dir)}>
+              <box flexDirection="row" paddingTop={1} onMouseDown={(event: { stopPropagation: () => void }) => {
+                event.stopPropagation()
+                toggleGroup(row.dir)
+              }}>
                 <text flexGrow={1} flexShrink={1} wrapMode="none">
                   <span style={{ fg: theme().textMuted }}>{collapsed()[row.dir] ? "▸ " : "▾ "}</span>
                   <b>{props.pins().directories.includes(row.dir) ? "★ " : ""}{truncate(row.label, SIDEBAR_GROUP_WIDTH - (props.pins().directories.includes(row.dir) ? 2 : 0))}</b>
@@ -1550,7 +1592,13 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   if (event.button === RIGHT_BUTTON) {
                     event.stopPropagation()
                     menu.open(row.entry, event.x, event.y)
-                  } else void openSession(row.entry)
+                  } else {
+                    // Sidebar-internal: openSession releases the sidebar's own
+                    // captures, so this click must not also reach the root
+                    // handler as an outside click.
+                    event.stopPropagation()
+                    void openSession(row.entry)
+                  }
                 }}
               >
                 <text flexShrink={0}>
