@@ -48,6 +48,142 @@ function loadPinnedSort() {
   return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return pinnedFirst`)()
 }
 
+function loadAdapter(ctx) {
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  const start = source.indexOf("function createApi")
+  const end = source.indexOf("export default Plugin.define", start)
+  return new Function("createSignal", "runWithOwner", "createRoot", "hostOwner", `${stripTypeScriptTypes(source.slice(start, end))}; return createApi`)(
+    (initial) => { let value = initial; return [() => value, (next) => { value = next }] },
+    (_owner, fn) => fn(),
+    (fn) => fn(() => {}),
+    null,
+  )(ctx)
+}
+
+{
+  let closed
+  let cleanup = 0
+  let forkInput
+  const requests = []
+  const api = loadAdapter({
+    ui: { dialog: {
+      show(_render, onClose) { closed?.(); closed = onClose },
+      clear() { const callback = closed; closed = undefined; callback?.() },
+    } },
+    client: { session: {
+      async fork(input) { forkInput = input; return { id: "ses_fork" } },
+      async list(input) {
+        requests.push(input)
+        return { data: [{ id: input.cursor ? "ses_b" : "ses_a", time: { updated: 10 } }], cursor: { next: input.cursor ? undefined : "opaque-next" } }
+      },
+    } },
+  })
+  assert.deepEqual(await api.client.session.fork({ sessionID: "ses_original", directory: "/a" }), { data: { id: "ses_fork" } })
+  assert.deepEqual(forkInput, { sessionID: "ses_original" })
+  api.ui.dialog.replace(() => undefined, () => cleanup++)
+  const replacedClose = closed
+  api.ui.dialog.replace(() => undefined, () => cleanup++)
+  assert.equal(cleanup, 1)
+  assert.equal(api.ui.dialog.open, true)
+  replacedClose()
+  assert.equal(cleanup, 1)
+  assert.equal(api.ui.dialog.open, true)
+  closed()
+  closed()
+  assert.equal(cleanup, 2)
+  assert.equal(api.ui.dialog.open, false)
+  api.ui.dialog.clear()
+  assert.equal(cleanup, 2)
+  assert.equal(api.ui.dialog.open, false)
+  const first = await api.client.experimental.session.list({ limit: 200 })
+  const second = await api.client.experimental.session.list({ limit: 200, cursor: first.cursor.next })
+  assert.equal(second.data[0].id, "ses_b")
+  assert.deepEqual(requests, [{ parentID: null, order: "desc", limit: 200, cursor: undefined }, { parentID: null, order: "desc", limit: 200, cursor: "opaque-next" }])
+}
+
+{
+  const requests = []
+  const layers = []
+  const slots = []
+  const toasts = []
+  const api = loadAdapter({
+    keymap: { layer(factory) { layers.push(factory()) } },
+    ui: { slot(slot) { slots.push(slot) }, toast: { show(toast) { toasts.push(toast) } } },
+    client: { message: { async list(input) {
+      requests.push(input)
+      const page = input.cursor ? 1 : 0
+      return {
+        data: input.order === "desc" ? [
+          { id: "new", type: "user", text: "latest turn" },
+          { id: "older", type: "assistant", content: [{ type: "text", text: "older turn" }] },
+        ] : Array.from({ length: 100 }, (_, i) => ({
+          id: `${page}-${i}`, type: "assistant", content: [
+            { type: "text", text: `text ${page}-${i}` },
+            { type: "reasoning", text: "private reasoning" },
+            { type: "tool", text: "private tool" },
+          ],
+        })),
+        cursor: { next: page ? undefined : "messages-next" },
+      }
+    } } },
+  })
+  const indexed = await api.client.session.messages({ sessionID: "ses_large" })
+  assert.equal(indexed.data.length, 200)
+  assert.equal(indexed.data[199].parts[0].text, "text 1-99")
+  assert.ok(indexed.data.every((m) => !m.parts[0].text.includes("private")))
+  assert.equal(requests[1].cursor, "messages-next")
+  const preview = await api.client.session.messages({ sessionID: "ses_large", preview: true })
+  assert.deepEqual(preview.data.map((m) => m.id), ["older", "new"])
+  assert.equal(requests.length, 3)
+  assert.equal(requests[2].order, "desc")
+  api.keymap.registerLayer({ mode: "modal", bindings: [{ key: "escape", cmd() {} }] })
+  api.keymap.registerLayer({ bindings: [{ key: "alt+o", cmd() {} }] })
+  assert.deepEqual(layers.map((l) => l.mode), ["modal", "base"])
+  assert.ok(layers.every((l) => l.commands.every((c) => c.id === undefined)))
+  api.slots.register({ slots: { sidebar_content() {} } })
+  assert.equal(slots[0].prepend, "sidebar.content")
+  api.ui.toast({ title: "Costs", message: "Loaded" })
+  api.ui.toast({ message: "Loaded" })
+  assert.deepEqual(toasts.map((t) => t.title), ["Costs", "Sessions"])
+}
+
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  for (const start of ["disposePreviewKeys = api.keymap.registerLayer", "disposeConfirm = api.keymap.registerLayer", "const disposeKeys = api.keymap.registerLayer", "const disposeNav = api.keymap.registerLayer"]) {
+    for (const match of source.matchAll(new RegExp(start.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))) {
+      assert.match(source.slice(match.index, match.index + 90), /mode: "modal"/)
+    }
+  }
+  assert.match(source, /void openPicker\(true\)/)
+  assert.match(source, /void openCosts\(true\)/)
+  assert.match(source, /void openNeeds\(true\)/)
+  assert.match(source, /if \(!command && api.renderer.currentFocusedEditor === null\) return/)
+}
+
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  const start = source.indexOf("const rootMouseHandlers")
+  const end = source.indexOf("type Entry =", start)
+  const createMouse = new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return { ensureRootMouse, subscribe: (fn) => rootMouseHandlers.add(fn), dispose: () => removeRootMouse?.() }`)
+  let native = 0
+  let first = 0
+  let second = 0
+  let installs = 0
+  let down
+  const mouseRoot = { _mouseListeners: { down() { native++ } }, set onMouseDown(handler) { down = handler; installs++ } }
+  const old = createMouse()
+  old.ensureRootMouse({ root: mouseRoot })
+  old.subscribe(() => first++)
+  down({})
+  old.dispose()
+  const current = createMouse()
+  current.ensureRootMouse({ root: mouseRoot })
+  current.subscribe(() => second++)
+  down({})
+  assert.deepEqual([native, first, second, installs], [2, 1, 1, 1])
+  current.dispose()
+}
+
 {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("function adaptTheme")
@@ -109,6 +245,14 @@ const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+{
+  const sessions = sessionsFor(401).map((s) => ({ ...s, time: { updated: 42 } }))
+  const { entries, truncated } = await fetchEntries(makeApi(sessions))
+  assert.equal(entries.length, 401)
+  assert.equal(new Set(entries.map((e) => e.id)).size, 401)
+  assert.equal(truncated, false)
+}
 
 // The sidebar lists every session without a row cap: all filtered entries
 // reach the tree, and overflow scrolls inside the stretched scrollbox.
@@ -208,8 +352,8 @@ function makeApi(sessions, { latency = 0 } = {}) {
         session: {
           list: async ({ limit, cursor }) => {
             calls.list.push({ limit, cursor })
-            const start = cursor === undefined ? 0 : sessions.findIndex((s) => s.time.updated === cursor) + 1
-            return { data: sessions.slice(start, start + limit) }
+            const start = cursor === undefined ? 0 : Number(cursor)
+            return { data: sessions.slice(start, start + limit), cursor: { next: start + limit < sessions.length ? String(start + limit) : undefined } }
           },
         },
       },
@@ -236,8 +380,8 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.equal(api.calls.list.length, 3, "expected three pages")
   assert.equal(api.calls.list[0].limit, SESSION_PAGE_LIMIT)
   assert.equal(api.calls.list[0].cursor, undefined)
-  assert.equal(api.calls.list[1].cursor, 1_000_000 - (SESSION_PAGE_LIMIT - 1))
-  assert.equal(api.calls.list[2].cursor, 1_000_000 - (2 * SESSION_PAGE_LIMIT - 1))
+  assert.equal(api.calls.list[1].cursor, String(SESSION_PAGE_LIMIT))
+  assert.equal(api.calls.list[2].cursor, String(2 * SESSION_PAGE_LIMIT))
   assert.ok(entries.some((entry) => entry.id === "ses_00500"), "the 501st session must survive")
 }
 

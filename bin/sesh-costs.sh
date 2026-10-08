@@ -59,9 +59,9 @@ SELECT s.directory AS directory,
   ROUND(SUM(COALESCE(json_extract(m.data, '\$.cost'), 0)), 4) AS lifetime_cost,
   COUNT(DISTINCT s.id) AS sessions,
   SUM(CASE WHEN m.time_created >= $CUTOFF THEN COALESCE(json_extract(m.data, '\$.tokens.input'), 0) + COALESCE(json_extract(m.data, '\$.tokens.output'), 0) ELSE 0 END) AS window_tokens
-FROM message m
-JOIN session s ON s.id = m.session_id
-WHERE json_extract(m.data, '\$.role') = 'assistant'
+FROM session_message m
+JOIN session_v2 s ON s.id = m.session_id
+WHERE m.type = 'assistant'
   AND json_extract(m.data, '\$.cost') IS NOT NULL
 GROUP BY s.directory
 ORDER BY lifetime_cost DESC;"

@@ -30,7 +30,7 @@ Users work in terminals and the opencode TUI. The standalone picker uses fullscr
 - Default to sessions across all directories; allow narrowing to a project or directory. Archived sessions and fork children are hidden by default.
 - Index text parts only, excluding reasoning and tool payloads from search and previews.
 - Preserve the terminal and OpenTUI workflows, including in-place terminal resume, existing opencode navigation, and confirmation for destructive actions.
-- No iTerm2, AppleScript, panes, or window management. The opencode sidebar is an appended section, not a replacement for native sidebar content.
+- No iTerm2, AppleScript, panes, or window management. Native sidebar content remains below the Sessions section.
 
 ## Brand Commitments
 

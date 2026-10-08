@@ -72,7 +72,7 @@ bash install.sh
 `sesh install` (or `bash install.sh`) links `sesh` into `$XDG_BIN_HOME`
 (default `~/.local/bin`), copies
 the `sesh-list` tool and the TUI panel into
-`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `tui.json`, and
+`${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `opencode.json`, and
 declares the plugin dependencies (opencode installs them on next start). The
 panel registers the `/sesh` slash command. It never edits your shell rc, and any
 file it would overwrite is backed up first.
@@ -80,8 +80,8 @@ file it would overwrite is backed up first.
 The npm package ships the same scripts and installer; the runtime tools below
 are still required.
 
-Fully quit opencode and reopen it to load the panel — opencode imports plugins
-once at startup, so reloading a window reuses the running process. Upgrades
+V2 reloads plugins when watched configuration files change. If a panel update
+does not appear, fully quit opencode and reopen it. Upgrades
 refresh an already-installed panel automatically (the npm `postinstall` syncs
 it), and `sesh --check` reports when the installed panel is out of date.
 
@@ -247,10 +247,10 @@ workspace, and a global "resume from anywhere" hotkey — all caller-side.
 
 ## How it works
 
-`bin/sesh-list.sh` is the only `bin/` script that reads the opencode session
-store (SQLite: `session` / `message` / `part`). Each refresh extracts session
+The `bin/` readers use the V2 opencode session
+store (SQLite: `session_v2` / `session_message`). Each refresh extracts session
 metadata and text-only parts into a persistent per-session cache keyed on
-`time_updated`, part count and the latest part timestamp, then atomically
+`time_updated`, message count and the latest message timestamp, then atomically
 publishes a `snapshot.jsonl`. Every keystroke re-renders that snapshot with `jq`
 alone, so typing never starts competing database scans. Reasoning and tool
 payloads are never indexed or previewed, and session ids are validated before
@@ -261,7 +261,8 @@ Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
 scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
 shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui-plugins/sesh-panel/tui.tsx`) is a
 SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
-`sesh-list` agent tool reads it through `opencode db`.
+`sesh-list` agent tool reads it read-only through `bun:sqlite`. V2 discovers
+the installed tool automatically in the global config directory's `plugins/`.
 
 ## FAQ
 
@@ -292,7 +293,7 @@ checks before opening a PR:
 bun install
 bun run test         # fixture-database regression suite
 bun run test:picker  # PTY picker suite (needs fzf >= 0.73)
-bun run typecheck    # tsc over tui/ and opencode/
+bun run typecheck    # tsc over tui-plugins/ and plugins/
 bun run lint:sh      # bash -n on every script
 ```
 

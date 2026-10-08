@@ -26,7 +26,8 @@ fi
 
 SQLITE_BIN=${SESH_SQLITE:-}
 if [ -z "$SQLITE_BIN" ] && command -v sqlite3 >/dev/null 2>&1; then SQLITE_BIN=sqlite3; fi
-SQL="SELECT m.data AS msg, p.data AS part FROM part p JOIN message m ON m.id = p.message_id WHERE p.session_id = '$session_id' AND json_extract(p.data, '\$.type') = 'text' ORDER BY p.time_created DESC LIMIT 200;"
+SQL="SELECT json_object('role', type) AS msg, json_object('type', 'text', 'text', json_extract(data, '\$.text')) AS part, seq, -1 AS ordinal FROM session_message WHERE session_id = '$session_id' AND type = 'user' AND json_type(data, '\$.text') = 'text'
+UNION ALL SELECT json_object('role', m.type) AS msg, c.value AS part, m.seq, CAST(c.key AS INTEGER) AS ordinal FROM session_message m, json_each(m.data, '\$.content') c WHERE m.session_id = '$session_id' AND m.type = 'assistant' AND json_extract(c.value, '\$.type') = 'text' ORDER BY seq DESC, ordinal DESC LIMIT 200;"
 if [ -n "$SQLITE_BIN" ]; then
   rows=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$SQL" 2>/dev/null) || rows=''
 else

@@ -54,39 +54,37 @@ STUCK_BEFORE=$((NOW_MS - 600000))
 
 # NEEDS_INPUT_SQL (shared heuristic — keep in sync with tui-plugins/sesh-panel/tui.tsx).
 read -r -d '' QUERY <<SQL || true
+WITH live AS (
+  SELECT m.session_id AS session_id, m.seq AS seq,
+    json_extract(c.value, '\$.name') AS name,
+    json_extract(c.value, '\$.state.status') AS status,
+    COALESCE(json_extract(c.value, '\$.time.created'), m.time_created) AS created
+  FROM session_message m, json_each(m.data, '\$.content') c
+  WHERE m.type = 'assistant'
+    AND (m.data LIKE '%"status":"running"%' OR m.data LIKE '%"status":"pending"%')
+    AND json_extract(c.value, '\$.type') = 'tool'
+    AND json_extract(c.value, '\$.state.status') IN ('pending', 'running')
+)
 SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS updated,
   CASE WHEN EXISTS (
-    SELECT 1 FROM part p
-    WHERE p.session_id = s.id
-      AND json_extract(p.data, '\$.type') = 'tool'
-      AND json_extract(p.data, '\$.tool') = 'question'
-      AND COALESCE(json_extract(p.data, '\$.state.status'), 'pending') != 'completed'
+    SELECT 1 FROM live
+    WHERE live.session_id = s.id AND live.name = 'question'
       AND NOT EXISTS (
-        SELECT 1 FROM message m
-        WHERE m.session_id = s.id
-          AND json_extract(m.data, '\$.role') = 'user'
-          AND m.time_created > p.time_created)
+        SELECT 1 FROM session_message u
+        WHERE u.session_id = live.session_id AND u.type = 'user' AND u.seq > live.seq)
   ) THEN 'question' ELSE 'stuck' END AS reason
-FROM session s
+FROM session_v2 s
 WHERE COALESCE(s.time_archived, 0) = 0
   AND s.parent_id IS NULL
   AND (EXISTS (
-    SELECT 1 FROM part p
-    WHERE p.session_id = s.id
-      AND json_extract(p.data, '\$.type') = 'tool'
-      AND json_extract(p.data, '\$.tool') = 'question'
-      AND COALESCE(json_extract(p.data, '\$.state.status'), 'pending') != 'completed'
+    SELECT 1 FROM live
+    WHERE live.session_id = s.id AND live.name = 'question'
       AND NOT EXISTS (
-        SELECT 1 FROM message m
-        WHERE m.session_id = s.id
-          AND json_extract(m.data, '\$.role') = 'user'
-          AND m.time_created > p.time_created)
+        SELECT 1 FROM session_message u
+        WHERE u.session_id = live.session_id AND u.type = 'user' AND u.seq > live.seq)
   ) OR EXISTS (
-    SELECT 1 FROM part p2
-    WHERE p2.session_id = s.id
-      AND json_extract(p2.data, '\$.type') = 'tool'
-      AND json_extract(p2.data, '\$.state.status') = 'running'
-      AND p2.time_created < $STUCK_BEFORE))
+    SELECT 1 FROM live
+    WHERE live.session_id = s.id AND live.status = 'running' AND live.created < $STUCK_BEFORE))
 ORDER BY s.time_updated DESC;
 SQL
 

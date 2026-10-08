@@ -276,7 +276,7 @@ refresh() {
   historical="$scratch/historical.jsonl"; needs_extract="$scratch/needs-extract.json"
   out="$scratch/snapshot.jsonl"
 
-  db_json "SELECT id, directory, title, time_created, time_updated, COALESCE(time_archived, 0) AS archived, COALESCE(parent_id, '') AS parent FROM session ORDER BY time_updated DESC;" > "$sessions" 2>/dev/null || {
+  db_json "SELECT id, directory, title, time_created, time_updated, COALESCE(time_archived, 0) AS archived, COALESCE(parent_id, '') AS parent FROM session_v2 ORDER BY time_updated DESC;" > "$sessions" 2>/dev/null || {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
     return 0
   }
@@ -287,7 +287,7 @@ refresh() {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database query failed; showing last good snapshot'; else set_status 'unavailable: opencode database query failed'; fi
     return 0
   }
-  db_json "SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS m FROM part GROUP BY session_id;" > "$parts" 2>/dev/null || printf '[]\n' > "$parts"
+  db_json "SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS m FROM session_message GROUP BY session_id;" > "$parts" 2>/dev/null || printf '[]\n' > "$parts"
   "$JQ_BIN" -e 'type == "array"' "$parts" >/dev/null 2>&1 || printf '[]\n' > "$parts"
 
   # Same bulk cache validation as the Claude list: every cache arrives as its
@@ -302,7 +302,7 @@ refresh() {
     | ($parts[0] | map({key:.session_id, value:.}) | from_entries) as $stats
     | [$sessions[0][] | . + {partCount: ($stats[.id].n // 0), partMax: ($stats[.id].m // 0)}] as $meta
     | ($meta | map({key:.id, value:.}) | from_entries) as $byId
-    | [$caches[0][]? | select(.cacheSchema == 2 and (.sessionId | type) == "string")
+    | [$caches[0][]? | select(.cacheSchema == 3 and (.sessionId | type) == "string")
        | select($byId[.sessionId] as $m | $m != null and .cacheUpdated == $m.time_updated and .cacheParts == $m.partCount and .cacheMax == $m.partMax)] as $cached
     | ($cached | map({key: .sessionId, value:true}) | from_entries) as $cachedIds
     | {cached: $cached,
@@ -337,7 +337,8 @@ refresh() {
     for ((i = j; i < j + 200 && i < ${#stale_ids[@]}; i++)); do
       chunk="${chunk:+$chunk,}'${stale_ids[$i]}'"
     done
-    if ! db_json "SELECT session_id, data FROM part WHERE session_id IN ($chunk) AND json_extract(data, '\$.type') = 'text' ORDER BY session_id, time_created;" 2>/dev/null \
+    if ! db_json "SELECT session_id, json_object('type', 'text', 'text', json_extract(data, '\$.text')) AS data, seq, -1 AS ordinal FROM session_message WHERE session_id IN ($chunk) AND type = 'user' AND json_type(data, '\$.text') = 'text'
+      UNION ALL SELECT m.session_id, c.value AS data, m.seq, CAST(c.key AS INTEGER) AS ordinal FROM session_message m, json_each(m.data, '\$.content') c WHERE m.session_id IN ($chunk) AND m.type = 'assistant' AND json_extract(c.value, '\$.type') = 'text' ORDER BY session_id, seq, ordinal;" 2>/dev/null \
       | "$JQ_BIN" -c '.[]?' >> "$parts_raw"; then
       extract_failed=1
       break
@@ -363,7 +364,7 @@ refresh() {
          else $s.title end) as $title
       | {sessionId: $s.id,
          cachePath: ($extractions + "/" + $s.id + ".json"),
-         record: {cacheSchema: 2, cacheSession: $s.id,
+          record: {cacheSchema: 3, cacheSession: $s.id,
                   cacheUpdated: ($s.time_updated // 0), cacheParts: ($s.partCount // 0), cacheMax: ($s.partMax // 0),
                   sessionId: $s.id, transcriptPath: "", source: "opencode",
                   cwd: ($s.directory // ""),

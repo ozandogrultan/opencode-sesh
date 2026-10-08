@@ -44,7 +44,8 @@ assert.equal(pluginDef.id, "sesh-list")
 let registeredTool = null
 const mockCtx = {
   tool: {
-    transform(callback) {
+    async transform(callback) {
+      await new Promise((resolve) => setImmediate(resolve))
       callback({
         add(tool) {
           registeredTool = tool
@@ -56,6 +57,7 @@ const mockCtx = {
 
 await pluginDef.setup(mockCtx)
 assert.ok(registeredTool, "sesh_list tool was not registered")
+await assert.rejects(() => pluginDef.setup({ tool: { transform: async () => { throw new Error("registration failed") } } }), /registration failed/)
 assert.equal(registeredTool.name, "sesh_list")
 assert.equal(registeredTool.description, "List opencode sessions across all project directories, newest first")
 
@@ -86,20 +88,12 @@ const dbPath = join(dbDir, "opencode.db")
 
 try {
   const sqlite = new DatabaseSync(dbPath)
+  sqlite.exec(readFileSync(join(root, "tests/fixture-v2.sql"), "utf8"))
   sqlite.exec(`
-    CREATE TABLE session_v2 (
-      id TEXT PRIMARY KEY,
-      parent_id TEXT,
-      directory TEXT,
-      title TEXT,
-      time_created INTEGER,
-      time_updated INTEGER,
-      time_archived INTEGER
-    );
-    INSERT INTO session_v2 VALUES ('ses_new', NULL, '/dir/a', 'Newest', 100, 100, NULL);
-    INSERT INTO session_v2 VALUES ('ses_old', NULL, '/dir/b', 'Older', 1, 1, NULL);
-    INSERT INTO session_v2 VALUES ('ses_child', 'ses_new', '/dir/b', 'Fork child', 200, 200, NULL);
-    INSERT INTO session_v2 VALUES ('ses_arch', NULL, '/dir/b', 'Archived', 300, 300, 300);
+    INSERT INTO session_v2 (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_new', NULL, '/dir/a', 'Newest', 100, 100, NULL);
+    INSERT INTO session_v2 (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_old', NULL, '/dir/b', 'Older', 1, 1, NULL);
+    INSERT INTO session_v2 (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_child', 'ses_new', '/dir/b', 'Fork child', 200, 200, NULL);
+    INSERT INTO session_v2 (id, parent_id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_arch', NULL, '/dir/b', 'Archived', 300, 300, 300);
   `)
   sqlite.close()
 

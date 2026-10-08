@@ -84,7 +84,7 @@ fi
 JQ_BIN=${SESH_JQ:-$(command -v jq || true)}
 [ -n "$JQ_BIN" ] || { echo 'sesh: jq is required' >&2; exit 1; }
 
-CANDIDATES=$(query "SELECT id, directory, title, time_updated AS updated FROM session WHERE time_updated < $CUTOFF AND COALESCE(time_archived, 0) = 0 AND parent_id IS NULL ORDER BY time_updated ASC;")
+CANDIDATES=$(query "SELECT id, directory, title, time_updated AS updated FROM session_v2 WHERE time_updated < $CUTOFF AND COALESCE(time_archived, 0) = 0 AND parent_id IS NULL ORDER BY time_updated ASC;")
 # sqlite3 -json prints nothing (not []) when no rows match.
 [ -n "$CANDIDATES" ] || CANDIDATES='[]'
 PINS=$("$SCRIPT_DIR/sesh-pins.sh" read 2>/dev/null || printf '{"sessions":[],"directories":[]}')
@@ -152,7 +152,7 @@ if [ "$hard_delete" = 0 ]; then
     esac
   done
   IN_LIST=${IN_LIST%,}
-  write_db "UPDATE session SET time_archived = $NOW_MS WHERE id IN ($IN_LIST);"
+  write_db "UPDATE session_v2 SET time_archived = $NOW_MS WHERE id IN ($IN_LIST);"
   echo "Archived $COUNT session(s) older than $older_than."
 else
   command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable is unavailable for deletes.' >&2; exit 1; }

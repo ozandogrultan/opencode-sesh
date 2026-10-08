@@ -20,11 +20,7 @@ mkdir -p "$fixture/one" "$fixture/two"
 one="$(cd "$fixture/one" && pwd -P)"
 two="$(cd "$fixture/two" && pwd -P)"
 
-sqlite3 "$SESH_DB" <<'SQL'
-CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT NOT NULL, title TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER, parent_id TEXT);
-CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-SQL
+sqlite3 "$SESH_DB" < "$PACKAGE_DIR/tests/fixture-v2.sql"
 
 add_part() { # session msg role type text created
   local ses=$1 msg=$2 role=$3 type=$4 text=$5 created=$6
@@ -32,12 +28,12 @@ add_part() { # session msg role type text created
   msg_json=$(jq -cn --arg role "$role" '{role:$role}')
   part_json=$(jq -cn --arg type "$type" --arg text "$text" '{type:$type,text:$text}')
   sqlite3 "$SESH_DB" \
-    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('$msg', '$ses', $created, $created, '$msg_json');
-     INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-$msg', '$msg', '$ses', $created, $created, '$part_json');"
+    "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('$msg', '$ses', $created, $created, '$msg_json');
+     INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-$msg', '$msg', '$ses', $created, $created, '$part_json');"
 }
 add_session() { # id dir title created updated [archived]
   sqlite3 "$SESH_DB" \
-    "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('$1', '$2', '$3', $4, $5, ${6:-NULL});"
+    "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived) VALUES ('$1', '$2', '$3', $4, $5, ${6:-NULL});"
 }
 
 add_session 'ses_alpha' "$one" 'Alpha work' 1700000000000 1700000100000
@@ -141,7 +137,11 @@ sleep 1
 "$list" --refresh --state-dir "$state" > /dev/null
 after=$(cache_mtime "$alpha_cache")
 [ "$before" = "$after" ] || { echo "warm refresh re-parsed an unchanged session" >&2; exit 1; }
-sqlite3 "$SESH_DB" "UPDATE session SET time_updated = 1800000000000 WHERE id = 'ses_alpha';"
+"$SESH_JQ" '.cacheSchema = 2 | .fulltextLower = "legacy_cache_poison"' "$alpha_cache" > "$fixture/legacy-cache.json"
+mv "$fixture/legacy-cache.json" "$alpha_cache"
+"$list" --refresh --state-dir "$state" > /dev/null
+"$SESH_JQ" -e '.cacheSchema == 3 and (.fulltextLower | contains("legacy_cache_poison") | not)' "$alpha_cache" > /dev/null
+sqlite3 "$SESH_DB" "UPDATE session_v2 SET time_updated = 1800000000000 WHERE id = 'ses_alpha';"
 add_part 'ses_alpha' 'msg_a4' 'user' 'text' 'brand new penguin discussion' 1800000000000
 "$list" --refresh --state-dir "$state" --query "penguin" > "$fixture/penguin.tsv"
 grep -Fq 'ses_alpha' "$fixture/penguin.tsv"
@@ -167,7 +167,7 @@ mkdir -p "$fixture/stubbin"
 cat > "$fixture/stubbin/opencode" <<STUB
 #!/bin/bash
 [ "\$1 \$2" = "session delete" ] || exit 1
-exec sqlite3 "$SESH_DB" "DELETE FROM session WHERE id = '\$3';"
+exec sqlite3 "$SESH_DB" "DELETE FROM session_v2 WHERE id = '\$3';"
 STUB
 chmod +x "$fixture/stubbin/opencode"
 export SESH_OPENCODE="$fixture/stubbin/opencode"
@@ -175,10 +175,10 @@ PATH="$fixture/stubbin:$PATH"
 if printf '\n' | "$PACKAGE_DIR/bin/sesh-delete.sh" "$state" 'ses_beta' >/dev/null 2>&1; then
   echo "delete without --yes was not refused" >&2; exit 1
 fi
-[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_beta';")" = 1 ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_beta';")" = 1 ]
 "$PACKAGE_DIR/bin/sesh-delete.sh" --yes "$state" 'ses_beta'
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_beta") | not)' "$state/snapshot.jsonl" >/dev/null
-[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_beta';")" = 0 ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_beta';")" = 0 ]
 
 # 8. fzf version gate: reject below 0.73, accept exactly 0.73 (P1).
 fzf_stub="$fixture/fzf-stub"
@@ -227,9 +227,9 @@ p2_state="$fixture/p2-state"
   printf '"}'
 } > "$fixture/big-part.json"
 {
-  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_big', '$one', 'Big', 1900000000000, 1900000000000, NULL);"
-  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-big', 'ses_big', 1900000000000, 1900000000000, '{\"role\":\"user\"}');"
-  printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-big', 'm-big', 'ses_big', 1900000000000, 1900000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/big-part.json"
+  echo "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_big', '$one', 'Big', 1900000000000, 1900000000000, NULL);"
+  echo "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('m-big', 'ses_big', 1900000000000, 1900000000000, '{\"role\":\"user\"}');"
+  printf "INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-big', 'm-big', 'ses_big', 1900000000000, 1900000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/big-part.json"
 } > "$fixture/big.sql"
 sqlite3 "$SESH_DB" < "$fixture/big.sql"
 "$list" --refresh --state-dir "$p2_state" > /dev/null
@@ -239,7 +239,7 @@ grep -Fq 'ses_big' "$fixture/big.tsv"
 
 # 12. A part-only update (text + part timestamp, same session timestamp and part
 # count) invalidates the warm cache (P2).
-sqlite3 "$SESH_DB" "UPDATE part SET data = json_set(data, '\$.text', 'p2_updated_text'), time_updated = 1950000000000 WHERE id = 'p-msg_a2';"
+sqlite3 "$SESH_DB" "UPDATE session_message SET data = json_set(data, '\$.content[0].text', 'p2_updated_text'), time_updated = 1950000000000 WHERE id = 'msg_a2';"
 "$list" --refresh --state-dir "$p2_state" > /dev/null
 [ "$(cat "$p2_state/status")" = fresh ]
 "$list" --state-dir "$p2_state" --query "p2_updated_text" > "$fixture/upd.tsv"
@@ -250,13 +250,13 @@ grep -Fq 'ses_alpha' "$fixture/oldpart.tsv" && { echo "stale cache kept old part
 # 13. Preview filters text parts before its row limit (P2): an old text part
 # behind 201 newer tool parts must still render.
 {
-  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_toolheavy', '$one', 'Tool heavy', 2000000000000, 2000000000000, NULL);"
-  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"role\":\"assistant\"}');"
-  echo "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th', 'm-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"type\":\"text\",\"text\":\"preview_text_before_limit\"}');"
+  echo "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_toolheavy', '$one', 'Tool heavy', 2000000000000, 2000000000000, NULL);"
+  echo "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('m-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"role\":\"assistant\"}');"
+  echo "INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th', 'm-th', 'ses_toolheavy', 2000000000000, 2000000000000, '{\"type\":\"text\",\"text\":\"preview_text_before_limit\"}');"
   i=0
   while [ "$i" -lt 201 ]; do
     i=$((i + 1))
-    printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th-%s', 'm-th', 'ses_toolheavy', %s, %s, '{\"type\":\"tool\",\"text\":\"ignored\"}');\n" "$i" "$((2000000000000 + i))" "$((2000000000000 + i))"
+    printf "INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-th-%s', 'm-th', 'ses_toolheavy', %s, %s, '{\"type\":\"tool\",\"text\":\"ignored\"}');\n" "$i" "$((2000000000000 + i))" "$((2000000000000 + i))"
   done
 } > "$fixture/toolheavy.sql"
 sqlite3 "$SESH_DB" < "$fixture/toolheavy.sql"
@@ -268,9 +268,9 @@ grep -Fq 'preview_text_before_limit' "$fixture/toolheavy.preview"
 seq 1 1000 | sed 's/^/longline /' > "$fixture/long.txt"
 jq -Rn --rawfile t "$fixture/long.txt" '{type:"text",text:$t}' > "$fixture/long-part.json"
 {
-  echo "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_long', '$two', 'Long', 2100000000000, 2100000000000, NULL);"
-  echo "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('m-long', 'ses_long', 2100000000000, 2100000000000, '{\"role\":\"user\"}');"
-  printf "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-long', 'm-long', 'ses_long', 2100000000000, 2100000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/long-part.json"
+  echo "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived) VALUES ('ses_long', '$two', 'Long', 2100000000000, 2100000000000, NULL);"
+  echo "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('m-long', 'ses_long', 2100000000000, 2100000000000, '{\"role\":\"user\"}');"
+  printf "INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-long', 'm-long', 'ses_long', 2100000000000, 2100000000000, CAST(readfile('%s') AS TEXT));\n" "$fixture/long-part.json"
 } > "$fixture/long.sql"
 sqlite3 "$SESH_DB" < "$fixture/long.sql"
 "$list" --refresh --state-dir "$p2_state" > /dev/null
@@ -286,7 +286,7 @@ jq -cn --arg sid "$bad_sid" '{sessionId:$sid,cwd:"/tmp",title:"x"}' > "$inj_stat
 
 # 16. An empty store publishes an empty fresh snapshot and prunes caches (P2).
 export SESH_DB="$fixture/opencode.db"
-sqlite3 "$SESH_DB" "DELETE FROM part; DELETE FROM message; DELETE FROM session;"
+sqlite3 "$SESH_DB" "DELETE FROM fixture_part; DELETE FROM fixture_message; DELETE FROM session_v2;"
 empty_state="$fixture/empty-state"
 "$list" --refresh --state-dir "$empty_state" > /dev/null
 [ "$(cat "$empty_state/status")" = fresh ]
@@ -319,6 +319,14 @@ XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:
 grep -Fq 'not installed' "$fixture/sync-noop.out"
 [ ! -e "$sync_home/.config/opencode/tui-plugins/sesh-panel/tui.tsx" ]
 XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
+legacy_panel="$sync_home/.config/opencode/plugins/sesh-panel.tsx"
+mkdir -p "$(dirname "$legacy_panel")"
+printf '%s\n' 'export default { id: "sesh-panel", tui }' > "$legacy_panel"
+XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
+[ ! -e "$legacy_panel" ]
+printf '%s\n' '/** @jsxImportSource @opentui/solid */' 'foreign plugin' > "$legacy_panel"
+XDG_CONFIG_HOME="$sync_home/.config" HOME="$sync_home" PATH="$inst_home/fakebin:$PATH" bash "$PACKAGE_DIR/install.sh" --bin-dir "$sync_home/bin" --no-tool > /dev/null 2>&1
+grep -Fxq 'foreign plugin' "$legacy_panel"
 panel="$sync_home/.config/opencode/tui-plugins/sesh-panel/tui.tsx"
 [ -f "$panel" ]
 cp "$panel" "$fixture/panel.orig"
@@ -378,8 +386,8 @@ tool_msg() { # session msg tool status created
   msg_json=$("$SESH_JQ" -cn '{role:"assistant"}')
   part_json=$("$SESH_JQ" -cn --arg tool "$3" --arg status "$4" '{type:"tool",tool:$tool,state:{status:$status}}')
   sqlite3 "$SESH_DB" \
-    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $5, $5, '$msg_json');
-     INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-$2', '$2', '$1', $5, $5, '$part_json');"
+    "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $5, $5, '$msg_json');
+     INSERT INTO fixture_part (id, message_id, session_id, time_created, time_updated, data) VALUES ('p-$2', '$2', '$1', $5, $5, '$part_json');"
 }
 now_ms=$(($(date +%s) * 1000))
 recent=$((now_ms - 300000))
@@ -416,10 +424,10 @@ add_session 'ses_prunenew' "$two" 'Fresh work' $recent $recent
 add_part 'ses_prunenew' 'msg_pn0' 'user' 'text' 'fresh work' $recent
 add_session 'ses_delold' "$two" 'Delete me' 1600000000000 1600000100000
 add_part 'ses_delold' 'msg_do0' 'user' 'text' 'delete work' 1600000100000
-sqlite3 "$SESH_DB" "INSERT INTO session (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_childold', '$one', 'Fork child', 1600000000000, 1600000100000, NULL, 'ses_waitq');"
+sqlite3 "$SESH_DB" "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_childold', '$one', 'Fork child', 1600000000000, 1600000100000, NULL, 'ses_waitq');"
 tool_msg 'ses_childold' 'msg_co1' 'question' 'pending' 1600000100000
 prune="$PACKAGE_DIR/bin/sesh-prune.sh"
-archived_set() { sqlite3 "$SESH_DB" "SELECT id FROM session WHERE COALESCE(time_archived, 0) > 0 ORDER BY id;" | tr '\n' ','; }
+archived_set() { sqlite3 "$SESH_DB" "SELECT id FROM session_v2 WHERE COALESCE(time_archived, 0) > 0 ORDER BY id;" | tr '\n' ','; }
 before_prune=$(archived_set)
 "$prune" --older-than 30d --dry-run > "$fixture/prune-dry.txt"
 grep -Fq 'ses_pruneold' "$fixture/prune-dry.txt"
@@ -432,7 +440,7 @@ if "$prune" --older-than 30d < /dev/null >/dev/null 2>&1; then
   echo "prune without --yes was not refused" >&2; exit 1
 fi
 "$prune" --older-than 30d --yes > /dev/null
-archived() { sqlite3 "$SESH_DB" "SELECT COALESCE(time_archived, 0) > 0 FROM session WHERE id = '$1';"; }
+archived() { sqlite3 "$SESH_DB" "SELECT COALESCE(time_archived, 0) > 0 FROM session_v2 WHERE id = '$1';"; }
 [ "$(archived ses_pruneold)" = 1 ]
 [ "$(archived ses_delold)" = 1 ]
 for kept in ses_prunepin ses_prunenew ses_waitq ses_waitstuck ses_runnow; do
@@ -443,8 +451,8 @@ done
 add_session 'ses_delold2' "$two" 'Delete me too' 1600000000000 1600000100000
 add_part 'ses_delold2' 'msg_do1' 'user' 'text' 'delete work two' 1600000100000
 "$prune" --older-than 30d --delete --yes > /dev/null
-[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_delold2';")" = 0 ]
-[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_prunepin';")" = 1 ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_delold2';")" = 0 ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_prunepin';")" = 1 ]
 
 # 25. Cost digest groups assistant-message cost by directory and splits a
 # recent window from lifetime, so a half-finished day is not inflated by a
@@ -453,7 +461,7 @@ cost_msg() { # session msg cost created
   local data
   data=$("$SESH_JQ" -cn --argjson cost "$3" '{role:"assistant",cost:$cost,tokens:{input:10,output:20}}')
   sqlite3 "$SESH_DB" \
-    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $4, $4, '$data');"
+    "INSERT INTO fixture_message (id, session_id, time_created, time_updated, data) VALUES ('$2', '$1', $4, $4, '$data');"
 }
 today=$(( $(date +%s) * 1000 - 3600000 ))
 old=$(( $(date +%s) * 1000 - 30 * 86400000 ))
@@ -482,11 +490,12 @@ add_part 'ses_kept' 'msg_kt0' 'user' 'text' 'irrelevant' 1700000000000
 retitle="$PACKAGE_DIR/bin/sesh-retitle.sh"
 "$retitle" --dry-run > "$fixture/retitle-dry.txt"
 grep -Fq 'Fix the widget ranking' "$fixture/retitle-dry.txt"
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_newt';")" = 'New session - 2026-01-01T00:00:00.000Z' ]
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_newt';")" = 'New session - 2026-01-01T00:00:00.000Z' ]
 if "$retitle" < /dev/null >/dev/null 2>&1; then echo "retitle without --yes was not refused" >&2; exit 1; fi
 "$retitle" --yes < /dev/null > /dev/null
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_newt';")" = 'Fix the widget ranking across directories' ]
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session WHERE id = 'ses_kept';")" = 'A real title' ]
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_newt';")" = 'Fix the widget ranking across directories' ]
+[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_kept';")" = 'A real title' ]
+[ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_legacy' AND time_archived IS NULL AND title = 'Legacy only';")" = 1 ]
 
 # 27. Search weighting: a title hit outranks a transcript-only hit, and the
 # current project rises while a query is active. Pins still win outright.

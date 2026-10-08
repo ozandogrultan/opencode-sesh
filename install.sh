@@ -210,11 +210,8 @@ install_tui_panel() {
   fi
 }
 
-# opencode imports plugins once at startup and has no hot reload, so a running
-# instance keeps the old panel until it is fully quit (reloading a window reuses
-# the same process). Say so explicitly and name the processes still holding it.
 note_restart() {
-  note "restart opencode to load the updated panel: quit it completely"
+  note "V2 reloads watched plugins automatically; if the panel stays unchanged, restart opencode: quit it completely"
   note "  (all windows and background processes), then reopen."
   if command -v pgrep >/dev/null 2>&1; then
     local pids
@@ -238,7 +235,7 @@ if [ "$UNINSTALL" = 1 ]; then
   if [ -d "$PANEL_DIR" ]; then
     rm -rf "$PANEL_DIR" && note "removed $PANEL_DIR"
   fi
-  remove_if_marker "$CONFIG_DIR/plugins/sesh-panel.tsx" "@jsxImportSource @opentui/solid" && note "removed $CONFIG_DIR/plugins/sesh-panel.tsx"
+  remove_if_marker "$CONFIG_DIR/plugins/sesh-panel.tsx" 'id: "sesh-panel"' && note "removed $CONFIG_DIR/plugins/sesh-panel.tsx"
   remove_opencode_entry && note "unregistered the panel from $OPENCODE_JSON"
   remove_tui_entry && note "unregistered the panel from $TUI_JSON"
   note "uninstalled (extraction cache and plugin dependencies left intact)"
@@ -309,6 +306,7 @@ remove_if_marker "$COMMAND_DST" "rich interactive picker" && note "removed obsol
 [ "$INSTALL_TOOL" = 1 ] && install_file "$SOURCE_DIR/plugins/sesh-list.ts" "$TOOL_DST"
 # Clean up obsolete V1 tool if present
 remove_if_marker "$CONFIG_DIR/tools/sesh-list.ts" "list opencode sessions for the agent" && note "removed obsolete V1 tool"
+remove_if_marker "$CONFIG_DIR/plugins/sesh-panel.tsx" 'id: "sesh-panel"' && note "removed obsolete V1 panel"
 
 if [ "$INSTALL_TUI" = 1 ]; then
   install_tui_panel

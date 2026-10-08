@@ -26,7 +26,7 @@ const input = {
 export default Plugin.define({
   id: "sesh-list",
   async setup(ctx) {
-    ctx.tool.transform((editor) => {
+    await ctx.tool.transform((editor) => {
       editor.add({
         name: "sesh_list",
         description: "List opencode sessions across all project directories, newest first",

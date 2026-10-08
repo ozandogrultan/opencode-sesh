@@ -3,7 +3,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import type { Project, SessionInfo as Session } from "@opencode/client"
 import type { Accessor } from "solid-js"
 
-type TuiPluginApi = any
+type TuiPluginApi = ReturnType<typeof createApi>
 type TuiPlugin = (api: TuiPluginApi) => Promise<void>
 import { createEffect, createMemo, createRoot, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
@@ -237,6 +237,8 @@ function searchBindings(append: (input: string) => void, exit: () => void) {
 
 const rootMouseHandlers = new Set<() => void>()
 let rootMouseInstalled = false
+let removeRootMouse: (() => void) | undefined
+const ROOT_MOUSE = Symbol.for("opencode-sesh.root-mouse")
 
 function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
   if (rootMouseInstalled || !renderer?.root) return
@@ -244,11 +246,25 @@ function ensureRootMouse(renderer: TuiPluginApi["renderer"]) {
   const root = renderer.root as unknown as {
     onMouseDown?: (event: unknown) => void
     _mouseListeners?: { down?: (event: unknown) => void }
+    [ROOT_MOUSE]?: Set<() => void>
   }
-  const previous = root._mouseListeners?.down
-  root.onMouseDown = (event) => {
-    previous?.(event)
+  if (!root[ROOT_MOUSE]) {
+    const handlers = new Set<() => void>()
+    root[ROOT_MOUSE] = handlers
+    const previous = root._mouseListeners?.down
+    root.onMouseDown = (event) => {
+      previous?.(event)
+      for (const handler of [...handlers]) handler()
+    }
+  }
+  const dispatch = () => {
     for (const handler of [...rootMouseHandlers]) handler()
+  }
+  root[ROOT_MOUSE].add(dispatch)
+  removeRootMouse = () => {
+    root[ROOT_MOUSE]?.delete(dispatch)
+    rootMouseHandlers.clear()
+    rootMouseInstalled = false
   }
 }
 
@@ -422,17 +438,14 @@ const SESSION_MAX = 5000
 
 async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
   const home = process.env.HOME ?? ""
-  const projectResult = await api.client.project.list({})
+  const projectResult = await api.client.project.list()
   const projects = ((projectResult?.data ?? projectResult) as Project[]) ?? []
   const projectName = new Map<string, string>(
     projects.map((p) => [p.id, p.name?.trim() || shortDir(p.canonical, home)]),
   )
   const sessions: Session[] = []
-  let cursor: number | undefined
+  let cursor: string | undefined
   let truncated = false
-  // Page through the global list instead of one fixed window, so sessions in
-  // older directories stay searchable. `cursor` is the previous page's oldest
-  // `time.updated`; a repeated or missing cursor stops the walk.
   for (;;) {
     const result = await api.client.experimental.session.list({
       limit: SESSION_PAGE_LIMIT,
@@ -443,13 +456,13 @@ async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
     const page = ((result?.data ?? result) as Session[]) ?? []
     if (!Array.isArray(page) || page.length === 0) break
     sessions.push(...page)
-    if (page.length < SESSION_PAGE_LIMIT) break
+    if (!result.cursor?.next) break
     if (sessions.length >= SESSION_MAX) {
       truncated = true
       break
     }
-    const next = page[page.length - 1]?.time?.updated
-    if (typeof next !== "number" || next === cursor) {
+    const next = result.cursor.next
+    if (next === cursor) {
       truncated = true
       break
     }
@@ -773,7 +786,7 @@ function Highlighted(props: {
 
 async function fetchTranscriptText(api: TuiPluginApi, sessionID: string): Promise<string> {
   try {
-    const result = await api.client.session.messages({ sessionID })
+    const result = await api.client.session.messages({ sessionID, preview: true })
     const messages = result.data ?? []
     const blocks = messages
       .map((message: any) => {
@@ -815,6 +828,7 @@ function createTranscriptPreview(api: TuiPluginApi) {
       close()
       return
     }
+    if (previewID()) close()
     setPreviewID(entry.id)
     setPreviewText("Loading…")
     void fetchTranscriptText(api, entry.id).then((text) => {
@@ -857,6 +871,7 @@ function createTranscriptPreview(api: TuiPluginApi) {
     api.ui.dialog.setSize("large")
     disposePreviewKeys?.()
     disposePreviewKeys = api.keymap.registerLayer({
+      mode: "modal",
       bindings: [
         {
           key: "escape",
@@ -2044,10 +2059,10 @@ const tui: TuiPlugin = async (api) => {
     },
   })
 
-  const openPicker = async () => {
+  const openPicker = async (command = false) => {
     refreshPins()
-    if (api.mode.current() !== BASE_MODE) return
-    if (api.renderer.currentFocusedEditor === null) return
+    if (!command && api.mode.current() !== BASE_MODE) return
+    if (!command && api.renderer.currentFocusedEditor === null) return
 
     let entriesResult: EntryResult
     try {
@@ -2357,6 +2372,7 @@ const tui: TuiPlugin = async (api) => {
       confirmTimer = setTimeout(cancelDelete, 5000)
       disposeConfirm?.()
       disposeConfirm = api.keymap.registerLayer({
+        mode: "modal",
         priority: 20,
         bindings: [
           {
@@ -2415,9 +2431,7 @@ const tui: TuiPlugin = async (api) => {
     }
 
     const disposeNav = api.keymap.registerLayer({
-      // Outrank the built-in dialog layer so Escape reaches this picker before
-      // the dialog host closes the whole thing.
-      mode: "global",
+      mode: "modal",
       priority: 1,
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
@@ -2490,6 +2504,7 @@ const tui: TuiPlugin = async (api) => {
     })
 
     const cleanup = () => {
+      if (!alive) return
       alive = false
       if (confirmTimer) clearTimeout(confirmTimer)
       pickerState = { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() }
@@ -2793,9 +2808,9 @@ const tui: TuiPlugin = async (api) => {
 
   // Read-only digest dialog: spend per project, last day beside lifetime.
   // Same message-level sums as `sesh costs`; the dialog just renders them.
-  const openCosts = async () => {
-    if (api.mode.current() !== BASE_MODE) return
-    if (api.renderer.currentFocusedEditor === null) return
+  const openCosts = async (command = false) => {
+    if (!command && api.mode.current() !== BASE_MODE) return
+    if (!command && api.renderer.currentFocusedEditor === null) return
     type CostRow = { directory: string; window: number; lifetime: number; sessions: number }
     let rows: CostRow[] = []
     let failed = false
@@ -2853,6 +2868,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
     const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
     const home = process.env.HOME ?? ""
     const disposeKeys = api.keymap.registerLayer({
+      mode: "modal",
       bindings: [
         { key: "escape", desc: "Close", preventDefault: true, cmd: () => api.ui.dialog.clear() },
       ],
@@ -2906,9 +2922,9 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
   // Triage dialog: the waiting set as an openable list. Enter opens the
   // highlighted session; the sidebar section stays the always-visible view.
   let lastNeedsID: string | undefined
-  const openNeeds = async () => {
-    if (api.mode.current() !== BASE_MODE) return
-    if (api.renderer.currentFocusedEditor === null) return
+  const openNeeds = async (command = false) => {
+    if (!command && api.mode.current() !== BASE_MODE) return
+    if (!command && api.renderer.currentFocusedEditor === null) return
     let items: { entry: Entry; reason: string; since?: number }[] = []
     try {
       const { entries } = await fetchEntries(api)
@@ -2953,6 +2969,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       api.route.navigate("session", { sessionID: target.entry.id })
     }
     const disposeNav = api.keymap.registerLayer({
+      mode: "modal",
       bindings: [
         { key: "up", desc: "Previous session", preventDefault: true, cmd: () => moveCursor(-1) },
         { key: "down", desc: "Next session", preventDefault: true, cmd: () => moveCursor(1) },
@@ -3054,7 +3071,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       category: "Sessions",
       slash: { name: "sesh" },
       onSelect: () => {
-        void openPicker()
+        void openPicker(true)
       },
     },
     {
@@ -3064,7 +3081,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       category: "Sessions",
       slash: { name: "sesh-costs" },
       onSelect: () => {
-        void openCosts()
+        void openCosts(true)
       },
     },
     {
@@ -3074,7 +3091,7 @@ ORDER BY lifetime_cost DESC`).all() ?? []) as {
       category: "Sessions",
       slash: { name: "sesh-needs" },
       onSelect: () => {
-        void openNeeds()
+        void openNeeds(true)
       },
     },
   ])
@@ -3120,7 +3137,7 @@ function adaptTheme(theme: Plugin.Context["theme"]) {
   }
 }
 
-function createApi(ctx: Plugin.Context): TuiPluginApi {
+function createApi(ctx: Plugin.Context) {
   const [dialogOpen, setDialogOpen] = createSignal(false)
   let sourceTheme: Plugin.Context["theme"] | undefined
   let currentTheme: ReturnType<typeof adaptTheme>
@@ -3135,9 +3152,9 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
       },
     },
     ui: {
-      toast(opts: { message: string; variant?: "info" | "warning" | "error" | "success" }) {
+      toast(opts: { title?: string; message: string; variant?: "info" | "warning" | "error" | "success" }) {
         ctx.ui.toast.show({
-          title: "Session",
+          title: opts.title ?? "Sessions",
           message: opts.message,
           variant: opts.variant ?? "info",
         })
@@ -3147,12 +3164,18 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
           ctx.ui.dialog.clear()
           setDialogOpen(false)
         },
-        replace(render: () => any) {
+        replace(render: () => any, onClose?: () => void) {
+          let closed = false
+          ctx.ui.dialog.show(render, () => {
+            if (closed) return
+            closed = true
+            setDialogOpen(false)
+            onClose?.()
+          })
           setDialogOpen(true)
-          ctx.ui.dialog.show(render, () => setDialogOpen(false))
         },
-        setSize(size: string) {
-          ctx.ui.dialog.set({ size: size as any })
+        setSize(size: Parameters<Plugin.Context["ui"]["dialog"]["set"]>[0]["size"]) {
+          ctx.ui.dialog.set({ size })
         },
         // V2's Dialog has no reactive open/isOpen accessor; track it locally
         // from the replace/clear calls above and the host's onClose callback.
@@ -3224,8 +3247,7 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
           ctx.keymap.layer(() => ({
             mode: layer.mode ?? "base",
             priority: layer.priority ?? 20,
-            commands: (layer.bindings ?? []).map((b, i) => ({
-              id: `sesh-cmd-${Math.random().toString(36).slice(2)}-${i}`,
+            commands: (layer.bindings ?? []).map((b) => ({
               title: b.desc,
               bind: b.key,
               run: () => {
@@ -3234,7 +3256,7 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
             })),
           }))
           return dispose
-        }))
+        }))!
       },
     },
     slots: {
@@ -3291,20 +3313,28 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
           await ctx.client.session.remove({ sessionID: req.sessionID })
           return { data: undefined }
         },
-        async fork(req: { path: { id: string } }) {
-          const res: any = await ctx.client.session.fork({ sessionID: req.path.id })
-          return { data: res?.data ?? res }
+        async fork(req: { sessionID: string; directory?: string }) {
+          const res = await ctx.client.session.fork({ sessionID: req.sessionID })
+          return { data: res }
         },
-        async messages(req: { path?: { id?: string }; sessionID?: string }) {
-          const sessionID = req.sessionID ?? req.path?.id ?? ""
-          const res = await ctx.client.message.list({ sessionID, order: "asc", limit: 100 })
-          const messages = (res.data ?? []).map((m: any) => {
+        async messages(req: { sessionID: string; preview?: boolean }) {
+          let cursor: string | undefined
+          const all = []
+          do {
+            const res = await ctx.client.message.list({ sessionID: req.sessionID, order: req.preview ? "desc" : "asc", limit: 100, cursor })
+            all.push(...res.data)
+            const next = res.cursor.next
+            if (req.preview || !next || next === cursor) break
+            cursor = next
+          } while (true)
+          if (req.preview) all.reverse()
+          const messages = all.map((m) => {
             let text = ""
             if (m.type === "user") text = m.text ?? ""
             else if (m.type === "assistant") {
               text = (m.content ?? [])
-                .filter((c: any) => c.type === "text")
-                .map((c: any) => c.text)
+                .filter((c) => c.type === "text")
+                .map((c) => c.text)
                 .join("\n")
             }
             return {
@@ -3318,30 +3348,17 @@ function createApi(ctx: Plugin.Context): TuiPluginApi {
       },
       experimental: {
         session: {
-          async list(input: any) {
-            // V1 paged the global list with a numeric `time.updated` cursor and a
-            // descending order. V2 returns an opaque cursor per location, so
-            // fetch once and page in memory to keep the caller's loop intact.
-            const limit = Number(input?.limit) > 0 ? Number(input.limit) : 200
-            const cursor = typeof input?.cursor === "number" ? input.cursor : undefined
-            const res: any = await ctx.client.session.list({ limit: 5000, order: "desc" })
-            const all: any[] = Array.isArray(res) ? res : (res?.data ?? [])
-            const normalized = all
-              .map((s: any) => ({
+          async list(input: { limit: number; cursor?: string; roots?: boolean; directory?: string }) {
+            const res = await ctx.client.session.list({ parentID: null, order: "desc", limit: input.limit, cursor: input.cursor })
+            return { cursor: res.cursor, data: res.data.map((s) => ({
                 ...s,
-                directory: s.directory ?? s.location?.directory ?? "",
-              }))
-              .sort((a: any, b: any) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
-            const page =
-              cursor === undefined
-                ? normalized.slice(0, limit)
-                : normalized.filter((s: any) => (s.time?.updated ?? 0) < cursor).slice(0, limit)
-            return { data: page }
+                directory: s.location?.directory ?? "",
+              })) }
           },
         },
       },
     },
-  } as any
+  }
 }
 
 export default Plugin.define({
@@ -3349,7 +3366,7 @@ export default Plugin.define({
   async setup(ctx) {
     const api = createApi(ctx)
     let initialized = false
-    return ctx.ui.slot({
+    const disposeSlot = ctx.ui.slot({
       append: "app",
       render: () => {
         if (!initialized) {
@@ -3360,5 +3377,10 @@ export default Plugin.define({
         return <box />
       },
     })
+    return () => {
+      if (api.ui.dialog.open) api.ui.dialog.clear()
+      disposeSlot()
+      removeRootMouse?.()
+    }
   },
 })

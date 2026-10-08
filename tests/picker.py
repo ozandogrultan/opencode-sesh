@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real fzf PTY regressions. All stores, homes and action commands are fixtures."""
+
 import fcntl
 import json
 import os
@@ -26,14 +27,18 @@ def fzf_supports_picker():
     if not FZF:
         return False
     try:
-        out = subprocess.run([FZF, "--version"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(
+            [FZF, "--version"], capture_output=True, text=True, timeout=10
+        ).stdout
     except OSError:
         return False
     match = re.match(r"(\d+)\.(\d+)", out)
     return bool(match) and (int(match.group(1)), int(match.group(2))) >= (0, 73)
 
 
-@unittest.skipUnless(fzf_supports_picker(), "picker tests need fzf >= 0.73 (or SESH_TEST_FZF)")
+@unittest.skipUnless(
+    fzf_supports_picker(), "picker tests need fzf >= 0.73 (or SESH_TEST_FZF)"
+)
 class PickerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="sesh-picker-")
@@ -42,21 +47,28 @@ class PickerTests(unittest.TestCase):
         for name in ("home", "cache", "tmp", "project", "bin"):
             (self.root / name).mkdir()
         self.db = self.root / "opencode.db"
-        self.sql("""CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT,
-            time_created INTEGER, time_updated INTEGER, time_archived INTEGER, parent_id TEXT);
-            CREATE TABLE part (session_id TEXT, time_updated INTEGER, time_created INTEGER, data TEXT);""")
+        self.sql((ROOT / "tests/fixture-v2.sql").read_text())
         self.add_session("alpha", 20)
         self.add_session("beta", 10)
-        self.env = dict(os.environ, HOME=str(self.root / "home"),
+        self.env = dict(
+            os.environ,
+            HOME=str(self.root / "home"),
             XDG_CONFIG_HOME=str(self.root / "home/config"),
             XDG_CACHE_HOME=str(self.root / "home/cache"),
-            XDG_DATA_HOME=str(self.root / "home/data"), XDG_BIN_HOME=str(self.root / "home/bin"),
-            TMPDIR=str(self.root / "tmp"), SESH_DB=str(self.db),
-            SESH_CACHE_DIR=str(self.root / "cache"), SESH_SQLITE=shutil.which("sqlite3"),
-            SESH_JQ=shutil.which("jq"), SESH_GLOW="/nonexistent/glow",
-            TERM="xterm-256color", FZF_DEFAULT_OPTS="", FZF_DEFAULT_OPTS_FILE="")
+            XDG_DATA_HOME=str(self.root / "home/data"),
+            XDG_BIN_HOME=str(self.root / "home/bin"),
+            TMPDIR=str(self.root / "tmp"),
+            SESH_DB=str(self.db),
+            SESH_CACHE_DIR=str(self.root / "cache"),
+            SESH_SQLITE=shutil.which("sqlite3"),
+            SESH_JQ=shutil.which("jq"),
+            SESH_GLOW="/nonexistent/glow",
+            TERM="xterm-256color",
+            FZF_DEFAULT_OPTS="",
+            FZF_DEFAULT_OPTS_FILE="",
+        )
         stub = self.root / "bin/opencode"
-        stub.write_text(f"""#!{shutil.which('python3')}
+        stub.write_text(f"""#!{shutil.which("python3")}
 import json, os, sqlite3, sys
 from pathlib import Path
 root = Path({str(self.root)!r})
@@ -66,7 +78,7 @@ with (root / 'actions').open('a') as out:
     out.write(json.dumps(dict(args=sys.argv[1:], cwd=os.getcwd())) + '\\n')
 if sys.argv[1:3] == ['session', 'delete']:
     with sqlite3.connect(root / 'opencode.db') as db:
-        db.execute('DELETE FROM session WHERE id = ?', (sys.argv[3],))
+        db.execute('DELETE FROM session_v2 WHERE id = ?', (sys.argv[3],))
 """)
         stub.chmod(0o700)
         self.env["SESH_OPENCODE"] = str(stub)
@@ -82,23 +94,45 @@ if sys.argv[1:3] == ['session', 'delete']:
 
     def add_session(self, name, updated):
         with sqlite3.connect(self.db) as db:
-            db.execute("INSERT INTO session VALUES (?, ?, ?, 1, ?, NULL, NULL)",
-                       ("ses_" + name, str(self.root / "project"), "auth " + name, updated * 1000))
+            db.execute(
+                "INSERT INTO session_v2 VALUES (?, ?, ?, 1, ?, NULL, NULL)",
+                (
+                    "ses_" + name,
+                    str(self.root / "project"),
+                    "auth " + name,
+                    updated * 1000,
+                ),
+            )
+
+    def add_message(self, session, role, seq, data):
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                "INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    f"msg_{session}{seq}",
+                    "ses_" + session,
+                    role,
+                    seq,
+                    seq * 1000,
+                    seq * 1000,
+                    json.dumps(data),
+                ),
+            )
 
     def contents(self, name):
         path = self.root / name
         return path.read_text() if path.exists() else ""
 
-    def start(self, *args):
+    def start(self, *args, ready=b"auth beta", selection_steps=b"\x0e\x0e"):
         self.assertTrue(FZF, "fzf >= 0.73.0 is required (or set SESH_TEST_FZF)")
         # Instrument only observation events; production keys/reloads stay intact.
         wrapper = self.root / "bin/fzf"
         wrapper.write_text(f"""#!/bin/bash
 if [ "${{1:-}}" != --version ]; then
-  printf '%s\\n' "$*" >> {shlex.quote(str(self.root / 'invocations'))}
+  printf '%s\\n' "$*" >> {shlex.quote(str(self.root / "invocations"))}
   exec {shlex.quote(FZF)} "$@" \\
-    --bind {shlex.quote("load:execute-silent(printf '%s\\n' {6} >> " + shlex.quote(str(self.root / 'loads')) + ")")} \\
-    --bind {shlex.quote("focus:execute-silent(printf '%s\\n' {6} > " + shlex.quote(str(self.root / 'focus')) + ")")}
+    --bind {shlex.quote("load:execute-silent(printf '%s\\n' {6} >> " + shlex.quote(str(self.root / "loads")) + ")")} \\
+    --bind {shlex.quote("focus:execute-silent(printf '%s\\n' {6} > " + shlex.quote(str(self.root / "focus")) + ")")}
 fi
 exec {shlex.quote(FZF)} "$@"
 """)
@@ -110,10 +144,13 @@ exec {shlex.quote(FZF)} "$@"
             out = os.open(self.root / "stdout", os.O_WRONLY | os.O_CREAT, 0o600)
             os.dup2(out, 1)
             os.chdir(self.root / "project")
-            os.execve(ROOT / "bin/sesh.sh", [str(ROOT / "bin/sesh.sh"), *args], self.env)
-        self.until(lambda: b"auth beta" in self.screen)
-        self.key(b"\x0e\x0e")  # directory header -> alpha -> beta
-        self.until(lambda: self.contents("focus").strip() == "ses_beta")
+            os.execve(
+                ROOT / "bin/sesh.sh", [str(ROOT / "bin/sesh.sh"), *args], self.env
+            )
+        self.until(lambda: ready in self.screen)
+        if selection_steps:
+            self.key(selection_steps)
+            self.until(lambda: self.contents("focus").strip() == "ses_beta")
 
     def pump(self):
         if self.fd is not None and select.select([self.fd], [], [], 0.05)[0]:
@@ -167,8 +204,12 @@ exec {shlex.quote(FZF)} "$@"
 
     def reorder(self):
         self.add_session("gamma", 30)
-        self.sql("UPDATE session SET title = 'auth beta changed', time_updated = 40000 WHERE id = 'ses_beta'")
-        self.until(lambda: b"auth gamma" in self.screen and b"auth beta changed" in self.screen)
+        self.sql(
+            "UPDATE session_v2 SET title = 'auth beta changed', time_updated = 40000 WHERE id = 'ses_beta'"
+        )
+        self.until(
+            lambda: b"auth gamma" in self.screen and b"auth beta changed" in self.screen
+        )
         self.assertEqual(self.contents("loads").splitlines()[-1], "ses_beta")
 
     def test_resume_tracks_identity_and_preserves_query_on_return(self):
@@ -176,7 +217,15 @@ exec {shlex.quote(FZF)} "$@"
         self.reorder()
         self.key(b"\r")
         self.until(lambda: len(self.contents("invocations").splitlines()) == 2)
-        self.assertEqual(self.actions(), [dict(args=["--session", "ses_beta"], cwd=os.path.realpath(str(self.root / "project")))])
+        self.assertEqual(
+            self.actions(),
+            [
+                dict(
+                    args=["--session", "ses_beta"],
+                    cwd=os.path.realpath(str(self.root / "project")),
+                )
+            ],
+        )
         self.assertIn("--query=auth ", self.contents("invocations").splitlines()[1])
 
     def test_space_enters_query_instead_of_opening_preview(self):
@@ -199,7 +248,13 @@ exec {shlex.quote(FZF)} "$@"
         self.assertEqual(self.actions()[0]["args"], ["session", "delete", "ses_beta"])
         self.until(lambda: b"Selected session is no longer available" in self.screen)
         with sqlite3.connect(self.db) as db:
-            self.assertEqual(db.execute("SELECT id FROM session ORDER BY id").fetchall(), [("ses_alpha",), ("ses_gamma",)])
+            self.assertEqual(
+                db.execute("SELECT id FROM session_v2 ORDER BY id").fetchall(),
+                [("ses_alpha",), ("ses_gamma",)],
+            )
+            self.assertEqual(
+                db.execute("SELECT id FROM session").fetchall(), [("ses_legacy",)]
+            )
 
     def test_delete_can_be_cancelled(self):
         self.start()
@@ -210,13 +265,17 @@ exec {shlex.quote(FZF)} "$@"
         self.assertEqual(self.actions(), [])
         with sqlite3.connect(self.db) as db:
             self.assertEqual(
-                db.execute("SELECT id FROM session ORDER BY id").fetchall(),
+                db.execute("SELECT id FROM session_v2 ORDER BY id").fetchall(),
                 [("ses_alpha",), ("ses_beta",)],
             )
 
     def disappearance(self, final=False):
         self.start("--query", "auth")
-        self.sql("DELETE FROM session" if final else "DELETE FROM session WHERE id = 'ses_beta'")
+        self.sql(
+            "DELETE FROM session_v2"
+            if final
+            else "DELETE FROM session_v2 WHERE id = 'ses_beta'"
+        )
         self.until(lambda: b"Selected session is no longer available" in self.screen)
         self.assertEqual(self.contents("loads").splitlines()[-1], "ses_beta")
         self.key(b"\x18")
@@ -237,7 +296,9 @@ exec {shlex.quote(FZF)} "$@"
         self.start("--query", "auth", "--print")
         self.key(b"\x06")
         self.until(lambda: "ses_beta" in self.contents("stdout"))
-        self.assertEqual(self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\tfork\n")
+        self.assertEqual(
+            self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\tfork\n"
+        )
 
     def test_explicit_fork_with_enter(self):
         self.start("--fork", "--query", "auth")
@@ -246,26 +307,96 @@ exec {shlex.quote(FZF)} "$@"
         self.assertEqual(self.actions()[0]["args"], ["--session", "ses_beta", "--fork"])
 
     def test_literal_ctrl_f_query_does_not_fork(self):
-        self.sql("UPDATE session SET title = 'ctrl-f auth ' || id")
+        self.sql("UPDATE session_v2 SET title = 'ctrl-f auth ' || id")
         # Keep the initial titles recognizable to the PTY readiness check.
-        self.sql("UPDATE session SET title = 'ctrl-f auth beta' WHERE id = 'ses_beta'")
+        self.sql(
+            "UPDATE session_v2 SET title = 'ctrl-f auth beta' WHERE id = 'ses_beta'"
+        )
         self.start("--query", "ctrl-f", "--print")
         self.key(b"\r")
         self.until(lambda: "ses_beta" in self.contents("stdout"))
-        self.assertEqual(self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\n")
+        self.assertEqual(
+            self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\n"
+        )
 
     def test_header_reports_scope_and_status(self):
         self.start()
         self.until(lambda: b"all dirs" in self.screen and b"sessions" in self.screen)
 
+    def transcript_search(self, role, data, query):
+        self.add_message("beta", role, 1, data)
+        self.start("--print", "--query", query, selection_steps=b"\x0e")
+        self.key(b"\r")
+        self.until(lambda: "ses_beta" in self.contents("stdout"))
+        self.assertEqual(
+            self.contents("stdout"), f"ses_beta\t{self.root / 'project'}\n"
+        )
+
+    def test_v2_user_transcript_search(self):
+        self.transcript_search("user", {"text": "v2userneedle"}, "v2userneedle")
+
+    def test_v2_assistant_transcript_search(self):
+        self.transcript_search(
+            "assistant",
+            {
+                "content": [
+                    {"type": "reasoning", "text": "hiddenreasoningneedle"},
+                    {"type": "text", "text": "v2assistantneedle"},
+                    {
+                        "type": "tool",
+                        "name": "shell",
+                        "state": {"status": "completed", "output": "hiddentoolneedle"},
+                    },
+                ]
+            },
+            "v2assistantneedle",
+        )
+
+    def test_v2_nontext_transcript_is_not_searchable(self):
+        self.add_message(
+            "beta",
+            "assistant",
+            1,
+            {
+                "content": [
+                    {"type": "reasoning", "text": "hiddenneedle"},
+                    {
+                        "type": "tool",
+                        "name": "shell",
+                        "state": {"status": "completed", "output": "hiddenneedle"},
+                    },
+                ]
+            },
+        )
+        self.start(
+            "--print",
+            "--query",
+            "hiddenneedle",
+            ready=b"No sessions match",
+            selection_steps=b"",
+        )
+        self.key(b"\r")
+        self.until(lambda: len(self.contents("invocations").splitlines()) == 2)
+        self.assertEqual(self.contents("stdout"), "")
+        self.assertEqual(self.actions(), [])
+
     def test_pin_shortcuts_persist_without_accepting(self):
         self.start()
         pins = self.root / "home/data/sesh/pins.json"
         self.key(b"\x13")  # Ctrl-S pins the selected session.
-        self.until(lambda: pins.exists() and "ses_beta" in json.loads(pins.read_text())["sessions"])
+        self.until(
+            lambda: (
+                pins.exists() and "ses_beta" in json.loads(pins.read_text())["sessions"]
+            )
+        )
         self.settle(0.5)  # Let fzf finish the bound reload before the next key.
         self.key(b"\x04")  # Ctrl-D pins its directory.
-        self.until(lambda: str(self.root / "project") in json.loads(pins.read_text())["directories"])
+        self.until(
+            lambda: (
+                str(self.root / "project")
+                in json.loads(pins.read_text())["directories"]
+            )
+        )
         self.settle(0.5)
         self.assertFalse(self.actions())
         self.key(b"\x13")

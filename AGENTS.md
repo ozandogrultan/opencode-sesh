@@ -59,16 +59,18 @@ The tool name in opencode is `sesh_list`. Do not rename it without updating the 
 ## Data flow (fzf picker)
 
 `bin/sesh-list.sh` owns the fzf picker's session store access (opencode SQLite
-DB: `session` / `message` / `part` tables); the `sesh-list` agent tool queries
-the same store through `opencode db`. Keep its SQL column names in sync with
+DB: `session_v2` / `session_message` tables); the `sesh-list` agent tool queries
+the same store read-only through `bun:sqlite`. V2 discovers the tool from the
+global config directory's `plugins/`. Keep its SQL column names in sync with
 the schema below. Keystrokes never touch the database:
 
 - `--refresh` (expensive): bulk-reads session metadata and per-session text
   parts, validates the persistent extraction cache
-  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`, schema 2) against `time_updated`,
-  part count and the latest part timestamp, re-extracts only changed sessions,
+  (`$SESH_CACHE_DIR/extractions/<ses_*.json>`, schema 3) against `time_updated`,
+  message count and the latest message timestamp, re-extracts only changed sessions,
   prunes vanished ones, and atomically publishes `STATE_DIR/snapshot.jsonl`.
-  Extraction moves transcripts through files, never argv (no ARG_MAX limit); if
+  Extraction reads user `data.text` and assistant `data.content` text entries,
+  ordered by message `seq`, through files, never argv (no ARG_MAX limit); if
   any session fails, the published status is `stale` and that session stays
   uncached so the next refresh retries, otherwise `status = fresh`. Scope
   (`--cwd`/toggle) and `--limit` apply at assembly, so metadata always covers
@@ -141,7 +143,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 
 ## TUI panel (`tui-plugins/sesh-panel/tui.tsx`)
 
-- **Sidebar:** `api.slots.register` on `sidebar_content` (append mode — native
+- **Sidebar:** `api.slots.register` on `sidebar_content` (prepend mode — native
   sidebar content stays). Pinned directories sort first, then directory groups
   by recency; sessions within each group sort by last update regardless of pins.
   Row markers alone signal session state: a running agent animates a loading
@@ -171,8 +173,9 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
   question or running-tool timestamp, lists longest-waiting first, and `n`
   opens the next waiting session. `tests/tui.mjs` locks the data layer.
-- **Durable install:** opencode imports plugins once at startup and never hot
-  reloads, so panel changes need a full quit/reopen. `install.sh --sync-panel`
+- **Durable install:** V2 reloads plugins on watched configuration changes;
+  unwatched dependencies may need a restart. If a panel update does not appear,
+  fully quit/reopen opencode. `install.sh --sync-panel`
   (run by the `postinstall`) refreshes an already-installed panel and is a
   no-op when absent, and `sesh --check` reports when the installed copy differs
   from the bundled one.
@@ -234,7 +237,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
   history in a temp dir (included in `bun run test`).
 - `bun run test:picker` — PTY suite driving the real fzf picker (needs fzf
   `>= 0.73` and Python 3).
-- `bun run typecheck` — `tsc` over `tui/` and `opencode/`.
+- `bun run typecheck` — `tsc` over `tui-plugins/` and `plugins/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.
 - Keep `tui-plugins/sesh-panel/tui.tsx` and any installed copy byte-identical when testing

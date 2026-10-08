@@ -72,13 +72,11 @@ JQ_BIN=${SESH_JQ:-$(command -v jq || true)}
 # first `max_words` words kept.
 CANDIDATES=$(query "
 SELECT s.id AS id, s.directory AS directory, s.title AS old_title,
-  (SELECT p.data FROM part p
-     JOIN message m ON m.id = p.message_id
-     WHERE p.session_id = s.id
-       AND json_extract(p.data, '\$.type') = 'text'
-       AND json_extract(m.data, '\$.role') = 'user'
-     ORDER BY p.time_created ASC LIMIT 1) AS first_part
-FROM session s
+  (SELECT m.data FROM session_message m
+     WHERE m.session_id = s.id AND m.type = 'user'
+       AND json_type(m.data, '\$.text') = 'text'
+     ORDER BY m.seq ASC LIMIT 1) AS first_part
+FROM session_v2 s
 WHERE s.title LIKE 'New session - %'
    OR TRIM(COALESCE(s.title, '')) = ''
 ORDER BY s.time_updated DESC;")
@@ -136,6 +134,6 @@ printf '%s' "$PLAN" | "$JQ_BIN" -r '.[] | [.id, .new_title] | @tsv' | while IFS=
     ses_[A-Za-z0-9]*) ;;
     *) echo "Refusing: unexpected session id shape." >&2; exit 1 ;;
   esac
-  write_db "UPDATE session SET title = '$(sql_escape "$new")' WHERE id = '$id' AND (title LIKE 'New session - %' OR TRIM(COALESCE(title, '')) = '');"
+  write_db "UPDATE session_v2 SET title = '$(sql_escape "$new")' WHERE id = '$id' AND (title LIKE 'New session - %' OR TRIM(COALESCE(title, '')) = '');"
 done
 echo "Retitled $COUNT session(s)."
