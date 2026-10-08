@@ -18,14 +18,18 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 [![GitHub stars](https://img.shields.io/github/stars/ozandogrultan/opencode-sesh?style=social)](https://github.com/ozandogrultan/opencode-sesh/stargazers)
 
 ```text
-❯ auth
-  ~/code/api                                 (8)
-  ├ Retry the OAuth token refresh       2h
-  ├ Login rate limiting notes          3d
-  └ auth middleware cleanup           11d
-  ~/code/web                                (3)
-  ├ Fix session cookie on Safari       1d
-  └ Redirect loop after logout         6d
+Sessions (8)                              ▾ hide
+  search…
+▾ …/Projects/portal                          (5)
+  ├○ Retry the OAuth token refr…            2h
+  ├○ Login rate limiting notes              3d
+  ├○ Draft the release notes                7d
+  ├○ Auth middleware cleanup               11d
+  └○ Rotate the signing keys                12d
+▾ ~/Projects/mobile                          (3)
+  ├○ Author avatar upload retry             1d
+  ├○ Fix session cookie on Safari           2d
+  └○ Auth redirect loop after log…          6d
 ```
 
 ## Why sesh
