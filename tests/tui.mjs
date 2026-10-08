@@ -597,6 +597,23 @@ function makeApi(sessions, { latency = 0 } = {}) {
   }
 
   {
+    // A still pointer re-fires hover; republishing an identical selection
+    // would rebuild the keyed menu every frame until clicks fall through it.
+    const h = harness()
+    h.menu.open(entry, 1, 1)
+    const published = h.states.length
+    h.menu.select(0)
+    h.menu.select(0)
+    assert.equal(h.states.length, published, "redundant hover must not republish")
+    assert.equal(h.menu.current().index, 0)
+    h.menu.select(2)
+    assert.equal(h.states.length, published + 1, "genuine hover moves still publish")
+    assert.equal(h.menu.current().index, 2)
+    h.menu.select(2)
+    assert.equal(h.states.length, published + 1)
+  }
+
+  {
     const h = harness()
     h.block.on = true
     h.menu.open(entry, 1, 1)
@@ -653,8 +670,14 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.ok(sidebar.length > 1000, "could not locate the sidebar component")
   assert.match(sidebar, /const menuView = createMemo\(\(\) => \{/)
   assert.match(sidebar, /event\.button === RIGHT_BUTTON[\s\S]{0,120}menu\.open\(row\.entry, event\.x, event\.y\)/)
+  assert.match(
+    sidebar,
+    /onMouseDown=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*if \(event\.button === RIGHT_BUTTON\) return\s*toggleGroup\(row\.dir\)/,
+    "right-clicking a group header must not collapse the group",
+  )
   assert.doesNotMatch(sidebar, /openInCmuxWorkspace\(props\.api, row\.entry\)/)
   assert.match(sidebar, /const onRootMouseDown = \(\) => \{\s+menu\.close\(\)/)
+  assert.match(sidebar, /preview\.closeIfOpen\(\)/, "one outside press must close an open preview")
   assert.match(sidebar, /<Portal\s+mount=/)
   assert.match(sidebar, /<Portal[\s\S]*?<Show when=\{menuView\(\)\} keyed>[\s\S]*?<\/Show>\s*<\/Portal>/)
   assert.doesNotMatch(sidebar, /<Show when=\{menuView\(\)\} keyed>\s*<Portal/)

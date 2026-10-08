@@ -352,13 +352,21 @@ function createContextMenu(host: ContextMenuHost) {
   }
 
   const select = (index: number) => {
-    if (state) publish({ ...state, index: Math.max(0, Math.min(state.items.length - 1, index)) })
+    if (!state) return
+    const next = Math.max(0, Math.min(state.items.length - 1, index))
+    // A still pointer re-fires over events; republishing an identical state
+    // would rebuild the keyed menu on every frame, churning renderables until
+    // clicks fall through to whatever is beneath.
+    if (next === state.index) return
+    publish({ ...state, index: next })
   }
 
   const move = (delta: number) => {
     if (!state) return
     const count = state.items.length
-    publish({ ...state, index: (state.index + delta + count) % count })
+    const next = (state.index + delta + count) % count
+    if (next === state.index) return
+    publish({ ...state, index: next })
   }
 
   const activate = (index?: number) => {
@@ -835,7 +843,15 @@ function createTranscriptPreview(api: TuiPluginApi) {
     })
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingBottom={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
+        <box
+          flexDirection="column"
+          paddingLeft={4}
+          paddingRight={4}
+          paddingBottom={1}
+          gap={1}
+          backgroundColor={api.theme.current.backgroundPanel}
+          onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+        >
           <box flexDirection="row" justifyContent="space-between">
             <text attributes={TextAttributes.BOLD}>{entry.title}</text>
             <text style={{ fg: api.theme.current.textMuted }} onMouseUp={close}>esc</text>
@@ -884,7 +900,14 @@ function createTranscriptPreview(api: TuiPluginApi) {
 
   onCleanup(() => disposePreviewKeys?.())
 
-  return { open }
+  // Outside presses reach the root handler; close on the first one instead of
+  // relying on the host backdrop. Gated on our own preview so other dialogs
+  // are never touched.
+  const closeIfOpen = () => {
+    if (previewID()) close()
+  }
+
+  return { open, closeIfOpen }
 }
 
 type TreeRow =
@@ -1313,6 +1336,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 
   const onRootMouseDown = () => {
     menu.close()
+    preview.closeIfOpen()
     if (insideSearchBox) {
       insideSearchBox = false
       return
@@ -1575,8 +1599,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           <For each={tree()}>
           {(row) => {
             if (row.kind === "group") return (
-              <box flexDirection="row" paddingTop={1} onMouseDown={(event: { stopPropagation: () => void }) => {
+              <box flexDirection="row" paddingTop={1} onMouseDown={(event: { button?: number; stopPropagation: () => void }) => {
                 event.stopPropagation()
+                if (event.button === RIGHT_BUTTON) return
                 toggleGroup(row.dir)
               }}>
                 <text flexGrow={1} flexShrink={1} wrapMode="none">
@@ -1701,6 +1726,9 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   height={1}
                   backgroundColor={view.state.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
                   onMouseOver={() => menu.select(index())}
+                  // Release activates so the press that opens a dialog cannot
+                  // straddle it: the release is consumed here before any dialog
+                  // opened by the action exists.
                   onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
                   onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
                     event.stopPropagation()
@@ -1825,6 +1853,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   const onRootMouseDown = () => {
+    preview.closeIfOpen()
     if (insideSearchBox) {
       insideSearchBox = false
       return
