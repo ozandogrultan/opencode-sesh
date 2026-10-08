@@ -450,7 +450,6 @@ async function fetchEntries(api: TuiPluginApi): Promise<EntryResult> {
     const result = await api.client.experimental.session.list({
       limit: SESSION_PAGE_LIMIT,
       roots: true,
-      directory: "",
       ...(cursor === undefined ? {} : { cursor }),
     })
     const page = ((result?.data ?? result) as Session[]) ?? []
