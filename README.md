@@ -24,7 +24,7 @@ Sessions (8)                              ▾ hide
   ├○ Retry the OAuth token refr…            2h
   ├○ Login rate limiting notes              3d
   ├○ Draft the release notes                7d
-  ├○ Auth middleware cleanup               11d
+  ├○ Auth middleware cleanup                11d
   └○ Rotate the signing keys                12d
 ▾ ~/Projects/mobile                          (3)
   ├○ Author avatar upload retry             1d
