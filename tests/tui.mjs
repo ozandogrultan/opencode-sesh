@@ -8,6 +8,14 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DatabaseSync } from "node:sqlite"
+import { execFileSync } from "node:child_process"
+import * as solid from "solid-js/dist/solid.js"
+import * as tui from "@opentui/solid"
+import * as jsxRuntime from "@opentui/solid/jsx-runtime"
+import { RGBA } from "@opentui/core"
+import { transformAsync } from "@babel/core"
+import solidPreset from "babel-preset-solid"
+import typescriptPreset from "@babel/preset-typescript"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -650,13 +658,106 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const sidebar = source.slice(source.indexOf("function SidebarSessions"), source.indexOf("function HomeSessions"))
+  const memo = sidebar.slice(sidebar.indexOf("  const menuView ="), sidebar.indexOf("  let disposeHoverSpace"))
+  const overlay = sidebar.slice(sidebar.indexOf("        <Show when={menuView()}", sidebar.indexOf("      <Portal")), sidebar.indexOf("      </Portal>"))
+  const compiled = execFileSync("bun", ["-e", 'const source = await Bun.stdin.text(); console.log(new Bun.Transpiler({ loader: "tsx", tsconfig: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "@opentui/solid" } } }).transformSync(source))'], {
+    input: `function renderMenu() { ${memo}\nreturn (${overlay.trim()}); }`, encoding: "utf8",
+  }).replace(/\b(jsx|jsxs)_[a-z0-9]+\b/g, (_, name) => `require().${name}`) + "\nreturn renderMenu();"
+  const renderMenu = new Function("require", "exports", "createMemo", "menuState", "props", "contextMenuBox", "contextMenuSize", "Show", "For", "theme", "RGBA", "menu", compiled)
+  const menuSource = `function renderMenu() { ${memo}\nreturn (${overlay.trim()}); }`
+  const transformed = await transformAsync(menuSource, {
+    filename: "menu.tsx", configFile: false, babelrc: false,
+    presets: [[solidPreset, { moduleName: "@opentui/solid", generate: "universal" }], [typescriptPreset]],
+  })
+  const reactiveCode = transformed.code.replace(/import \{([^}]+)\} from "@opentui\/solid";/g, (_, names) => `const {${names.replace(/ as /g, ": ")}} = require();`) + "\nreturn renderMenu();"
+  const renderReactiveMenu = new Function("require", "exports", "createMemo", "menuState", "props", "contextMenuBox", "contextMenuSize", "Show", "For", "theme", "RGBA", "menu", reactiveCode)
+  const colors = {
+    borderActive: RGBA.fromInts(255, 255, 255), backgroundPanel: RGBA.fromInts(0, 0, 0),
+    backgroundElement: RGBA.fromInts(50, 50, 50), text: RGBA.fromInts(255, 255, 255),
+    textMuted: RGBA.fromInts(180, 180, 180), error: RGBA.fromInts(255, 0, 0),
+  }
+  const size = (items) => ({ width: Math.max(...items.map((item) => item.label.length)) + 4, height: items.length + 2 })
+  const setup = await tui.testRender(() => {
+    const [state] = solid.createSignal()
+    return renderMenu(
+      () => jsxRuntime, {}, solid.createMemo, state, { api: { renderer: { width: 80, height: 24 } } },
+      contextMenuBox, size, solid.Show, solid.For, () => colors, RGBA, {},
+    )
+  }, { width: 80, height: 24 })
+  try {
+    await setup.renderOnce()
+    assert.equal(setup.captureCharFrame().trim(), "", "a closed menu renders no overlay")
+  } finally {
+    setup.renderer.destroy()
+  }
+  let menu
+  let setDimensions
+  const layers = new Set()
+  const calls = []
+  const reactiveSetup = await tui.testRender(() => {
+    const [state, setState] = solid.createSignal()
+    const [dimensions, set] = solid.createSignal({ width: 80, height: 24 })
+    setDimensions = set
+    menu = createContextMenu({
+      registerLayer: (layer) => { layers.add(layer); return () => layers.delete(layer) },
+      actions: Object.fromEntries(["open", "preview", "fork", "pin", "workspace", "delete"].map((name) => [name, () => calls.push(name)])),
+      pinned: () => false, cmux: () => false, blocked: () => false, onChange: setState,
+    })
+    solid.onCleanup(() => menu.close())
+    return renderReactiveMenu(
+      () => ({ ...tui, ...solid }), {}, solid.createMemo, state, { api: { get renderer() { return dimensions() } } },
+      contextMenuBox, size, solid.Show, solid.For, () => colors, RGBA, menu,
+    )
+  }, { width: 80, height: 24 })
+  const entry = { id: "ses_render", title: "Render", dir: "/p", group: "p", updated: 1 }
+  const press = (key) => [...layers][0].bindings.find((binding) => binding.key === key).cmd()
+  try {
+    for (let i = 0; i < 3; i++) {
+      menu.open(entry, 70, 22)
+      await reactiveSetup.renderOnce()
+      assert.match(reactiveSetup.captureCharFrame(), /Preview transcript/)
+      press("down")
+      assert.equal(menu.current().index, 1)
+      setDimensions({ width: 60, height: 20 })
+      await reactiveSetup.renderOnce()
+      press("escape")
+      await reactiveSetup.renderOnce()
+      assert.equal(reactiveSetup.captureCharFrame().trim(), "")
+      assert.equal(layers.size, 0)
+    }
+    menu.open(entry, 1, 1)
+    menu.select(4)
+    press("enter")
+    await reactiveSetup.renderOnce()
+    assert.match(reactiveSetup.captureCharFrame(), /Confirm delete/)
+    press("up")
+    press("enter")
+    await reactiveSetup.renderOnce()
+    assert.deepEqual(calls, ["delete"])
+    assert.equal(layers.size, 0)
+    assert.equal(reactiveSetup.captureCharFrame().trim(), "")
+    menu.open(entry, 1, 1)
+    await reactiveSetup.renderOnce()
+    await reactiveSetup.mockMouse.moveTo(4, 4)
+    await reactiveSetup.renderOnce()
+    assert.equal(menu.current().index, 1)
+    await reactiveSetup.mockMouse.pressDown(4, 4)
+    await reactiveSetup.renderOnce()
+    await reactiveSetup.mockMouse.release(4, 4)
+    assert.deepEqual(calls, ["delete", "preview"])
+    assert.equal(layers.size, 0)
+    menu.open(entry, 1, 1)
+  } finally {
+    reactiveSetup.renderer.destroy()
+  }
+  assert.equal(layers.size, 0, "disposing an open menu releases its keys")
   assert.ok(sidebar.length > 1000, "could not locate the sidebar component")
   assert.match(sidebar, /event\.button === RIGHT_BUTTON[\s\S]{0,120}menu\.open\(row\.entry, event\.x, event\.y\)/)
   assert.doesNotMatch(sidebar, /openInCmuxWorkspace\(props\.api, row\.entry\)/)
   assert.match(sidebar, /const onRootMouseDown = \(\) => \{\s+menu\.close\(\)/)
   assert.match(sidebar, /<Portal\s+mount=/)
-  assert.match(sidebar, /<Portal[\s\S]*?<Show when=\{menuState\(\)\}>[\s\S]*?<\/Show>\s*<\/Portal>/)
-  assert.doesNotMatch(sidebar, /<Show when=\{menuState\(\)\}>\s*<Portal/)
+  assert.match(sidebar, /<Portal[\s\S]*?<Show when=\{menuView\(\)\} keyed>[\s\S]*?<\/Show>\s*<\/Portal>/)
+  assert.doesNotMatch(sidebar, /<Show when=\{menuView\(\)\} keyed>\s*<Portal/)
   assert.match(sidebar, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
   assert.match(sidebar, /on\(routeKey, \(\) => menu\.close\(\), \{ defer: true \}\)/)
   assert.match(sidebar, /itemRows\(\)\.some\(\(entry\) => entry\.id === state\.entry\.id\)\) menu\.close\(\)/)

@@ -1257,14 +1257,15 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     onChange: setMenuState,
   })
 
-  const menuBox = createMemo(() => {
+  const menuView = createMemo(() => {
     const state = menuState()
     if (!state) return undefined
-    return contextMenuBox(
+    const box = contextMenuBox(
       { x: state.x, y: state.y, ...contextMenuSize(state.items) },
       props.api.renderer.width,
       props.api.renderer.height,
     )
+    return { state, box }
   })
 
   let disposeHoverSpace: (() => void) | undefined
@@ -1677,13 +1678,14 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           container.zIndex = 1000
         }}
       >
-        <Show when={menuState()}>
+        <Show when={menuView()} keyed>
+          {(view) => (
           <box
             position="absolute"
-            left={menuBox()!.left}
-            top={menuBox()!.top}
-            width={menuBox()!.width}
-            height={menuBox()!.height}
+            left={view.box.left}
+            top={view.box.top}
+            width={view.box.width}
+            height={view.box.height}
             flexDirection="column"
             border
             borderStyle="rounded"
@@ -1694,11 +1696,11 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
             onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
           >
-            <For each={menuState()!.items}>
+            <For each={view.state.items}>
               {(item, index) => (
                 <box
                   height={1}
-                  backgroundColor={menuState()!.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                  backgroundColor={view.state.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
                   onMouseOver={() => menu.select(index())}
                   onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
                   onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
@@ -1712,7 +1714,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                       fg:
                         item.id === "delete" || item.id === "confirm"
                           ? theme().error
-                          : menuState()!.index === index()
+                          : view.state.index === index()
                             ? theme().text
                             : theme().textMuted,
                     }}
@@ -1723,6 +1725,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
               )}
             </For>
           </box>
+          )}
         </Show>
       </Portal>
     </box>
