@@ -76,6 +76,8 @@ if sys.argv[1:] == ['--version']:
     print('1.18.30'); sys.exit(0)
 with (root / 'actions').open('a') as out:
     out.write(json.dumps(dict(args=sys.argv[1:], cwd=os.getcwd())) + '\\n')
+if sys.argv[1:3] == ['api', 'session.fork']:
+    print(json.dumps(dict(data=dict(id='ses_forked'))))
 if sys.argv[1:3] == ['session', 'delete']:
     with sqlite3.connect(root / 'opencode.db') as db:
         db.execute('DELETE FROM session_v2 WHERE id = ?', (sys.argv[3],))
@@ -303,8 +305,12 @@ exec {shlex.quote(FZF)} "$@"
     def test_explicit_fork_with_enter(self):
         self.start("--fork", "--query", "auth")
         self.key(b"\r")
-        self.until(lambda: bool(self.actions()))
-        self.assertEqual(self.actions()[0]["args"], ["--session", "ses_beta", "--fork"])
+        self.until(lambda: len(self.actions()) >= 2)
+        self.assertEqual(
+            self.actions()[0]["args"],
+            ["api", "session.fork", "--param", "sessionID=ses_beta", "-d", "{}"],
+        )
+        self.assertEqual(self.actions()[1]["args"], ["--session", "ses_forked"])
 
     def test_literal_ctrl_f_query_does_not_fork(self):
         self.sql("UPDATE session_v2 SET title = 'ctrl-f auth ' || id")

@@ -6,8 +6,9 @@
 # is invisible cross-project.
 #
 # A session waits when it is not archived, is not a fork child, and either
-#   - has a `question` tool part that never completed with no later user
-#     message in the same session (awaiting an answer, errored included), or
+#   - has a `question` tool part still pending or running with no later user
+#     message in the same session (awaiting an answer; a dismissed question
+#     that errored is not waiting), or
 #   - has a `tool` part still marked `running` older than STUCK_AFTER_MS
 #     (awaiting approval, or orphaned by a dead server).
 #
@@ -30,12 +31,12 @@ done
 
 resolve_db() {
   if [ -n "${SESH_DB:-}" ]; then printf '%s\n' "$SESH_DB"; return 0; fi
-  local from_cli=''
+  local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
+  if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" db path 2>/dev/null || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
-  if [ -f "$HOME/.local/share/opencode/opencode.db" ]; then printf '%s\n' "$HOME/.local/share/opencode/opencode.db"; return 0; fi
   return 1
 }
 
@@ -88,14 +89,8 @@ WHERE COALESCE(s.time_archived, 0) = 0
 ORDER BY s.time_updated DESC;
 SQL
 
-if [ -n "$SQLITE_BIN" ]; then
-  # Read-only: sesh never writes the store on this path (archive writes go
-  # through `opencode db`, hard deletes through `opencode session delete`).
-  ROWS=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$QUERY")
-else
-  command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: neither sqlite3 nor opencode is available' >&2; exit 1; }
-  ROWS=$("$OPENCODE_BIN" db "$QUERY" --format json)
-fi
+[ -n "$SQLITE_BIN" ] || { echo 'sesh: sqlite3 is required' >&2; exit 1; }
+ROWS=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$QUERY")
 
 # sqlite3 -json prints nothing (not []) when no rows match.
 [ -n "$ROWS" ] || ROWS='[]'

@@ -38,8 +38,7 @@
     "AGENTS.md",
     "CHANGELOG.md",
     "LICENSE",
-    "README.md",
-    "ROADMAP.md"
+    "README.md"
   ],
   "publishConfig": {
     "access": "public"

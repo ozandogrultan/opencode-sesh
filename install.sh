@@ -2,8 +2,9 @@
 # Install sesh for the current user.
 # Terminal- and OS-agnostic: macOS and Linux, any terminal. No administrator
 # privileges, downloads, or shell-rc edits. Runtime requires jq, fzf >= 0.73
-# and sqlite3 or the opencode CLI; the in-TUI panel additionally needs the
-# packages opencode installs for local plugins (handled below).
+# and sqlite3; resuming and deleting need the opencode CLI. The in-TUI panel
+# additionally needs the packages opencode installs for local plugins (handled
+# below).
 set -euo pipefail
 
 fail() { printf 'sesh install: %s\n' "$*" >&2; exit 1; }
@@ -251,7 +252,6 @@ for path in \
   bin/sesh-delete.sh \
   bin/sesh-prune.sh \
   bin/sesh-refresh-worker.sh \
-  bin/sesh-retitle.sh \
   bin/sesh-waiting.sh \
   bin/sesh-shortcuts.sh \
   plugins/sesh-list.ts \
@@ -284,8 +284,7 @@ if [[ "$fzf_version" =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))? ]]; then
 else
   fail "cannot parse fzf version from: $fzf_version."
 fi
-command -v sqlite3 >/dev/null 2>&1 || command -v opencode >/dev/null 2>&1 \
-  || fail "either sqlite3 or the opencode CLI is required."
+command -v sqlite3 >/dev/null 2>&1 || fail "sqlite3 is required."
 command -v opencode >/dev/null 2>&1 || note "opencode CLI not found: listing and previews work via sqlite3, but resume and delete need opencode."
 
 umask 077

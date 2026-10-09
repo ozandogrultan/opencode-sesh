@@ -16,6 +16,16 @@ export SESH_SQLITE=$(command -v sqlite3)
 export SESH_GLOW=/nonexistent/glow
 trap 'rm -rf "$fixture"' EXIT
 
+# 0. The opencode CLI surface sesh shells out to still exists (skipped when
+# opencode is not installed; every later test uses a stub).
+if command -v opencode >/dev/null 2>&1; then
+  real_opencode=$(command -v opencode)
+  "$real_opencode" --help 2>&1 | grep -Fq -e '--session' || { echo "opencode lost --session" >&2; exit 1; }
+  "$real_opencode" session --help 2>&1 | grep -Fq 'delete' || { echo "opencode lost 'session delete'" >&2; exit 1; }
+  "$real_opencode" api --help 2>&1 | grep -Fq -e '--param' || { echo "opencode lost 'api --param'" >&2; exit 1; }
+  "$real_opencode" debug paths 2>/dev/null | awk '$1 == "db" { found = 1 } END { exit !found }' || { echo "opencode debug paths lost the db line" >&2; exit 1; }
+fi
+
 mkdir -p "$fixture/one" "$fixture/two"
 one="$(cd "$fixture/one" && pwd -P)"
 two="$(cd "$fixture/two" && pwd -P)"
@@ -157,6 +167,11 @@ newest=$(grep -Fn 'brand new penguin discussion' "$fixture/preview.txt" | cut -d
 oldest=$(grep -Fn 'fix the widget search ranking' "$fixture/preview.txt" | cut -d: -f1 | head -1)
 [ -n "$newest" ] && [ -n "$oldest" ] && [ "$newest" -lt "$oldest" ] \
   || { echo "preview is not newest-first" >&2; exit 1; }
+mkdir -p "$fixture/xdg/opencode"
+cp "$SESH_DB" "$fixture/xdg/opencode/opencode.db"
+env -u SESH_DB XDG_DATA_HOME="$fixture/xdg" "$preview" "$state" 'ses_alpha' > "$fixture/preview-default-db.txt"
+grep -Fq 'fix the widget search ranking' "$fixture/preview-default-db.txt" \
+  || { echo "preview did not resolve the default database" >&2; exit 1; }
 "$preview" "$state" '' > "$fixture/empty.txt"
 grep -Fq '(no session selected)' "$fixture/empty.txt"
 
@@ -481,20 +496,7 @@ costs="$PACKAGE_DIR/bin/sesh-costs.sh"
   (map(select(.directory == $dir)) | .[0].window_cost == 0)' > /dev/null
 if "$costs" --days x >/dev/null 2>&1; then echo "costs accepted a bad --days" >&2; exit 1; fi
 
-# 26. Retitle only touches placeholder titles, derives from the first user
-# message, and is dry-run/--yes gated like the other writes.
-add_session 'ses_newt' "$two" 'New session - 2026-01-01T00:00:00.000Z' 1700000000000 1700000000000
-add_part 'ses_newt' 'msg_nt0' 'user' 'text' 'Fix the widget ranking across directories' 1700000000000
-add_session 'ses_kept' "$two" 'A real title' 1700000000000 1700000000000
-add_part 'ses_kept' 'msg_kt0' 'user' 'text' 'irrelevant' 1700000000000
-retitle="$PACKAGE_DIR/bin/sesh-retitle.sh"
-"$retitle" --dry-run > "$fixture/retitle-dry.txt"
-grep -Fq 'Fix the widget ranking' "$fixture/retitle-dry.txt"
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_newt';")" = 'New session - 2026-01-01T00:00:00.000Z' ]
-if "$retitle" < /dev/null >/dev/null 2>&1; then echo "retitle without --yes was not refused" >&2; exit 1; fi
-"$retitle" --yes < /dev/null > /dev/null
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_newt';")" = 'Fix the widget ranking across directories' ]
-[ "$(sqlite3 "$SESH_DB" "SELECT title FROM session_v2 WHERE id = 'ses_kept';")" = 'A real title' ]
+# 26. Writes never touch the legacy V1 session table.
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_legacy' AND time_archived IS NULL AND title = 'Legacy only';")" = 1 ]
 
 # 27. Search weighting: a title hit outranks a transcript-only hit, and the

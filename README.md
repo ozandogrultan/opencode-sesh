@@ -100,8 +100,7 @@ option+o          # inside opencode — picker
 
 - [opencode](https://opencode.ai), used at least once
 - `bash`, `jq`, and [`fzf`](https://github.com/junegunn/fzf) `>= 0.73`
-- `sqlite3` recommended — the picker queries the session DB directly in
-  milliseconds and falls back to the slower `opencode db` CLI without it
+- `sqlite3` — the picker queries the session DB directly
 - [`glow`](https://github.com/charmbracelet/glow) optional — styles the
   transcript preview as Markdown; without it the preview shows the plain
   Markdown, unchanged otherwise
@@ -140,7 +139,7 @@ Flags: `--cwd` (current directory only), `--limit N` (default: all),
 
 `sesh prune [--older-than 30d] [--dry-run] [--yes] [--delete]` archives stale
 sessions (not updated within the threshold) so the list stays triageable.
-Pinned sessions, sessions waiting on you, fork children and already-archived
+Pinned sessions, sessions waiting on you, subagent child sessions and already-archived
 sessions are never touched; archiving is reversible, while `--delete`
 hard-deletes through `opencode session delete`. Without `--dry-run`, a TTY run
 confirms first and a non-TTY run needs `--yes`.
@@ -148,10 +147,6 @@ confirms first and a non-TTY run needs `--yes`.
 `sesh costs [--days N] [--json]` sums assistant-message cost per project, with a
 recent window beside the lifetime total, so a day's work reads as a
 per-project record.
-
-`sesh retitle [--dry-run] [--yes]` replaces auto-generated placeholder titles
-(`New session - …`) with the start of the session's first user message. Only
-placeholder titles are touched, and the same dry-run/`--yes` gating applies.
 
 When searching, title matches outrank transcript-only matches and the current
 project rises, so the list answers "where was that thing I worked on" before it
@@ -230,8 +225,8 @@ All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `SESH_DB` | `opencode db path` | opencode SQLite database |
-| `SESH_SQLITE` | `sqlite3` | query tool (`opencode db` is ~300 ms/call) |
+| `SESH_DB` | `opencode debug paths` | opencode SQLite database |
+| `SESH_SQLITE` | `sqlite3` | query tool |
 | `SESH_JQ` / `SESH_FZF` | `PATH` | explicit executable overrides |
 | `SESH_GLOW` | first `glow` on `PATH` | optional Markdown preview renderer |
 | `SESH_OPENCODE` | `opencode` | opencode executable (resume / delete) |

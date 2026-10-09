@@ -2,8 +2,8 @@ import { Plugin } from "@opencode/plugin"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
-function dataHome(): string {
-  return process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share")
+function dbPath(): string {
+  return process.env.SESH_DB ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode", "opencode.db")
 }
 
 const input = {
@@ -44,12 +44,12 @@ export default Plugin.define({
             throw new Error("sesh_list requires the Bun runtime (bun:sqlite)")
           }
 
-          const db = new sqlite.Database(join(dataHome(), "opencode", "opencode.db"), { readonly: true })
+          const db = new sqlite.Database(dbPath(), { readonly: true })
           try {
             const scoped = typeof args.directory === "string" && args.directory.length > 0
             const query = `SELECT id, title, directory, time_updated AS updated, time_created AS created
               FROM session_v2
-              WHERE parent_id IS NULL AND time_archived IS NULL${scoped ? " AND directory = ?" : ""}
+              WHERE parent_id IS NULL AND COALESCE(time_archived, 0) = 0${scoped ? " AND directory = ?" : ""}
               ORDER BY time_updated DESC, id DESC
               LIMIT ${limit}`
             const rows = scoped ? db.query(query).all(args.directory) : db.query(query).all()

@@ -76,12 +76,12 @@ GREEN=$'\033[32m'; CYAN=$'\033[36m'; GRAY=$'\033[90m'; MAGENTA=$'\033[35m'; RED=
 
 resolve_db() {
   if [ -n "${SESH_DB:-}" ]; then printf '%s\n' "$SESH_DB"; return 0; fi
-  local from_cli=''
+  local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
+  if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" db path 2>/dev/null || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
-  if [ -f "$HOME/.local/share/opencode/opencode.db" ]; then printf '%s\n' "$HOME/.local/share/opencode/opencode.db"; return 0; fi
   return 1
 }
 
@@ -92,18 +92,7 @@ elif command -v sqlite3 >/dev/null 2>&1; then
   SQLITE_BIN=sqlite3
 fi
 
-# db_json SQL → JSON array on stdout. Direct sqlite3 is preferred: it answers
-# in milliseconds, while `opencode db` pays a full CLI startup per call and
-# would make every preview keystroke laggy.
-db_json() {
-  if [ -n "$SQLITE_BIN" ]; then
-    # Read-only: sesh never writes the store directly (deletes go through
-    # `opencode session delete`).
-    "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"
-  else
-    "$OPENCODE_BIN" db "$1" --format json
-  fi
-}
+db_json() { "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"; }
 
 valid_session_id() { [[ "$1" =~ ^ses_[A-Za-z0-9]+$ ]]; }
 
@@ -258,8 +247,8 @@ refresh() {
     if [ -f "$SNAPSHOT" ]; then set_status 'stale: opencode database is unavailable; showing last good snapshot'; else set_status 'unavailable: opencode database is unavailable'; fi
     return 0
   }
-  if [ -z "$SQLITE_BIN" ] && ! command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    if [ -f "$SNAPSHOT" ]; then set_status 'stale: neither sqlite3 nor opencode is available; showing last good snapshot'; else set_status 'unavailable: neither sqlite3 nor opencode is available'; fi
+  if [ -z "$SQLITE_BIN" ]; then
+    if [ -f "$SNAPSHOT" ]; then set_status 'stale: sqlite3 is not available; showing last good snapshot'; else set_status 'unavailable: sqlite3 is not available'; fi
     return 0
   fi
   local scratch sessions parts cache_records cache_state historical needs_extract out

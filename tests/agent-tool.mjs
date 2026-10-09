@@ -128,6 +128,8 @@ try {
     },
   })
 
+  const savedSeshDb = process.env.SESH_DB
+  delete process.env.SESH_DB
   process.env.XDG_DATA_HOME = dir
 
   // Query all roots (newest first, excluding fork child and archived)
@@ -144,6 +146,14 @@ try {
   const resInjection = await runtimeTool.execute({ limit: 5, directory: "x'; DROP TABLE session_v2; --" })
   const rowsInjection = JSON.parse(resInjection.content)
   assert.deepEqual(rowsInjection, [])
+
+  // SESH_DB overrides the default location
+  process.env.XDG_DATA_HOME = join(dir, "elsewhere")
+  process.env.SESH_DB = join(dir, "opencode", "opencode.db")
+  const resOverride = await runtimeTool.execute({ limit: 10 })
+  assert.deepEqual(JSON.parse(resOverride.content).map((r) => r.id), ["ses_new", "ses_old"])
+  if (savedSeshDb === undefined) delete process.env.SESH_DB
+  else process.env.SESH_DB = savedSeshDb
 } finally {
   delete process.env.XDG_DATA_HOME
   rmSync(dir, { recursive: true, force: true })

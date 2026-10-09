@@ -30,9 +30,5 @@ case ${1:-} in
     shift
     exec bash "$SCRIPT_DIR/sesh-costs.sh" "$@"
     ;;
-  retitle)
-    shift
-    exec bash "$SCRIPT_DIR/sesh-retitle.sh" "$@"
-    ;;
 esac
 exec "$SCRIPT_DIR/sesh.sh" "$@"

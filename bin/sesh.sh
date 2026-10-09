@@ -37,7 +37,7 @@ fi
 
 if [ "${1:-}" = --check ]; then
   "$SESH_JQ" -en '"2026-01-01T00:00:00Z" | fromdateiso8601 | type == "number"' >/dev/null || { echo 'jq capability check failed' >&2; exit 1; }
-  command -v sqlite3 >/dev/null 2>&1 || command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'neither sqlite3 nor opencode is available' >&2; exit 1; }
+  command -v "${SESH_SQLITE:-sqlite3}" >/dev/null 2>&1 || { echo 'sqlite3 is not available' >&2; exit 1; }
   # The TUI panel is a copied file that opencode imports once at startup. Report
   # when the installed copy has fallen behind this package so upgrades are not
   # silently stale.
@@ -203,9 +203,14 @@ fi
 command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable unavailable' >&2; exit 1; }
 # Resume in place: this terminal becomes the session. No tabs, no panes.
 if [ "$fork" = 1 ]; then
-  ( cd "$cwd" && exec "$OPENCODE_BIN" --session "$session_id" --fork )
-else
-  ( cd "$cwd" && exec "$OPENCODE_BIN" --session "$session_id" )
+  forked=$(cd "$cwd" && "$OPENCODE_BIN" api session.fork --param "sessionID=$session_id" -d '{}' 2>/dev/null | "$SESH_JQ" -r '.data.id // empty' 2>/dev/null || true)
+  if [[ "$forked" =~ ^ses_[A-Za-z0-9]+$ ]]; then
+    session_id=$forked
+  else
+    echo 'sesh: could not fork the session; returning to the picker.' >&2
+    continue
+  fi
 fi
+( cd "$cwd" && exec "$OPENCODE_BIN" --session "$session_id" )
 echo 'sesh: opencode exited; returning to the picker.' >&2
 done

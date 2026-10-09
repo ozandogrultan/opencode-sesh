@@ -14,13 +14,10 @@ JQ_BIN=${SESH_JQ:-jq}
 "$JQ_BIN" -se --arg sid "$session_id" 'any(.sessionId == $sid)' "$snapshot" >/dev/null 2>&1 \
   || { echo "(selected session is no longer in this snapshot)"; exit 0; }
 
-DB_PATH=${SESH_DB:-}
-if [ -z "$DB_PATH" ]; then
-  OPENCODE_BIN=${SESH_OPENCODE:-opencode}
-  if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    DB_PATH=$("$OPENCODE_BIN" db path 2>/dev/null || true)
-  fi
-  [ -n "$DB_PATH" ] || DB_PATH="$HOME/.local/share/opencode/opencode.db"
+OPENCODE_BIN=${SESH_OPENCODE:-opencode}
+DB_PATH=${SESH_DB:-"${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"}
+if [ -z "${SESH_DB:-}" ] && [ ! -f "$DB_PATH" ] && command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
+  DB_PATH=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
 fi
 [ -f "$DB_PATH" ] || { echo "(opencode database is unavailable)"; exit 0; }
 
@@ -28,12 +25,8 @@ SQLITE_BIN=${SESH_SQLITE:-}
 if [ -z "$SQLITE_BIN" ] && command -v sqlite3 >/dev/null 2>&1; then SQLITE_BIN=sqlite3; fi
 SQL="SELECT json_object('role', type) AS msg, json_object('type', 'text', 'text', json_extract(data, '\$.text')) AS part, seq, -1 AS ordinal FROM session_message WHERE session_id = '$session_id' AND type = 'user' AND json_type(data, '\$.text') = 'text'
 UNION ALL SELECT json_object('role', m.type) AS msg, c.value AS part, m.seq, CAST(c.key AS INTEGER) AS ordinal FROM session_message m, json_each(m.data, '\$.content') c WHERE m.session_id = '$session_id' AND m.type = 'assistant' AND json_extract(c.value, '\$.type') = 'text' ORDER BY seq DESC, ordinal DESC LIMIT 200;"
-if [ -n "$SQLITE_BIN" ]; then
-  rows=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$SQL" 2>/dev/null) || rows=''
-else
-  OPENCODE_BIN=${SESH_OPENCODE:-opencode}
-  rows=$("$OPENCODE_BIN" db "$SQL" --format json 2>/dev/null) || rows=''
-fi
+[ -n "$SQLITE_BIN" ] || { echo "(sqlite3 is required for previews)"; exit 0; }
+rows=$("$SQLITE_BIN" -json -readonly "$DB_PATH" "$SQL" 2>/dev/null) || rows=''
 [ -n "$rows" ] || { echo "(no displayable transcript messages)"; exit 0; }
 
 # Text parts only, newest first, with role headers. The 120-block cap is applied

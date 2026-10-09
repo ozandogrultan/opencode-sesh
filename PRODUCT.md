@@ -27,7 +27,7 @@ Users work in terminals and the opencode TUI. The standalone picker uses fullscr
 ## Capabilities and Constraints
 
 - Group sessions by project directory, search titles and conversation text, preview transcripts, and resume, fork, or confirm deletion of a session.
-- Default to sessions across all directories; allow narrowing to a project or directory. Archived sessions and fork children are hidden by default.
+- Default to sessions across all directories; allow narrowing to a project or directory. Archived sessions and subagent child sessions are hidden by default.
 - Index text parts only, excluding reasoning and tool payloads from search and previews.
 - Preserve the terminal and OpenTUI workflows, including in-place terminal resume, existing opencode navigation, and confirmation for destructive actions.
 - No iTerm2, AppleScript, panes, or window management. Native sidebar content remains below the Sessions section.

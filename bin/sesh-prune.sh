@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Archive (or, with --delete, hard-delete) stale sessions: not updated within
 # the threshold, never pinned, never waiting on the user, never already
-# archived, never a fork child.
+# archived, never a child (subagent) session.
 #
 # Archive is the default because it is reversible; hard deletes go through
 # `opencode session delete` so its own safeguards apply. The archive itself
-# is a single atomic UPDATE through the same sqlite3-or-`opencode db` read
-# path the list commands use — there is no archive endpoint in the opencode
-# API or CLI, so a direct write is the only route (deletes stay on the CLI).
+# is a single atomic UPDATE through sqlite3 — the opencode server API has no
+# archive endpoint, so a direct write is the only route (deletes stay on the
+# CLI).
 #
 # Usage: sesh-prune.sh [--older-than 30d] [--dry-run] [--yes] [--delete]
 #   --older-than Nd|Nh|Nw (bare N means days; default 30d)
@@ -53,12 +53,12 @@ CUTOFF=$((NOW_MS - threshold_ms))
 
 resolve_db() {
   if [ -n "${SESH_DB:-}" ]; then printf '%s\n' "$SESH_DB"; return 0; fi
-  local from_cli=''
+  local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
+  if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" db path 2>/dev/null || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
-  if [ -f "$HOME/.local/share/opencode/opencode.db" ]; then printf '%s\n' "$HOME/.local/share/opencode/opencode.db"; return 0; fi
   return 1
 }
 
@@ -72,14 +72,9 @@ fi
 DB_PATH=$(resolve_db) || { echo 'sesh: session database unavailable' >&2; exit 1; }
 [ -f "$DB_PATH" ] || { echo 'sesh: session database unavailable' >&2; exit 1; }
 
-if [ -n "$SQLITE_BIN" ]; then
-  query() { "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"; }
-  write_db() { "$SQLITE_BIN" "$DB_PATH" "$1"; }
-else
-  command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: neither sqlite3 nor opencode is available' >&2; exit 1; }
-  query() { "$OPENCODE_BIN" db "$1" --format json; }
-  write_db() { "$OPENCODE_BIN" db "$1" --format json > /dev/null; }
-fi
+[ -n "$SQLITE_BIN" ] || { echo 'sesh: sqlite3 is required' >&2; exit 1; }
+query() { "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"; }
+write_db() { "$SQLITE_BIN" "$DB_PATH" "$1"; }
 
 JQ_BIN=${SESH_JQ:-$(command -v jq || true)}
 [ -n "$JQ_BIN" ] || { echo 'sesh: jq is required' >&2; exit 1; }
@@ -146,10 +141,8 @@ if [ "$hard_delete" = 0 ]; then
   IDS=$(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id')
   IN_LIST=''
   for id in $IDS; do
-    case "$id" in
-      ses_[A-Za-z0-9]*) IN_LIST="$IN_LIST'$id'," ;;
-      *) echo "Refusing: unexpected session id shape." >&2; exit 1 ;;
-    esac
+    [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
+    IN_LIST="$IN_LIST'$id',"
   done
   IN_LIST=${IN_LIST%,}
   write_db "UPDATE session_v2 SET time_archived = $NOW_MS WHERE id IN ($IN_LIST);"
@@ -159,10 +152,7 @@ else
   failed=0
   done_count=0
   for id in $(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id'); do
-    case "$id" in
-      ses_[A-Za-z0-9]*) ;;
-      *) echo "Refusing: unexpected session id shape." >&2; exit 1 ;;
-    esac
+    [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
     if "$OPENCODE_BIN" session delete "$id" >/dev/null 2>&1; then
       done_count=$((done_count + 1))
     else

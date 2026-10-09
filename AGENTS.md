@@ -40,11 +40,10 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
   Never hardcode install paths. `sesh-waiting.sh` owns the needs-input query
   (shared heuristic with the TUI sidebar copy, marked `NEEDS_INPUT_SQL` in
   both); `sesh-prune.sh` archives stale sessions; `sesh-costs.sh` sums
-  assistant-message cost per directory; `sesh-retitle.sh` renames placeholder
-  titles. Reads go through `sqlite3 -readonly` (or `opencode db`); the direct
-  `UPDATE`s in `sesh-prune.sh` (archive) and `sesh-retitle.sh` (title) are the
-  only sanctioned writes — neither has a CLI or API endpoint, and hard deletes
-  stay on `opencode session delete`.
+  assistant-message cost per directory. Reads go through `sqlite3 -readonly`
+  (required; `opencode db` no longer exists); the direct `UPDATE` in
+  `sesh-prune.sh` (archive) is the only sanctioned database write — the API has
+  no archive endpoint — and hard deletes stay on `opencode session delete`.
 - `contrib/` — caller-side integrations (currently cmux). Nothing here may add
   window management to sesh itself.
 - `tui-plugins/sesh-panel/tui.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
@@ -105,19 +104,21 @@ which is a pure snapshot lookup — and prints a progress line to stderr while i
 waits, because fzf has already exited and the terminal is idle. opencode has no
 live-agent API, so `liveState` is always `unknown` and rows render gray unless
 they are archived (opt-in, tagged `· archived`);
-dispatch is always `opencode --session <id>` (`--fork` with Ctrl-F or --fork).
+dispatch is always `opencode --session <id>`; Ctrl-F or `--fork` first creates the
+fork with `opencode api session.fork` (the CLI has no fork flag) and resumes the new id.
 Resume happens in place (`exec` after `cd` to the session's cwd).
 
 ## Conventions
 
 - Default scope is **all** sessions, every directory. `--cwd`/Ctrl-G narrows.
-  Archived sessions and child sessions (fork children, spawned subagents) are
+  Archived sessions and child sessions (spawned subagents) are
   hidden unless `--archived`; metadata and cache pruning still see them.
 - **Text parts only** in search/preview; reasoning and tool payloads are
   excluded (asserted in tests).
 - Validate session ids (`^ses_[A-Za-z0-9]+$`) before SQL interpolation — never
   interpolate unvalidated input. Open SQLite read-only (`sqlite3 -readonly`).
-- Prefer direct `sqlite3` over `opencode db` (startup latency). Never parse
+- Resolve the database as `SESH_DB`, then `$XDG_DATA_HOME/opencode/opencode.db`, then the
+  `db` line of `opencode debug paths`. Never parse
   `sqlite3 -json` in `-R` mode; it pretty-prints — parse as JSON.
 - `jq -R` output stays JSON-quoted: use `-Rr` when a shell variable needs the
   raw string.

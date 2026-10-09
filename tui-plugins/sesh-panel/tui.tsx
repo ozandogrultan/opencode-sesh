@@ -509,7 +509,7 @@ async function openTranscriptDb(): Promise<any | undefined> {
     // @ts-ignore - bun:sqlite ships with the Bun runtime (verified); no type package installed
     const sqlite: any = await import("bun:sqlite")
     if (typeof sqlite?.Database !== "function") return undefined
-    return new sqlite.Database(`${dataHome}/opencode/opencode.db`, { readonly: true })
+    return new sqlite.Database(process.env.SESH_DB ?? `${dataHome}/opencode/opencode.db`, { readonly: true })
   } catch {
     return undefined
   }
