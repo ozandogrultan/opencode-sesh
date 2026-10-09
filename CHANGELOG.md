@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-09
+
+### Fixed
+
+- Align database access, fork and writes with the OpenCode V2 CLI
+
 ## [1.0.8] - 2026-10-08
 
 ### Fixed
@@ -466,6 +472,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
+[1.1.0]: https://github.com/ozandogrultan/opencode-sesh/compare/v1.0.8...v1.1.0
 [1.0.8]: https://github.com/ozandogrultan/opencode-sesh/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v1.0.5...v1.0.6
