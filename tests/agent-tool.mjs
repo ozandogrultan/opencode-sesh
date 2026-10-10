@@ -15,7 +15,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const toolSource = fileURLToPath(import.meta.resolve("opencode-sesh"))
 assert.equal(toolSource, join(root, "plugins/sesh-list.ts"))
 assert.equal(import.meta.resolve("opencode-sesh/tool"), pathToFileURL(toolSource).href)
-assert.equal(import.meta.resolve("opencode-sesh/tui"), pathToFileURL(join(root, "tui-plugins/sesh-panel/tui.tsx")).href)
+assert.equal(import.meta.resolve("opencode-sesh/tui"), pathToFileURL(join(root, "dist/tui.js")).href)
+const builtTui = readFileSync(join(root, "dist/tui.js"), "utf8")
+assert.match(builtTui, /from "@opentui\/solid"/)
+assert.doesNotMatch(builtTui, /<\/?(box|text|span)\b|jsx-runtime|jsxDEV/)
 
 let stripTypeScriptTypes
 try {

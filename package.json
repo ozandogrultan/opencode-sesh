@@ -23,7 +23,7 @@
   ],
   "exports": {
     ".": "./plugins/sesh-list.ts",
-    "./tui": "./tui-plugins/sesh-panel/tui.tsx",
+    "./tui": "./dist/tui.js",
     "./tool": "./plugins/sesh-list.ts"
   },
   "bin": {
@@ -31,6 +31,7 @@
   },
   "files": [
     "bin/",
+    "dist/",
     "contrib/",
     "plugins/",
     "themes/",
@@ -51,8 +52,10 @@
   },
   "scripts": {
     "prepare": "husky",
-    "test": "bash tests/sesh.sh && bash tests/changelog.sh",
-    "test:unit": "bash tests/sesh.sh",
+    "build": "node scripts/build-tui.mjs",
+    "prepack": "node scripts/build-tui.mjs",
+    "test": "node scripts/build-tui.mjs && bash tests/sesh.sh && bash tests/changelog.sh",
+    "test:unit": "node scripts/build-tui.mjs && bash tests/sesh.sh",
     "test:changelog": "bash tests/changelog.sh",
     "test:picker": "python3 tests/picker.py",
     "typecheck": "tsc --noEmit",
@@ -67,6 +70,8 @@
     "solid-js": ">=1.9.0"
   },
   "devDependencies": {
+    "@babel/core": "7.28.0",
+    "@babel/preset-typescript": "7.27.1",
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
     "@opencode/client": "2.0.25",
@@ -76,6 +81,7 @@
     "@opentui/keymap": "^0.5.11",
     "@opentui/solid": "^0.5.11",
     "@types/node": "26.6.4",
+    "babel-preset-solid": "1.9.12",
     "husky": "^9.1.7",
     "solid-js": "1.9.15",
     "typescript": "7.0.2"

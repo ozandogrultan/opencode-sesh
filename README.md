@@ -59,18 +59,19 @@ search…
 
 ### OpenCode plugin
 
-Add the package to `plugins` in your OpenCode V2 `opencode.json` or
-`opencode.jsonc`:
+Add the package to `plugins` in your OpenCode V2 `opencode.json` (server tool)
+and `cli.json` (TUI panel):
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
   "plugins": ["opencode-sesh"]
 }
 ```
 
-OpenCode installs the package and loads its server tool and TUI panel. Merge
-this entry with your existing plugins. Remove the copied
+OpenCode installs the package and loads its server tool and TUI panel. The
+published panel is precompiled (`dist/tui.js`) because OpenCode does not apply
+its Solid transform to sources under `node_modules`. Merge this entry with your
+existing plugins. Remove the copied
 `./tui-plugins/sesh-panel` registration and `plugins/sesh-list.ts` tool before
 switching to avoid loading them twice.
 
