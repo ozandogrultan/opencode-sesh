@@ -15,7 +15,7 @@ updates:
           - "@opentui/*"
       opencode:
         patterns:
-          - "@opencode-ai/*"
+          - "@opencode/*"
 
   - package-ecosystem: github-actions
     directory: /

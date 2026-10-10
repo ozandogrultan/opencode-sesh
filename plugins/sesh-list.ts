@@ -1,9 +1,19 @@
 import { Plugin } from "@opencode/plugin"
+import { spawnSync } from "node:child_process"
+import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
 function dbPath(): string {
-  return process.env.SESH_DB ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode", "opencode.db")
+  if (process.env.SESH_DB) return process.env.SESH_DB
+  const xdgPath = join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "opencode", "opencode.db")
+  if (existsSync(xdgPath)) return xdgPath
+  try {
+    const result = spawnSync(process.env.SESH_OPENCODE ?? "opencode", ["debug", "paths"], { encoding: "utf8" })
+    const match = result.stdout?.match(/^db\s+(.+)$/m)
+    if (match) return match[1].trimEnd()
+  } catch {}
+  return xdgPath
 }
 
 const input = {

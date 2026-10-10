@@ -24,7 +24,7 @@ SYNC_PANEL=0
 
 # Fallback plugin version for when the opencode CLI is unavailable; the
 # installer prefers the local opencode version so the panel matches its SDK.
-PLUGIN_VERSION_FALLBACK="2.0.18"
+PLUGIN_VERSION_FALLBACK="2.0.25"
 # Peer line the panel was developed and typechecked against. A checkout's
 # package.json overrides these, so dependency bumps cannot drift the installed
 # config out of sync (solid-js moves with OpenTUI via @opentui/keymap's peer).

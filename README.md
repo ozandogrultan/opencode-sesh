@@ -137,16 +137,19 @@ Flags: `--cwd` (current directory only), `--limit N` (default: all),
 `--json` (with `--print`, emit JSON), `--query TEXT`, `--check`,
 `--needs-input` (list sessions waiting on you instead of opening the picker).
 
-`sesh prune [--older-than 30d] [--dry-run] [--yes] [--delete]` archives stale
-sessions (not updated within the threshold) so the list stays triageable.
+`sesh prune [--older-than 30d] [--dry-run] [--yes]` deletes stale
+sessions (not updated within the threshold) through `opencode session delete`, including their children.
 Pinned sessions, sessions waiting on you, subagent child sessions and already-archived
-sessions are never touched; archiving is reversible, while `--delete`
-hard-deletes through `opencode session delete`. Without `--dry-run`, a TTY run
+sessions are never selected. Without `--dry-run`, a TTY run
 confirms first and a non-TTY run needs `--yes`.
 
 `sesh costs [--days N] [--json]` sums assistant-message cost per project, with a
 recent window beside the lifetime total, so a day's work reads as a
-per-project record.
+per-project record. Legacy V1 history is included when available; sessions
+already present in V2 are counted only once.
+
+Session browsing uses the V2 store. Sessions remaining only in the legacy V1
+tables are not listed or resumable through sesh.
 
 When searching, title matches outrank transcript-only matches and the current
 project rises, so the list answers "where was that thing I worked on" before it
@@ -225,7 +228,7 @@ All variables are optional.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `SESH_DB` | `opencode debug paths` | opencode SQLite database |
+| `SESH_DB` | `${XDG_DATA_HOME:-~/.local/share}/opencode/opencode.db`, falling back to `opencode debug paths` | opencode SQLite database |
 | `SESH_SQLITE` | `sqlite3` | query tool |
 | `SESH_JQ` / `SESH_FZF` | `PATH` | explicit executable overrides |
 | `SESH_GLOW` | first `glow` on `PATH` | optional Markdown preview renderer |

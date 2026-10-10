@@ -394,8 +394,10 @@ grep -Fq 'directory header, not a session' "$fixture/notice.tsv"
 "$list" --state-dir "$notice_state" > "$fixture/notice2.tsv"
 grep -Fq 'directory header' "$fixture/notice2.tsv" && { echo "action notice was not consumed" >&2; exit 1; }
 
-# 22. Needs-input triage: unanswered questions and stale running tools are
-# listed; answered questions, fresh runs and plain sessions are not.
+# 22. Needs-input triage: unanswered questions and stale running tools with
+# no recent activity are listed; answered questions, fresh runs, plain
+# sessions, and stale running tools whose session (or a direct child) has
+# had recent message activity are not.
 tool_msg() { # session msg tool status created
   local msg_json part_json
   msg_json=$("$SESH_JQ" -cn '{role:"assistant"}')
@@ -419,6 +421,15 @@ tool_msg 'ses_waitstuck' 'msg_ws1' 'bash' 'running' 1600000100000
 add_session 'ses_runnow' "$two" 'Active run' $recent $recent
 add_part 'ses_runnow' 'msg_rn0' 'user' 'text' 'keep working' $((recent - 60000))
 tool_msg 'ses_runnow' 'msg_rn1' 'bash' 'running' $recent
+add_session 'ses_waitactive' "$two" 'Stuck but active' 1600000000000 1600000100000
+add_part 'ses_waitactive' 'msg_wa0' 'user' 'text' 'start long job' 1600000050000
+tool_msg 'ses_waitactive' 'msg_wa1' 'bash' 'running' 1600000100000
+add_part 'ses_waitactive' 'msg_wa2' 'assistant' 'text' 'still working on it' $recent
+add_session 'ses_waitparent' "$two" 'Stuck parent' 1600000000000 1600000100000
+add_part 'ses_waitparent' 'msg_wp0' 'user' 'text' 'run the long job' 1600000050000
+tool_msg 'ses_waitparent' 'msg_wp1' 'bash' 'running' 1600000100000
+sqlite3 "$SESH_DB" "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_waitchild', '$two', 'Spawned subagent', 1600000000000, $recent, NULL, 'ses_waitparent');"
+add_part 'ses_waitchild' 'msg_wc0' 'assistant' 'text' 'child progress update' $recent
 waiting_ids="$("$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -r 'map(.id) | sort | join(",")')"
 [ "$waiting_ids" = 'ses_waitq,ses_waitstuck' ] || { echo "waiting set wrong: $waiting_ids" >&2; exit 1; }
 "$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -e 'map(.reason) | sort == ["question","stuck"]' >/dev/null
@@ -427,8 +438,10 @@ grep -Fq 'Waiting question' "$fixture/waiting.txt"
 grep -Fq 'Stuck run' "$fixture/waiting.txt"
 grep -Fq 'Answered question' "$fixture/waiting.txt" && { echo "answered question flagged" >&2; exit 1; }
 grep -Fq 'Active run' "$fixture/waiting.txt" && { echo "fresh run flagged" >&2; exit 1; }
+grep -Fq 'Stuck but active' "$fixture/waiting.txt" && { echo "stuck run with recent activity flagged" >&2; exit 1; }
+grep -Fq 'Stuck parent' "$fixture/waiting.txt" && { echo "stuck parent with recent child activity flagged" >&2; exit 1; }
 
-# 23. Prune archives stale sessions only: never pinned, waiting, fresh or
+# 23. Prune deletes stale sessions only: never pinned, waiting, fresh or
 # already archived ones. Non-TTY runs need --yes; --dry-run changes nothing.
 add_session 'ses_pruneold' "$one" 'Prune me' 1600000000000 1600000100000
 add_part 'ses_pruneold' 'msg_po0' 'user' 'text' 'old work' 1600000100000
@@ -442,30 +455,30 @@ add_part 'ses_delold' 'msg_do0' 'user' 'text' 'delete work' 1600000100000
 sqlite3 "$SESH_DB" "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_childold', '$one', 'Fork child', 1600000000000, 1600000100000, NULL, 'ses_waitq');"
 tool_msg 'ses_childold' 'msg_co1' 'question' 'pending' 1600000100000
 prune="$PACKAGE_DIR/bin/sesh-prune.sh"
-archived_set() { sqlite3 "$SESH_DB" "SELECT id FROM session_v2 WHERE COALESCE(time_archived, 0) > 0 ORDER BY id;" | tr '\n' ','; }
-before_prune=$(archived_set)
+session_set() { sqlite3 "$SESH_DB" "SELECT id FROM session_v2 ORDER BY id;" | tr '\n' ','; }
+before_prune=$(session_set)
 "$prune" --older-than 30d --dry-run > "$fixture/prune-dry.txt"
 grep -Fq 'ses_pruneold' "$fixture/prune-dry.txt"
 grep -Fq 'ses_delold' "$fixture/prune-dry.txt"
 for excluded in ses_prunepin ses_prunenew ses_waitq ses_waitstuck ses_childold; do
   grep -Fq "$excluded" "$fixture/prune-dry.txt" && { echo "prune listed $excluded" >&2; exit 1; }
 done
-[ "$(archived_set)" = "$before_prune" ] || { echo "dry run archived" >&2; exit 1; }
+[ "$(session_set)" = "$before_prune" ] || { echo "dry run deleted sessions" >&2; exit 1; }
 if "$prune" --older-than 30d < /dev/null >/dev/null 2>&1; then
   echo "prune without --yes was not refused" >&2; exit 1
 fi
 "$prune" --older-than 30d --yes > /dev/null
-archived() { sqlite3 "$SESH_DB" "SELECT COALESCE(time_archived, 0) > 0 FROM session_v2 WHERE id = '$1';"; }
-[ "$(archived ses_pruneold)" = 1 ]
-[ "$(archived ses_delold)" = 1 ]
+exists() { sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = '$1';"; }
+[ "$(exists ses_pruneold)" = 0 ]
+[ "$(exists ses_delold)" = 0 ]
 for kept in ses_prunepin ses_prunenew ses_waitq ses_waitstuck ses_runnow; do
-  [ "$(archived "$kept")" = 0 ] || { echo "prune archived $kept" >&2; exit 1; }
+  [ "$(exists "$kept")" = 1 ] || { echo "prune deleted $kept" >&2; exit 1; }
 done
 
-# 24. Prune --delete hard-deletes through the opencode CLI stub from test 7.
+# 24. Prune deletes through the opencode CLI stub from test 7.
 add_session 'ses_delold2' "$two" 'Delete me too' 1600000000000 1600000100000
 add_part 'ses_delold2' 'msg_do1' 'user' 'text' 'delete work two' 1600000100000
-"$prune" --older-than 30d --delete --yes > /dev/null
+"$prune" --older-than 30d --yes > /dev/null
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_delold2';")" = 0 ]
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session_v2 WHERE id = 'ses_prunepin';")" = 1 ]
 
@@ -496,6 +509,19 @@ costs="$PACKAGE_DIR/bin/sesh-costs.sh"
   (map(select(.directory == $dir)) | .[0].window_cost == 0)' > /dev/null
 if "$costs" --days x >/dev/null 2>&1; then echo "costs accepted a bad --days" >&2; exit 1; fi
 
+sqlite3 "$SESH_DB" "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+INSERT INTO session SELECT * FROM session_v2 WHERE id = 'ses_costA';
+INSERT INTO session VALUES ('ses_costLegacy', '$cost_dir', 'Legacy cost', $today, $today, NULL, NULL);
+INSERT INTO message VALUES ('msg_legacynew', 'ses_costLegacy', $today, '{\"role\":\"assistant\",\"cost\":4,\"tokens\":{\"input\":10,\"output\":20}}');
+INSERT INTO message VALUES ('msg_legacyold', 'ses_costLegacy', $old, '{\"role\":\"assistant\",\"cost\":6}');
+INSERT INTO message VALUES ('msg_duplicate', 'ses_costA', $today, '{\"role\":\"assistant\",\"cost\":100}');
+INSERT INTO message VALUES ('msg_legacyuser', 'ses_costLegacy', $today, '{\"role\":\"user\",\"cost\":100}');"
+"$costs" --json | "$SESH_JQ" -e --arg dir "$cost_dir" '
+  (map(select(.directory == $dir)) | .[0]) as $r
+  | ($r.window_cost == 9) and ($r.lifetime_cost == 20) and ($r.sessions == 3) and ($r.window_tokens == 90)
+' > /dev/null
+sqlite3 "$SESH_DB" "DROP TABLE message;"
+
 # 26. Writes never touch the legacy V1 session table.
 [ "$(sqlite3 "$SESH_DB" "SELECT count(*) FROM session WHERE id = 'ses_legacy' AND time_archived IS NULL AND title = 'Legacy only';")" = 1 ]
 
@@ -520,8 +546,8 @@ rank_none=$(awk -F'\t' '$2 == "ses_rankbody" || $2 == "ses_ranktitle" { print $2
 [ "$rank_none" = 'ses_rankbody,ses_ranktitle,' ] \
   || { echo "idle order not by recency: $rank_none" >&2; exit 1; }
 
-# 28. Child sessions (fork children, spawned subagents) stay out of the
-# visible picker snapshot; --archived opts them back in.
+# 28. Child sessions (spawned subagents) stay out of the visible picker
+# snapshot; --archived opts them back in.
 child_state="$fixture/child-state"
 "$list" --refresh --state-dir "$child_state" > /dev/null
 "$SESH_JQ" -s -e '([.[] | .sessionId] | index("ses_childold") | not)' "$child_state/snapshot.jsonl" >/dev/null

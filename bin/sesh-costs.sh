@@ -32,7 +32,7 @@ resolve_db() {
   local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
   if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { sub(/^db[ \t]+/, ""); print; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
   return 1
@@ -51,19 +51,33 @@ DB_PATH=$(resolve_db) || { echo 'sesh: session database unavailable' >&2; exit 1
 NOW_MS=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null || echo "$(( $(date +%s) * 1000 ))")
 CUTOFF=$((NOW_MS - days * 86400000))
 
+[ -n "$SQLITE_BIN" ] || { echo 'sesh: sqlite3 is required' >&2; exit 1; }
+LEGACY_QUERY=''
+if [ "$("$SQLITE_BIN" -readonly "$DB_PATH" "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('session', 'message');")" = 2 ]; then
+  LEGACY_QUERY="UNION ALL
+SELECT s.directory, s.id AS session_id, m.time_created, m.data
+FROM message m JOIN session s ON s.id = m.session_id
+WHERE json_extract(m.data, '\$.role') = 'assistant'
+  AND NOT EXISTS (SELECT 1 FROM session_v2 v WHERE v.id = s.id)"
+fi
+
 # One pass over assistant messages; the window filter is a cheap CASE so the
 # lifetime total and the window total come back together.
 ROWS_QUERY="
-SELECT s.directory AS directory,
+WITH costs AS (
+SELECT s.directory, s.id AS session_id, m.time_created, m.data
+FROM session_message m JOIN session_v2 s ON s.id = m.session_id
+WHERE m.type = 'assistant'
+$LEGACY_QUERY
+)
+SELECT m.directory AS directory,
   ROUND(SUM(CASE WHEN m.time_created >= $CUTOFF THEN COALESCE(json_extract(m.data, '\$.cost'), 0) ELSE 0 END), 4) AS window_cost,
   ROUND(SUM(COALESCE(json_extract(m.data, '\$.cost'), 0)), 4) AS lifetime_cost,
-  COUNT(DISTINCT s.id) AS sessions,
+  COUNT(DISTINCT m.session_id) AS sessions,
   SUM(CASE WHEN m.time_created >= $CUTOFF THEN COALESCE(json_extract(m.data, '\$.tokens.input'), 0) + COALESCE(json_extract(m.data, '\$.tokens.output'), 0) ELSE 0 END) AS window_tokens
-FROM session_message m
-JOIN session_v2 s ON s.id = m.session_id
-WHERE m.type = 'assistant'
-  AND json_extract(m.data, '\$.cost') IS NOT NULL
-GROUP BY s.directory
+FROM costs m
+WHERE json_extract(m.data, '\$.cost') IS NOT NULL
+GROUP BY m.directory
 ORDER BY lifetime_cost DESC;"
 
 [ -n "$SQLITE_BIN" ] || { echo 'sesh: sqlite3 is required' >&2; exit 1; }

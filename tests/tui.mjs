@@ -44,7 +44,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "process",
     "setTimeout",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, contextMenuItems, contextMenuBox, createContextMenu }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
   )
   return factory(
     readExtraction,
@@ -254,7 +254,7 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, contextMenuItems, contextMenuBox, createContextMenu } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
   loadDataLayer()
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -452,23 +452,32 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const sqlite = new DatabaseSync(":memory:")
   try {
     sqlite.exec(`CREATE TABLE session_v2 (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER);
-      CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, time_created INTEGER, data TEXT);`)
+      CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);`)
     const addSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, NULL, ?)")
-    const addMessage = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?)")
+    const addChildSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, ?, ?)")
+    const addMessage = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)")
     const now = Date.now()
-    for (const id of ["ses_question", "ses_stuck", "ses_answered", "ses_fresh"]) addSession.run(id, now)
+    for (const id of ["ses_question", "ses_stuck", "ses_answered", "ses_fresh", "ses_stuck_active", "ses_stuck_parent"]) {
+      addSession.run(id, now)
+    }
+    addChildSession.run("ses_stuck_child", "ses_stuck_parent", now)
     const question = (created) => JSON.stringify({
-      content: [{ type: "tool", name: "question", state: { status: "pending" }, time: { created } }]
+      content: [{ type: "tool", name: "question", state: { status: "running" }, time: { created } }]
     })
     const running = (created) => JSON.stringify({
       content: [{ type: "tool", name: "shell", state: { status: "running" }, time: { created } }]
     })
-    addMessage.run("ses_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
-    addMessage.run("ses_question", 2, "assistant", now - 1_800_000, question(now - 1_800_000))
-    addMessage.run("ses_stuck", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
-    addMessage.run("ses_answered", 1, "assistant", now - 8_000_000, question(now - 8_000_000))
-    addMessage.run("ses_answered", 2, "user", now - 100_000, JSON.stringify({}))
-    addMessage.run("ses_fresh", 1, "assistant", now - 1_000, running(now - 1_000))
+    const msg = (session, seq, type, created, data) => addMessage.run(session, seq, type, created, created, data)
+    msg("ses_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
+    msg("ses_question", 2, "assistant", now - 1_800_000, question(now - 1_800_000))
+    msg("ses_stuck", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
+    msg("ses_answered", 1, "assistant", now - 8_000_000, question(now - 8_000_000))
+    msg("ses_answered", 2, "user", now - 100_000, JSON.stringify({}))
+    msg("ses_fresh", 1, "assistant", now - 1_000, running(now - 1_000))
+    msg("ses_stuck_active", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
+    msg("ses_stuck_active", 2, "user", now - 200_000, JSON.stringify({}))
+    msg("ses_stuck_parent", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
+    msg("ses_stuck_child", 1, "user", now - 200_000, JSON.stringify({}))
     const details = await queryWaitingDetails({ query: (sql) => ({ all: (...args) => sqlite.prepare(sql).all(...args) }) })
     assert.equal(details.get("ses_question")?.reason, "question")
     assert.equal(details.get("ses_question")?.since, now - 3_600_000)
@@ -476,8 +485,34 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.equal(details.get("ses_stuck")?.since, now - 7_200_000)
     assert.equal(details.has("ses_answered"), false)
     assert.equal(details.has("ses_fresh"), false)
+    assert.equal(details.has("ses_stuck_active"), false)
+    assert.equal(details.has("ses_stuck_parent"), false)
   } finally {
     sqlite.close()
+  }
+}
+
+{
+  const db = new DatabaseSync(":memory:")
+  try {
+    db.exec(`CREATE TABLE session_v2 (id TEXT, directory TEXT);
+      CREATE TABLE session_message (session_id TEXT, type TEXT, time_created INTEGER, data TEXT);
+      INSERT INTO session_v2 VALUES ('ses_new', '/project');
+      INSERT INTO session_message VALUES ('ses_new', 'assistant', 2000, '{"cost":3}');`)
+    const row = (legacy) => db.prepare(costRowsQuery(1000, legacy)).get()
+    assert.equal(row(false).lifetime_cost, 3)
+    db.exec(`CREATE TABLE session (id TEXT, directory TEXT);
+      CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT);
+      INSERT INTO session VALUES ('ses_new', '/project'), ('ses_old', '/project');
+      INSERT INTO message VALUES ('ses_old', 2000, '{"role":"assistant","cost":4}'),
+        ('ses_old', 500, '{"role":"assistant","cost":6}'),
+        ('ses_new', 2000, '{"role":"assistant","cost":100}'),
+        ('ses_old', 2000, '{"role":"user","cost":100}');`)
+    assert.equal(row(true).lifetime_cost, 13)
+    assert.equal(row(true).window_cost, 7)
+    assert.equal(row(true).sessions, 2)
+  } finally {
+    db.close()
   }
 }
 

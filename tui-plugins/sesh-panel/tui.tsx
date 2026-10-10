@@ -7,8 +7,9 @@ type TuiPluginApi = ReturnType<typeof createApi>
 type TuiPlugin = (api: TuiPluginApi) => Promise<void>
 import { createEffect, createMemo, createRoot, createSignal, For, getOwner, on, onCleanup, onMount, runWithOwner, Show } from "solid-js"
 import { mkdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { Portal } from "@opentui/solid"
 
@@ -502,26 +503,63 @@ type IndexProgress = { indexed: number; total: number; complete: boolean }
 
 const nextTick = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
+function resolveDbPath(): string {
+  if (process.env.SESH_DB) return process.env.SESH_DB
+  const home = process.env.HOME ?? ""
+  const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
+  const xdgPath = `${dataHome}/opencode/opencode.db`
+  if (existsSync(xdgPath)) return xdgPath
+  try {
+    const result = spawnSync(process.env.SESH_OPENCODE ?? "opencode", ["debug", "paths"], { encoding: "utf8" })
+    const match = result.stdout?.match(/^db\s+(.+)$/m)
+    if (match) return match[1].trimEnd()
+  } catch {}
+  return xdgPath
+}
+
 async function openTranscriptDb(): Promise<any | undefined> {
   try {
-    const home = process.env.HOME ?? ""
-    const dataHome = process.env.XDG_DATA_HOME ?? `${home}/.local/share`
     // @ts-ignore - bun:sqlite ships with the Bun runtime (verified); no type package installed
     const sqlite: any = await import("bun:sqlite")
     if (typeof sqlite?.Database !== "function") return undefined
-    return new sqlite.Database(process.env.SESH_DB ?? `${dataHome}/opencode/opencode.db`, { readonly: true })
+    return new sqlite.Database(resolveDbPath(), { readonly: true })
   } catch {
     return undefined
   }
 }
 
+function costRowsQuery(cutoff: number, includeLegacy: boolean): string {
+  const legacy = includeLegacy ? `UNION ALL
+SELECT s.directory, s.id AS session_id, m.time_created, m.data
+FROM message m JOIN session s ON s.id = m.session_id
+WHERE json_extract(m.data, '$.role') = 'assistant'
+  AND NOT EXISTS (SELECT 1 FROM session_v2 v WHERE v.id = s.id)` : ""
+  return `WITH costs AS (
+SELECT s.directory, s.id AS session_id, m.time_created, m.data
+FROM session_message m JOIN session_v2 s ON s.id = m.session_id
+WHERE m.type = 'assistant'
+${legacy}
+)
+SELECT m.directory AS directory,
+  ROUND(SUM(CASE WHEN m.time_created >= ${cutoff} THEN COALESCE(json_extract(m.data, '$.cost'), 0) ELSE 0 END), 4) AS window_cost,
+  ROUND(SUM(COALESCE(json_extract(m.data, '$.cost'), 0)), 4) AS lifetime_cost,
+  COUNT(DISTINCT m.session_id) AS sessions
+FROM costs m
+WHERE json_extract(m.data, '$.cost') IS NOT NULL
+GROUP BY m.directory
+ORDER BY lifetime_cost DESC`
+}
+
 // NEEDS_INPUT_SQL: sessions waiting on the user (shared heuristic — keep in
 // sync with bin/sesh-waiting.sh). A session waits when it is not archived,
-// is not a fork child, and either has an unanswered `question` tool part or
-// a `tool` part still marked running older than STUCK_AFTER_MS (awaiting
-// approval, or orphaned by a dead server). Server-independent on purpose:
-// the TUI sync layer only sees permission/question state for sessions owned
-// by the current server, which is invisible cross-project.
+// is not a child (subagent) session, and either has an unanswered `question`
+// tool part or a `tool` part still marked running older than STUCK_AFTER_MS
+// with no message activity in the session or its direct children since then (a
+// long-running subagent/shell tool with recent activity is not stuck; V2
+// resumes interrupted runs server-side, so `running` with no activity means
+// orphaned or awaiting approval). Server-independent on purpose: the TUI
+// sync layer only sees permission/question state for sessions owned by the
+// current server, which is invisible cross-project.
 const STUCK_AFTER_MS = 600000
 const LIVE_TOOLS_CTE = (sessionFilter: string) => `
 WITH live AS (
@@ -539,6 +577,9 @@ const QUESTION_OPEN = `live.name = 'question'
   AND NOT EXISTS (
     SELECT 1 FROM session_message u
     WHERE u.session_id = live.session_id AND u.type = 'user' AND u.seq > live.seq)`
+const NO_RECENT_ACTIVITY = (sessionIdExpr: string, stuckBefore: number) => `NOT EXISTS (
+      SELECT 1 FROM session_message r JOIN session_v2 f ON f.id = r.session_id
+      WHERE (f.id = ${sessionIdExpr} OR f.parent_id = ${sessionIdExpr}) AND r.time_updated >= ${stuckBefore})`
 const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE("")}
 SELECT s.id AS id,
   CASE WHEN EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
@@ -547,9 +588,10 @@ FROM session_v2 s
 WHERE COALESCE(s.time_archived, 0) = 0
   AND s.parent_id IS NULL
   AND (EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
-    OR EXISTS (
+    OR (EXISTS (
       SELECT 1 FROM live
-      WHERE live.session_id = s.id AND live.status = 'running' AND live.created < ${stuckBefore}))
+      WHERE live.session_id = s.id AND live.status = 'running' AND live.created < ${stuckBefore})
+      AND ${NO_RECENT_ACTIVITY("s.id", stuckBefore)}))
 ORDER BY s.time_updated DESC`
 
 async function queryWaitingIds(db: any): Promise<Map<string, string>> {
@@ -679,7 +721,7 @@ async function buildSearchIndexRemote(
   onEach: () => void,
 ): Promise<void> {
   const home = process.env.HOME ?? ""
-  const cacheDir = process.env.SESH_CACHE_DIR ?? `${home}/.cache/sesh`
+  const cacheDir = process.env.SESH_CACHE_DIR ?? `${process.env.XDG_CACHE_HOME ?? `${home}/.cache`}/sesh`
   let cursor = 0
   // Bounded concurrency: a fixed worker pool instead of one request per session.
   const worker = async () => {
@@ -1576,7 +1618,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
             wrapMode="none"
             style={{ fg: query() ? theme().text : theme().textMuted }}
           >
-            {query() || "search…"}
+            {query() || (searching() ? "" : "search…")}
             {searching() ? "▏" : ""}
           </text>
           <Show when={query()}>
@@ -2001,7 +2043,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                   wrapMode="none"
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
-                  {query() || "search…"}
+                  {query() || (searching() ? "" : "search…")}
                   {searching() ? "▏" : ""}
                 </text>
               </box>
@@ -2574,6 +2616,7 @@ const tui: TuiPlugin = async (api) => {
                 focusedBackgroundColor={api.theme.current.backgroundPanel}
                 focusedTextColor={api.theme.current.text}
                 cursorColor={api.theme.current.primary}
+                cursorStyle={{ style: "line", blinking: false }}
                 onInput={(value) => {
                   if (pendingDelete()) return
                   setQuery(value)
@@ -2851,17 +2894,8 @@ const tui: TuiPlugin = async (api) => {
       else {
         try {
           const cutoff = Date.now() - 86400000
-          const raw = (db.query(`
-SELECT s.directory AS directory,
-  ROUND(SUM(CASE WHEN m.time_created >= ${cutoff} THEN COALESCE(json_extract(m.data, '$.cost'), 0) ELSE 0 END), 4) AS window_cost,
-  ROUND(SUM(COALESCE(json_extract(m.data, '$.cost'), 0)), 4) AS lifetime_cost,
-  COUNT(DISTINCT s.id) AS sessions
-FROM session_message m
-JOIN session_v2 s ON s.id = m.session_id
-WHERE m.type = 'assistant'
-  AND json_extract(m.data, '$.cost') IS NOT NULL
-GROUP BY s.directory
-ORDER BY lifetime_cost DESC`).all() ?? []) as {
+          const legacyTables = db.query("SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('session', 'message')").get()
+          const raw = (db.query(costRowsQuery(cutoff, legacyTables?.count === 2)).all() ?? []) as {
             directory: unknown
             window_cost: unknown
             lifetime_cost: unknown

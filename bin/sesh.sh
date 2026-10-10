@@ -203,11 +203,15 @@ fi
 command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable unavailable' >&2; exit 1; }
 # Resume in place: this terminal becomes the session. No tabs, no panes.
 if [ "$fork" = 1 ]; then
-  forked=$(cd "$cwd" && "$OPENCODE_BIN" api session.fork --param "sessionID=$session_id" -d '{}' 2>/dev/null | "$SESH_JQ" -r '.data.id // empty' 2>/dev/null || true)
+  fork_err="$state_dir/fork-err"
+  forked=$(cd "$cwd" && "$OPENCODE_BIN" api session.fork --param "sessionID=$session_id" -d '{}' 2>"$fork_err" | "$SESH_JQ" -r '.data.id // empty' 2>/dev/null || true)
   if [[ "$forked" =~ ^ses_[A-Za-z0-9]+$ ]]; then
     session_id=$forked
+    rm -f "$fork_err"
   else
     echo 'sesh: could not fork the session; returning to the picker.' >&2
+    [ -s "$fork_err" ] && sed 's/^/sesh: /' "$fork_err" >&2
+    rm -f "$fork_err"
     continue
   fi
 fi

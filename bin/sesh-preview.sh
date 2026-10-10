@@ -17,7 +17,7 @@ JQ_BIN=${SESH_JQ:-jq}
 OPENCODE_BIN=${SESH_OPENCODE:-opencode}
 DB_PATH=${SESH_DB:-"${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"}
 if [ -z "${SESH_DB:-}" ] && [ ! -f "$DB_PATH" ] && command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-  DB_PATH=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
+  DB_PATH=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { sub(/^db[ \t]+/, ""); print; exit }' || true)
 fi
 [ -f "$DB_PATH" ] || { echo "(opencode database is unavailable)"; exit 0; }
 

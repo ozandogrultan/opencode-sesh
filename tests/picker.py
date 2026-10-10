@@ -312,6 +312,22 @@ exec {shlex.quote(FZF)} "$@"
         )
         self.assertEqual(self.actions()[1]["args"], ["--session", "ses_forked"])
 
+    def test_fork_failure_reports_stderr(self):
+        stub = self.root / "bin/opencode"
+        stub.write_text(f"""#!{shutil.which("python3")}
+import sys
+if sys.argv[1:] == ['--version']:
+    print('1.18.30'); sys.exit(0)
+if sys.argv[1:3] == ['api', 'session.fork']:
+    sys.stderr.write('fork failed: permission denied\\n')
+    sys.exit(1)
+""")
+        stub.chmod(0o700)
+        self.start("--fork", "--query", "auth")
+        self.key(b"\r")
+        self.until(lambda: b"could not fork the session" in self.screen)
+        self.until(lambda: b"permission denied" in self.screen)
+
     def test_literal_ctrl_f_query_does_not_fork(self):
         self.sql("UPDATE session_v2 SET title = 'ctrl-f auth ' || id")
         # Keep the initial titles recognizable to the PTY readiness check.

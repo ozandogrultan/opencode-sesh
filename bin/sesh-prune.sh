@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# Archive (or, with --delete, hard-delete) stale sessions: not updated within
+# Delete stale sessions: not updated within
 # the threshold, never pinned, never waiting on the user, never already
 # archived, never a child (subagent) session.
 #
-# Archive is the default because it is reversible; hard deletes go through
-# `opencode session delete` so its own safeguards apply. The archive itself
-# is a single atomic UPDATE through sqlite3 — the opencode server API has no
-# archive endpoint, so a direct write is the only route (deletes stay on the
-# CLI).
-#
-# Usage: sesh-prune.sh [--older-than 30d] [--dry-run] [--yes] [--delete]
+# Usage: sesh-prune.sh [--older-than 30d] [--dry-run] [--yes]
 #   --older-than Nd|Nh|Nw (bare N means days; default 30d)
 #   --dry-run lists candidates and changes nothing
 #   without --dry-run, a TTY run confirms first; a non-TTY run needs --yes
@@ -21,15 +15,13 @@ OPENCODE_BIN=${SESH_OPENCODE:-opencode}
 older_than=30d
 dry_run=0
 assume_yes=0
-hard_delete=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --older-than) older_than=${2:-}; shift ;;
     --older-than=*) older_than=${1#--older-than=} ;;
     --dry-run) dry_run=1 ;;
     --yes|-y) assume_yes=1 ;;
-    --delete) hard_delete=1 ;;
-    --help) echo "usage: ${0##*/} [--older-than 30d] [--dry-run] [--yes] [--delete]"; exit 0 ;;
+    --help) echo "usage: ${0##*/} [--older-than 30d] [--dry-run] [--yes]"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -56,7 +48,7 @@ resolve_db() {
   local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
   if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { sub(/^db[ \t]+/, ""); print; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
   return 1
@@ -74,7 +66,6 @@ DB_PATH=$(resolve_db) || { echo 'sesh: session database unavailable' >&2; exit 1
 
 [ -n "$SQLITE_BIN" ] || { echo 'sesh: sqlite3 is required' >&2; exit 1; }
 query() { "$SQLITE_BIN" -json -readonly "$DB_PATH" "$1"; }
-write_db() { "$SQLITE_BIN" "$DB_PATH" "$1"; }
 
 JQ_BIN=${SESH_JQ:-$(command -v jq || true)}
 [ -n "$JQ_BIN" ] || { echo 'sesh: jq is required' >&2; exit 1; }
@@ -98,8 +89,7 @@ ELIGIBLE=$(printf '%s' "$CANDIDATES" | "$JQ_BIN" -c --slurpfile _pins <(printf '
     ]
 ')
 COUNT=$(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r 'length')
-VERB=Archive
-[ "$hard_delete" = 0 ] || VERB=Delete
+VERB=Delete
 
 if [ "$COUNT" = 0 ]; then
   echo "Nothing to prune older than $older_than."
@@ -137,29 +127,17 @@ if [ "$assume_yes" = 0 ]; then
   fi
 fi
 
-if [ "$hard_delete" = 0 ]; then
-  IDS=$(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id')
-  IN_LIST=''
-  for id in $IDS; do
-    [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
-    IN_LIST="$IN_LIST'$id',"
-  done
-  IN_LIST=${IN_LIST%,}
-  write_db "UPDATE session_v2 SET time_archived = $NOW_MS WHERE id IN ($IN_LIST);"
-  echo "Archived $COUNT session(s) older than $older_than."
-else
-  command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable is unavailable for deletes.' >&2; exit 1; }
-  failed=0
-  done_count=0
-  for id in $(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id'); do
-    [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
-    if "$OPENCODE_BIN" session delete "$id" >/dev/null 2>&1; then
-      done_count=$((done_count + 1))
-    else
-      echo "Could not delete $id." >&2
-      failed=$((failed + 1))
-    fi
-  done
-  echo "Deleted $done_count session(s) older than $older_than."
-  [ "$failed" = 0 ] || exit 1
-fi
+command -v "$OPENCODE_BIN" >/dev/null 2>&1 || { echo 'sesh: opencode executable is unavailable for deletes.' >&2; exit 1; }
+failed=0
+done_count=0
+for id in $(printf '%s' "$ELIGIBLE" | "$JQ_BIN" -r '.[].id'); do
+  [[ "$id" =~ ^ses_[A-Za-z0-9]+$ ]] || { echo "Refusing: unexpected session id shape." >&2; exit 1; }
+  if "$OPENCODE_BIN" session delete "$id" >/dev/null 2>&1; then
+    done_count=$((done_count + 1))
+  else
+    echo "Could not delete $id." >&2
+    failed=$((failed + 1))
+  fi
+done
+echo "Deleted $done_count session(s) older than $older_than."
+[ "$failed" = 0 ] || exit 1

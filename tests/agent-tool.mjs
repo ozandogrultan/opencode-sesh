@@ -132,7 +132,7 @@ try {
   delete process.env.SESH_DB
   process.env.XDG_DATA_HOME = dir
 
-  // Query all roots (newest first, excluding fork child and archived)
+  // Query all roots (newest first, excluding child/subagent and archived)
   const resAll = await runtimeTool.execute({ limit: 10 })
   const rowsAll = JSON.parse(resAll.content)
   assert.deepEqual(rowsAll.map((r) => r.id), ["ses_new", "ses_old"])

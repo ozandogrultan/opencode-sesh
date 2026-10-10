@@ -79,7 +79,7 @@ resolve_db() {
   local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
   if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { sub(/^db[ \t]+/, ""); print; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
   return 1
@@ -279,7 +279,7 @@ refresh() {
   db_json "SELECT session_id, COUNT(*) AS n, MAX(time_updated) AS m FROM session_message GROUP BY session_id;" > "$parts" 2>/dev/null || printf '[]\n' > "$parts"
   "$JQ_BIN" -e 'type == "array"' "$parts" >/dev/null 2>&1 || printf '[]\n' > "$parts"
 
-  # Same bulk cache validation as the Claude list: every cache arrives as its
+  # Same bulk cache validation as the full list: every cache arrives as its
   # own file argument (ARG_MAX), records match on session id plus the two
   # change signals, and only vanished sessions are pruned — metadata always
   # covers the whole database, so pruning is safe under any scope or limit.
@@ -378,8 +378,8 @@ refresh() {
     | ($hist | map({key: .sessionId, value: .}) | from_entries) as $histById
     | [$meta[]
        | select((.id | type) == "string" and (.id | test("^ses_[A-Za-z0-9]+$")))
-       # Child sessions (fork children, spawned subagents) surface only with
-       # --archived; metadata still sees them, so cache pruning stays safe.
+       # Child sessions (spawned subagents) surface only with --archived;
+       # metadata still sees them, so cache pruning stays safe.
        | select($archived == 1 or (.archived == 0 and .parent == ""))
        | select($scope == "" or .directory == $scope)
        | . as $m | ($histById[$m.id] // {}) as $h

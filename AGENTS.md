@@ -39,11 +39,10 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
 - `bin/` — flat; no subdirs. Scripts resolve siblings from their own location.
   Never hardcode install paths. `sesh-waiting.sh` owns the needs-input query
   (shared heuristic with the TUI sidebar copy, marked `NEEDS_INPUT_SQL` in
-  both); `sesh-prune.sh` archives stale sessions; `sesh-costs.sh` sums
+  both); `sesh-prune.sh` deletes stale sessions; `sesh-costs.sh` sums
   assistant-message cost per directory. Reads go through `sqlite3 -readonly`
-  (required; `opencode db` no longer exists); the direct `UPDATE` in
-  `sesh-prune.sh` (archive) is the only sanctioned database write — the API has
-  no archive endpoint — and hard deletes stay on `opencode session delete`.
+  (required; `opencode db` no longer exists). Sesh never writes the database
+  directly; deletes go through `opencode session delete`.
 - `contrib/` — caller-side integrations (currently cmux). Nothing here may add
   window management to sesh itself.
 - `tui-plugins/sesh-panel/tui.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
@@ -130,7 +129,7 @@ Resume happens in place (`exec` after `cd` to the session's cwd).
 - Destructive actions confirm. `sesh-delete.sh` prompts on a TTY and refuses
   without `--yes` when stdin is not one; the TUI arms on the first Option-D and
   commits on the second (or `y`).
-- The installer prefers the local opencode version for `@opencode-ai/*` and
+- The installer prefers the local opencode version for `@opencode/*` and
   merges (never clobbers) the config `package.json`; opencode runs `bun install`
   at startup.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)

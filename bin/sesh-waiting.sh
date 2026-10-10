@@ -5,12 +5,16 @@
 # owned by a running TUI server, whose in-memory permission/question state
 # is invisible cross-project.
 #
-# A session waits when it is not archived, is not a fork child, and either
+# A session waits when it is not archived, is not a child (subagent) session,
+# and either
 #   - has a `question` tool part still pending or running with no later user
 #     message in the same session (awaiting an answer; a dismissed question
 #     that errored is not waiting), or
-#   - has a `tool` part still marked `running` older than STUCK_AFTER_MS
-#     (awaiting approval, or orphaned by a dead server).
+#   - has a `tool` part still marked `running` older than STUCK_AFTER_MS with
+#     no message activity in the session or its direct children since then
+#     (a long-running subagent/shell tool with recent activity is not stuck;
+#     V2 resumes interrupted runs server-side, so `running` with no activity
+#     means orphaned or awaiting approval).
 #
 # Usage: sesh-waiting.sh [--json]
 #   default prints a human table; --json prints [{id,reason,title,directory,updated}]
@@ -34,7 +38,7 @@ resolve_db() {
   local default="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" from_cli=''
   if [ -f "$default" ]; then printf '%s\n' "$default"; return 0; fi
   if command -v "$OPENCODE_BIN" >/dev/null 2>&1; then
-    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { print $2; exit }' || true)
+    from_cli=$("$OPENCODE_BIN" debug paths 2>/dev/null | awk '$1 == "db" { sub(/^db[ \t]+/, ""); print; exit }' || true)
   fi
   if [ -n "$from_cli" ] && [ -f "$from_cli" ]; then printf '%s\n' "$from_cli"; return 0; fi
   return 1
@@ -83,9 +87,12 @@ WHERE COALESCE(s.time_archived, 0) = 0
       AND NOT EXISTS (
         SELECT 1 FROM session_message u
         WHERE u.session_id = live.session_id AND u.type = 'user' AND u.seq > live.seq)
-  ) OR EXISTS (
+  ) OR (EXISTS (
     SELECT 1 FROM live
-    WHERE live.session_id = s.id AND live.status = 'running' AND live.created < $STUCK_BEFORE))
+    WHERE live.session_id = s.id AND live.status = 'running' AND live.created < $STUCK_BEFORE)
+    AND NOT EXISTS (
+      SELECT 1 FROM session_message r JOIN session_v2 f ON f.id = r.session_id
+      WHERE (f.id = s.id OR f.parent_id = s.id) AND r.time_updated >= $STUCK_BEFORE)))
 ORDER BY s.time_updated DESC;
 SQL
 
