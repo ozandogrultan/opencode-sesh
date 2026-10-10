@@ -17,8 +17,8 @@ type ThemeColors = TuiPluginApi["theme"]["current"]
 
 let markdownStyleCache: { theme: ThemeColors; style: SyntaxStyle } | undefined
 
-function buildMarkdownStyle(theme: ThemeColors): SyntaxStyle {
-  return SyntaxStyle.fromTheme([
+function buildMarkdownStyle(theme: ThemeColors, owner?: unknown): SyntaxStyle {
+  return (SyntaxStyle as any).fromTheme([
     { scope: ["default"], style: { foreground: theme.text } },
     { scope: ["comment", "comment.documentation"], style: { foreground: theme.syntaxComment, italic: true } },
     { scope: ["string", "symbol", "character"], style: { foreground: theme.syntaxString } },
@@ -81,17 +81,17 @@ function buildMarkdownStyle(theme: ThemeColors): SyntaxStyle {
     },
     { scope: ["markup.link.label", "label"], style: { foreground: theme.markdownLinkText, underline: true } },
     { scope: ["conceal"], style: { foreground: theme.textMuted } },
-  ])
+  ], owner)
 }
 
-function getMarkdownStyle(theme: ThemeColors): SyntaxStyle | undefined {
+function getMarkdownStyle(theme: ThemeColors, owner?: unknown): SyntaxStyle | undefined {
   if (markdownStyleCache?.theme === theme) return markdownStyleCache?.style
   try {
-    markdownStyleCache = { theme, style: buildMarkdownStyle(theme) }
+    markdownStyleCache = { theme, style: buildMarkdownStyle(theme, owner) }
     return markdownStyleCache?.style
   } catch {
     try {
-      return SyntaxStyle.create()
+      return (SyntaxStyle as any).create(owner)
     } catch {
       return undefined
     }
@@ -907,10 +907,10 @@ function createTranscriptPreview(api: TuiPluginApi) {
             scrollbarOptions={{ visible: false }}
             maxHeight={Math.max(6, Math.floor(api.renderer.height / 2))}
           >
-            {getMarkdownStyle(api.theme.current) ? (
+            {getMarkdownStyle(api.theme.current, (api.renderer as any)?.nativeSession) ? (
               <markdown
                 content={previewText()}
-                syntaxStyle={getMarkdownStyle(api.theme.current)!}
+                syntaxStyle={getMarkdownStyle(api.theme.current, (api.renderer as any)?.nativeSession)!}
                 treeSitterClient={getTreeSitterClient()}
               />
             ) : (
@@ -2854,10 +2854,10 @@ const tui: TuiPlugin = async (api) => {
                 <Show when={previewID()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Select a session to preview</text>}>
                   <Show when={previewText()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Loading…</text>}>
                     {(text: Accessor<string>) =>
-                      getMarkdownStyle(api.theme.current) ? (
+                      getMarkdownStyle(api.theme.current, (api.renderer as any)?.nativeSession) ? (
                         <markdown
                           content={text()}
-                          syntaxStyle={getMarkdownStyle(api.theme.current)!}
+                          syntaxStyle={getMarkdownStyle(api.theme.current, (api.renderer as any)?.nativeSession)!}
                           treeSitterClient={getTreeSitterClient()}
                         />
                       ) : (
@@ -3293,6 +3293,9 @@ function createApi(ctx: Plugin.Context) {
       },
       get currentFocusedEditor() {
         return ctx.renderer.currentFocusedEditor
+      },
+      get nativeSession() {
+        return (ctx.renderer as any)?.nativeSession
       },
       on(event: string, handler: (...args: any[]) => void) {
         ctx.renderer.on(event, handler)

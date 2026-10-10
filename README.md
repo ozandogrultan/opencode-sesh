@@ -57,7 +57,26 @@ search…
 
 ## Install
 
-With npm:
+### OpenCode plugin
+
+Add the package to `plugins` in your OpenCode V2 `opencode.json` or
+`opencode.jsonc`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["opencode-sesh"]
+}
+```
+
+OpenCode installs the package and loads its server tool and TUI panel. Merge
+this entry with your existing plugins. Remove the copied
+`./tui-plugins/sesh-panel` registration and `plugins/sesh-list.ts` tool before
+switching to avoid loading them twice.
+
+### Terminal picker
+
+Install the CLI with npm:
 
 ```bash
 npm install -g opencode-sesh

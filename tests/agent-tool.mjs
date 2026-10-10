@@ -12,6 +12,10 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import { DatabaseSync } from "node:sqlite"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
+const toolSource = fileURLToPath(import.meta.resolve("opencode-sesh"))
+assert.equal(toolSource, join(root, "plugins/sesh-list.ts"))
+assert.equal(import.meta.resolve("opencode-sesh/tool"), pathToFileURL(toolSource).href)
+assert.equal(import.meta.resolve("opencode-sesh/tui"), pathToFileURL(join(root, "tui-plugins/sesh-panel/tui.tsx")).href)
 
 let stripTypeScriptTypes
 try {
@@ -23,7 +27,7 @@ if (typeof stripTypeScriptTypes !== "function") {
 }
 
 async function loadTool(sqliteWrapperPath) {
-  let source = readFileSync(join(root, "plugins/sesh-list.ts"), "utf8")
+  let source = readFileSync(toolSource, "utf8")
   const pluginImport = 'import { Plugin } from "@opencode/plugin"'
   assert.ok(source.includes(pluginImport), "plugin import not found; update this test")
   source = source.replace(

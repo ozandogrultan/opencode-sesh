@@ -22,6 +22,7 @@
     "cli"
   ],
   "exports": {
+    ".": "./plugins/sesh-list.ts",
     "./tui": "./tui-plugins/sesh-panel/tui.tsx",
     "./tool": "./plugins/sesh-list.ts"
   },
@@ -61,8 +62,8 @@
   },
   "peerDependencies": {
     "@opencode/plugin": ">=2.0.0",
-    "@opentui/core": "^0.5.8",
-    "@opentui/solid": "^0.5.8",
+    "@opentui/core": ">=0.5.8",
+    "@opentui/solid": ">=0.5.8",
     "solid-js": ">=1.9.0"
   },
   "devDependencies": {
