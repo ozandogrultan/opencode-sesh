@@ -20,7 +20,7 @@ Run the full check suite and make sure it passes:
 
 ```bash
 bun run test         # fixture-database regression suite
-bun run typecheck    # tsc over tui/ and opencode/
+bun run typecheck    # tsc over tui-plugins/ and plugins/
 bun run lint:sh      # bash -n on every script
 ```
 
@@ -88,15 +88,14 @@ This is enforced locally by Git hooks that `bun install` installs (via husky):
 - `commit-msg` runs commitlint over your message.
 - `pre-commit` runs `bun run lint:sh`, `bun run typecheck`, and `bun run test`.
 
-Bypass a hook for one commit with `git commit --no-verify` (or `HUSKY=0`), but
-CI lints the commits in a pull request regardless.
+Fix failing checks before committing. CI also lints the commits in a pull request.
 
 ## Releases
 
 Releases are cut from the **Release** workflow (`workflow_dispatch`), which asks
 for a `patch`, `minor` or `major` bump and then:
 
-1. bumps `package.json` and the lockfile to the next version,
+1. bumps the version in `package.json`,
 2. writes a dated section and compare link in [CHANGELOG.md](CHANGELOG.md)
    from notable Conventional Commits since the last tag,
 3. commits and tags `vX.Y.Z`, publishes to npm with provenance, and creates the
@@ -106,7 +105,8 @@ Write Conventional Commits for notable changes. A release with no notable
 commits since the previous tag is a no-op. A tag without a matching section
 uses GitHub-generated release notes.
 
-`scripts/changelog.sh` performs the same steps locally:
+`scripts/changelog.sh` drafts, writes, and validates the changelog locally;
+it does not bump the package version, commit, tag, or publish:
 
 ```bash
 scripts/changelog.sh draft          # classify commits since the last tag (prints only)

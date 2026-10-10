@@ -12,7 +12,6 @@ The TUI plugin and agent tool require OpenCode V2 and are not compatible with V1
 `/sessions`) are scoped to the current project. `sesh` shows all of them —
 grouped by directory, full-text searchable, and previewable from anywhere.
 
-[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 [![GitHub stars](https://img.shields.io/github/stars/ozandogrultan/opencode-sesh?style=social)](https://github.com/ozandogrultan/opencode-sesh/stargazers)
@@ -35,19 +34,23 @@ search…
 ## Why sesh
 
 - **Every session, everywhere.** Sessions are grouped by project directory and
-  sorted by pins, then recency — across *all* your projects, not just the current one.
+  shown across *all* your projects, not just the current one. Archived and
+  subagent child sessions are hidden by default.
 - **Pin what matters.** Ctrl-S pins a session and Ctrl-D pins its directory in
-  either picker. Pins are shared across the terminal and opencode TUI and
-  persist across restarts; pinned directories and sessions sort first.
+  either picker; the TUI sidebar and home list use Option-S and Option-R.
+  Pins are shared and persist across restarts. Pinned directories rise first;
+  pinned sessions sort first in the terminal picker and home list. The TUI picker
+  and sidebar keep sessions within each directory recency-ordered.
 - **Full-text search.** Type to match against session titles *and* the text of
   the conversation itself. Reasoning and tool output are excluded, so the index
   stays clean.
-- **Transcript preview.** Space shows the most recent messages first, rendered as
-  Markdown (with `glow` if you have it).
-- **Resume in place.** Enter `exec`s `opencode --session <id>` in the session's
-  own directory. Ctrl-F forks instead. Your terminal becomes the session — no
-  tabs, no panes, no window management.
-- **Native TUI, too.** A recent-sessions section in the opencode sidebar plus an
+- **Transcript preview.** Ctrl-P in the terminal picker or Option-P in the TUI
+  shows the most recent messages first, rendered as Markdown (with `glow` in
+  the terminal if you have it).
+- **Resume in place.** Enter runs `opencode --session <id>` in the session's
+  own directory. Ctrl-F forks instead. The session opens in the same terminal,
+  and exiting opencode returns to the picker — no tabs, panes, or window management.
+- **Native TUI, too.** A sessions section in the opencode sidebar plus an
   `option+o` picker, both themed by your opencode theme.
 - **Fast.** The database is scanned once per refresh and cached; keystrokes only
   re-render the last snapshot, so typing never triggers a query storm.
@@ -71,7 +74,7 @@ bash install.sh
 
 `sesh install` (or `bash install.sh`) links `sesh` into `$XDG_BIN_HOME`
 (default `~/.local/bin`), copies
-the `sesh-list` tool and the TUI panel into
+the `sesh_list` tool and the TUI panel into
 `${XDG_CONFIG_HOME:-~/.config}/opencode`, registers the panel in `opencode.json`, and
 declares the plugin dependencies (opencode installs them on next start). The
 panel registers the `/sesh` slash command. It never edits your shell rc, and any
@@ -139,7 +142,7 @@ Flags: `--cwd` (current directory only), `--limit N` (default: all),
 
 `sesh prune [--older-than 30d] [--dry-run] [--yes]` deletes stale
 sessions (not updated within the threshold) through `opencode session delete`, including their children.
-Pinned sessions, sessions waiting on you, subagent child sessions and already-archived
+Pinned sessions and directories, sessions waiting on you, subagent child sessions and already-archived
 sessions are never selected. Without `--dry-run`, a TTY run
 confirms first and a non-TTY run needs `--yes`.
 
@@ -155,8 +158,8 @@ When searching, title matches outrank transcript-only matches and the current
 project rises, so the list answers "where was that thing I worked on" before it
 answers "what is newest". Pins still win outright.
 
-Because `--print` just emits the id and directory, `sesh` doubles as a scriptable
-session lookup:
+`--print` still opens the interactive picker, but emits the selected id and
+directory instead of resuming. `--query` supplies the initial search text:
 
 ```bash
 read -r id cwd < <(sesh --print --query "auth")
@@ -166,7 +169,7 @@ sesh --print --json --query "auth" | jq -r .cwd
 Deleting is irreversible, so the picker asks before dispatching it, and a
 non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 
-### TUI panel
+### TUI picker
 
 | Key | Action |
 | --- | --- |
@@ -178,12 +181,15 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` | Move the selection |
 | Option-P | Toggle the transcript preview |
 | Enter | Open the selected session |
-| Option-D | Delete the selected session (asks to confirm) |
+| Option-D | Arm deletion; press Option-D again, `y`, or Enter to confirm |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
 | Option-W / Option-S | Show only sessions needing input / pinned sessions |
 | Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
 | Esc | Close the preview first, then the picker |
+
+While deletion is armed, `n` or Esc cancels; it also cancels after five seconds.
+Option-O opens the picker globally; the other keys above apply inside it.
 
 The picker groups sessions under collapsible directory headings (click ▾/▸).
 Mouse-wheel scrolling moves through the tree without changing the selection
@@ -196,10 +202,14 @@ action, or Esc to dismiss the menu.
 Right-click a session in the home list or picker to open it in a new cmux
 workspace at its directory; outside cmux it shows a toast instead.
 
-Click the sidebar's `search…` box to filter recent sessions in place; click
+### TUI sidebar and home list
+
+Click the sidebar's `search…` box to filter sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
-Option-P to preview, Option-S/Option-R to pin, Option-D to delete, Esc to leave). Pinned
+Option-P to preview, Option-S to pin a session, Option-R to pin its directory,
+Option-D to arm deletion, Esc to leave). Press Option-D again or `y` to confirm
+an armed deletion; `n` or Esc cancels. Pinned
 directories rise first, while sessions within each directory are ordered by
 last update, newest first. The section lists every session and scrolls to fill
 the sidebar, so click **▾ hide** to collapse it when you need the room.
@@ -211,6 +221,12 @@ agent is working; the open session shows ● and every other row stays neutral.
 Hovering a row while keyboard navigation is active selects it for the next
 shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
 keystroke away.
+
+The home list also supports search and the Option-P, Option-S, Option-R, and
+Option-D actions on the hovered session. These Option pin shortcuts do not
+replace the picker's Ctrl-S/Ctrl-D bindings; Option-S in the picker filters pins.
+
+### Transcript search and needs-input triage
 
 The full picker pages through your whole global session list (no fixed window)
 and indexes transcript text for every session in the background, showing
@@ -233,7 +249,7 @@ All variables are optional.
 | `SESH_JQ` / `SESH_FZF` | `PATH` | explicit executable overrides |
 | `SESH_GLOW` | first `glow` on `PATH` | optional Markdown preview renderer |
 | `SESH_OPENCODE` | `opencode` | opencode executable (resume / delete) |
-| `SESH_CACHE_DIR` | `~/.cache/sesh` | persistent search-index cache |
+| `SESH_CACHE_DIR` | `${XDG_CACHE_HOME:-~/.cache}/sesh` | persistent search-index cache |
 | `SESH_PINS_FILE` | `${XDG_DATA_HOME:-~/.local/share}/sesh/pins.json` | shared persistent session/directory pins |
 
 ## Integrations
@@ -259,7 +275,7 @@ Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
 scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
 shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui-plugins/sesh-panel/tui.tsx`) is a
 SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
-`sesh-list` agent tool reads it read-only through `bun:sqlite`. V2 discovers
+`sesh_list` agent tool reads it read-only through `bun:sqlite`. V2 discovers
 the installed tool automatically in the global config directory's `plugins/`.
 
 ## FAQ
@@ -267,12 +283,13 @@ the installed tool automatically in the global config directory's `plugins/`.
 **Does it replace opencode's native session list?** No. `<leader>l` and the
 native `/sessions` command are untouched; `sesh` is additive.
 
-**Is there an agent-facing list?** Yes — the `sesh-list` tool lets the model list
+**Is there an agent-facing list?** Yes — the `sesh_list` tool lets the model list
 every session across all directories (the native `opencode session list` only
 covers the current project) and offer to resume one.
 
 **Where is my data?** It reads the opencode database read-only and caches
-extracted text under `~/.cache/sesh`. Nothing is uploaded anywhere.
+extracted text under `${XDG_CACHE_HOME:-~/.cache}/sesh` (or `SESH_CACHE_DIR`).
+Nothing is uploaded anywhere.
 
 **Does it work on Windows?** It targets macOS and Linux. WSL should work; native
 Windows is untested.

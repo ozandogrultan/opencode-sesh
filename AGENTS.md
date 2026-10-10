@@ -11,10 +11,10 @@ territory: read this first, then the specific file you need.
    any terminal. Lists **all** sessions across **all** project directories,
    full-text searchable, with transcript preview and resume/fork/delete.
 2. **`tui-plugins/sesh-panel/tui.tsx`** — a SolidJS/OpenTUI plugin for the opencode TUI: a
-   recent-sessions section in the sidebar plus an `alt+o` / `/sesh` picker.
+   sessions section in the sidebar plus an `option+o` / `/sesh` picker.
 3. **`plugins/sesh-list.ts`** — the `sesh_list` custom tool, so the agent
-   can list sessions across every directory by querying the global `opencode
-   db` store (the native `opencode session list` is project-scoped).
+   can list sessions across every directory by querying the global opencode
+   SQLite store (the native `opencode session list` is project-scoped).
 
 No iTerm2, no AppleScript, no panes, no window management — **never add any.**
 The one exception is the TUI's right-click action, which shells out to
@@ -57,7 +57,7 @@ The tool name in opencode is `sesh_list`. Do not rename it without updating the 
 ## Data flow (fzf picker)
 
 `bin/sesh-list.sh` owns the fzf picker's session store access (opencode SQLite
-DB: `session_v2` / `session_message` tables); the `sesh-list` agent tool queries
+DB: `session_v2` / `session_message` tables); the `sesh_list` agent tool queries
 the same store read-only through `bun:sqlite`. V2 discovers the tool from the
 global config directory's `plugins/`. Keep its SQL column names in sync with
 the schema below. Keystrokes never touch the database:
@@ -75,7 +75,8 @@ the schema below. Keystrokes never touch the database:
   the whole DB and pruning is always safe.
 - render (cheap, pure `jq`): reads the snapshot only. Filters on `searchText`
   (title + `fulltextLower`, both lowercased at extraction), groups by `cwd`,
-  sorts groups/items by recency, renders the TSV. Notice rows (headers, a
+  sorts groups/items by pins and recency, with current-project and title-match
+  priority while searching, and renders the TSV. Notice rows (headers, a
   vanished selection, an empty store, a query matching nothing) carry an empty
   `sessionId` and a unique `trackingId`. `--header` prints the one-line
   scope/count/status that the picker uses as fzf's header, and a non-actionable
@@ -89,7 +90,9 @@ the schema below. Keystrokes never touch the database:
   The sidebar and home lists use Option-S / Option-R instead: opencode binds
   `ctrl+d` itself (composer delete-char, session delete), so ctrl pins would
   shadow the composer. Pinned directories sort before groups
-  containing pinned sessions, with pinned sessions first inside each group.
+  containing pinned sessions. The terminal picker puts pinned sessions first
+  inside each group; the TUI picker and sidebar keep sessions recency-ordered
+  within each directory. The home list puts pinned sessions first.
 
 **Output contract** (TSV, 6 fields):
 `agentId  sessionId  liveState  display  cwd  trackingId`. `display` is the only
@@ -105,7 +108,8 @@ live-agent API, so `liveState` is always `unknown` and rows render gray unless
 they are archived (opt-in, tagged `· archived`);
 dispatch is always `opencode --session <id>`; Ctrl-F or `--fork` first creates the
 fork with `opencode api session.fork` (the CLI has no fork flag) and resumes the new id.
-Resume happens in place (`exec` after `cd` to the session's cwd).
+Resume runs opencode in a subshell at the session's cwd in the same terminal;
+when opencode exits, the picker reopens with the query preserved.
 
 ## Conventions
 

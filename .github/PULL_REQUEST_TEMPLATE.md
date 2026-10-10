@@ -15,9 +15,9 @@ Closes #
 
 - [ ] I read [AGENTS.md](AGENTS.md) and this change does not regress the
       documented TUI or data-flow rules.
-- [ ] `npm test` passes.
-- [ ] `npm run typecheck` passes.
-- [ ] `npm run lint:sh` passes.
+- [ ] `bun run test` passes.
+- [ ] `bun run typecheck` passes.
+- [ ] `bun run lint:sh` passes.
 - [ ] I smoke-tested the installer with `HOME=/tmp/fakehome bash install.sh`
       (if the change touches `install.sh`).
-- [ ] I updated the docs (README / CHANGELOG) where behaviour changed.
+- [ ] I updated the docs where behaviour changed; CHANGELOG contains released versions only.

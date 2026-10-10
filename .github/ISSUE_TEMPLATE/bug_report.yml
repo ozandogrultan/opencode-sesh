@@ -40,7 +40,7 @@ body:
       options:
         - "Terminal picker (`sesh`)"
         - "TUI panel / picker (`/sesh`, option+o)"
-        - "`sesh-list` agent tool"
+        - "`sesh_list` agent tool"
         - "Installer (`install.sh`)"
         - Other
     validations:

@@ -15,6 +15,11 @@ sesh shortcuts
   Escape            Exit the picker
 
 Flags: --cwd (current directory only), --limit N (default: all),
-       --archived (include archived), --print (print id instead of resuming),
-       --json (with --print, emit JSON)
+       --archived (include archived and child sessions),
+       --print (print selected id<TAB>cwd instead of resuming),
+       --json (with --print, emit JSON), --fork (resume as a fork),
+       --query TEXT (initial search), --check (check dependencies),
+       --needs-input [--json] (list sessions waiting on you)
+
+--print still opens the picker; select a session with Enter or Ctrl-F.
 HELP

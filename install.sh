@@ -42,7 +42,7 @@ usage() {
 Usage: bash install.sh [--bin-dir DIR] [--no-tool] [--no-tui] [--uninstall]
 
   --bin-dir DIR  Directory for the sesh launcher (default: ~/.local/bin).
-  --no-tool      Skip installing the sesh-list custom tool.
+  --no-tool      Skip installing the sesh_list custom tool.
   --no-tui       Skip installing the in-TUI sessions panel plugin.
   --uninstall    Remove everything this script installed.
   --sync-panel   Refresh an already-installed TUI panel only (used by postinstall).
@@ -314,7 +314,7 @@ fi
 "$LAUNCHER" --check || fail "post-install check failed."
 note "done"
 note "  picker:  run 'sesh' in any terminal, or '/sesh' inside opencode"
-note "  sidebar: alt+o opens the full picker"
+note "  TUI:     Option-O opens the full picker"
 note_restart
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;

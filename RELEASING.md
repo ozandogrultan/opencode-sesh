@@ -17,8 +17,10 @@ From the Actions tab (**Release → Run workflow**) or:
 gh workflow run release.yml -f bump=patch   # or minor / major
 ```
 
-That workflow checks out `main`, bumps the version, commits and tags it,
-pushes, publishes to npm, and cuts the GitHub release with generated notes.
+That workflow checks out `main`, drafts notable commits, bumps the version,
+writes the changelog, commits and tags it, pushes, publishes to npm, and cuts
+the GitHub release using the new changelog section. It does nothing when there
+are no notable commits since the last release.
 
 Do this from a green `main` — it releases whatever is there.
 
@@ -27,11 +29,20 @@ Do this from a green `main` — it releases whatever is there.
 If you prefer to bump locally:
 
 ```bash
-npm version minor          # patch / minor / major per the commit types
-git push --follow-tags     # the tag push triggers the same release workflow
+npm version minor --no-git-tag-version   # patch / minor / major per the commit types
+version=$(node -p "require('./package.json').version")
+bash scripts/changelog.sh release "$version"
+bash scripts/changelog.sh check
+git add package.json CHANGELOG.md
+git commit -m "chore(release): v$version"
+git tag -a "v$version" -m "v$version"
+git push --follow-tags
 ```
 
 `prepublishOnly` runs the tests and typecheck again before uploading.
+The tag workflow skips npm publication if that version is already published,
+but still creates or updates the GitHub release. It uses the matching changelog
+section, falling back to generated notes only when that section is unavailable.
 
 ## Before you release
 
@@ -63,7 +74,8 @@ Renaming that workflow file breaks publishing; update the npm setting too.
 
 - npm: `npm view opencode-sesh version` and
   `npm view opencode-sesh dist.attestations` (provenance present).
-- GitHub: a release exists for the tag, with generated notes.
+- GitHub: a release exists for the tag, with the matching changelog section
+  (or generated notes when that section is unavailable).
 
 ## Manual fallback
 
