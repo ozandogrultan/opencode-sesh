@@ -26,7 +26,8 @@ slot section plus an xlarge modal picker; the terminal UI is fullscreen fzf.
 
 ```bash
 bun install            # dev deps (TypeScript, opencode/OpenTUI types)
-bun run test           # fixture-DB regression suite — must stay green
+bun run build          # compile the panel to dist/tui.js
+bun run test           # build + fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite (needs fzf >= 0.73)
 bun run typecheck      # tsc over tui-plugins/ and plugins/
@@ -47,6 +48,12 @@ HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.co
   window management to sesh itself.
 - `tui-plugins/sesh-panel/tui.tsx` — SolidJS panel, `/** @jsxImportSource @opentui/solid */`.
 - `plugins/sesh-list.ts` — the agent-facing `sesh_list` tool.
+- `scripts/build-tui.mjs` — compiles the panel with Babel + `babel-preset-solid`
+  (`moduleName: "@opentui/solid"`, universal) to `dist/tui.js` (gitignored).
+  `package.json` exports `./tui` from `dist/tui.js`; `bun run build`, `bun run
+  test`, `prepack` and CI all run it. OpenCode applies its Solid transform only
+  to sources outside `node_modules`, so shipping raw `tui.tsx` in the npm package
+  renders a non-reactive (empty) panel — never export the `.tsx` source.
 - `scripts/changelog.sh` — release tooling: drafts conventional commits,
   writes a dated version, prints release notes and
   checks the compare links. `tests/changelog.sh` covers it in a throwaway repo.
@@ -246,3 +253,6 @@ when opencode exits, the picker reopens with the query preserved.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.
 - Keep `tui-plugins/sesh-panel/tui.tsx` and any installed copy byte-identical when testing
   the panel locally.
+- The npm install path needs the plugin in both `opencode.json` (server tool) and
+  `cli.json` (TUI panel); `plugin.list` shows only server plugins, so verify the
+  panel by launching the TUI against a fixture or the real store.

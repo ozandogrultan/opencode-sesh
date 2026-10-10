@@ -295,7 +295,8 @@ Flat scripts back the terminal UI — the picker (`sesh.sh`), the refresh engine
 scans), preview renderer (`sesh-preview.sh`), deleter (`sesh-delete.sh`) and
 shortcut help (`sesh-shortcuts.sh`). The TUI panel (`tui-plugins/sesh-panel/tui.tsx`) is a
 SolidJS OpenTUI plugin that talks to the opencode SDK over the same store; the
-`sesh_list` agent tool reads it read-only through `bun:sqlite`. V2 discovers
+npm package ships it precompiled as `dist/tui.js`. The
+`sesh_list` agent tool reads the store read-only through `bun:sqlite`. V2 discovers
 the installed tool automatically in the global config directory's `plugins/`.
 
 ## FAQ
@@ -326,7 +327,7 @@ checks before opening a PR:
 
 ```bash
 bun install
-bun run test         # fixture-database regression suite
+bun run test         # builds dist/tui.js, then the fixture-database regression suite
 bun run test:picker  # PTY picker suite (needs fzf >= 0.73)
 bun run typecheck    # tsc over tui-plugins/ and plugins/
 bun run lint:sh      # bash -n on every script

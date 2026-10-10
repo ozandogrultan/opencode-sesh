@@ -11,15 +11,17 @@ cd opencode-sesh
 bun install
 ```
 
-There is no build step. `bin/` holds flat shell scripts, `tui-plugins/sesh-panel/tui.tsx`
-is the OpenTUI plugin, and `plugins/sesh-list.ts` is the agent tool.
+`bin/` holds flat shell scripts, `tui-plugins/sesh-panel/tui.tsx` is the OpenTUI
+plugin, and `plugins/sesh-list.ts` is the agent tool. The only build step is
+`bun run build`, which compiles the panel to `dist/tui.js` (gitignored; `bun run
+test` and `npm pack` run it for you).
 
 ## Before you open a PR
 
 Run the full check suite and make sure it passes:
 
 ```bash
-bun run test         # fixture-database regression suite
+bun run test         # builds dist/tui.js, then the fixture-database regression suite
 bun run typecheck    # tsc over tui-plugins/ and plugins/
 bun run lint:sh      # bash -n on every script
 ```
