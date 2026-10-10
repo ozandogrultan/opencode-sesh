@@ -19,7 +19,7 @@ grouped by directory, full-text searchable, and previewable from anywhere.
 
 ```text
 Sessions (8)                              ▾ hide
-  search…
+search…
 ▾ …/Projects/portal                          (5)
   ├○ Retry the OAuth token refr…            2h
   ├○ Login rate limiting notes              3d
