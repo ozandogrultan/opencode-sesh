@@ -9,6 +9,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/sesh-changelog.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 export GIT_AUTHOR_NAME=sesh-test GIT_AUTHOR_EMAIL=sesh-test@example.com
 export GIT_COMMITTER_NAME=sesh-test GIT_COMMITTER_EMAIL=sesh-test@example.com
 export CHANGELOG_TODAY=2026-01-01
