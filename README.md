@@ -1,12 +1,9 @@
-# sesh
-
-[![CI](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml)
-
 <h1 align="center">
   <img src="assets/logo.svg" alt="sesh" height="96">
 </h1>
 
 <p align="center">
+  <a href="https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml"><img src="https://github.com/ozandogrultan/opencode-sesh/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/opencode-sesh"><img src="https://img.shields.io/npm/v/opencode-sesh" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs welcome"></a>
@@ -20,6 +17,14 @@ terminal or from inside the TUI.
 `opencode` keeps a growing pile of sessions, and its native lists (`<leader>l`,
 `/sessions`) are scoped to the current project. `sesh` shows all of them —
 grouped by directory, full-text searchable, and previewable from anywhere.
+
+<p align="center">
+  <img src="assets/demo.gif" alt="sesh: searching sessions across projects and previewing a transcript" width="800">
+</p>
+
+**Install:** `npm install -g opencode-sesh && sesh install` for the terminal
+picker, or add `"opencode-sesh"` to `plugins` for the TUI panel
+([details](#install)).
 
 ```text
 Sessions (8)                              ▾ hide
@@ -353,6 +358,12 @@ Windows is untested.
 **Why a separate terminal picker *and* a TUI panel?** The panel is always one
 keystroke away while you work. The terminal picker is fullscreen and works from
 any shell, including outside opencode.
+
+## More OpenCode plugins
+
+- [ghost](https://github.com/ozandogrultan/opencode-ghost) — suggests your next prompt as ghost text in the empty composer.
+- [quill](https://github.com/ozandogrultan/opencode-quill) — local word completion and next-word prediction as you type.
+- [ember](https://github.com/ozandogrultan/opencode-ember) — prices a cold prompt-cache rewrite before you send.
 
 ## Contributing
 
