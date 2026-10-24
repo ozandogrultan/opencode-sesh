@@ -19,27 +19,12 @@ terminal or from inside the TUI.
 grouped by directory, full-text searchable, and previewable from anywhere.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="sesh: searching sessions across projects and previewing a transcript" width="800">
+  <img src="assets/demo-tui.gif" alt="sesh: session sidebar, cross-project picker search and transcript preview inside OpenCode" width="800">
 </p>
 
 **Install:** `npm install -g opencode-sesh && sesh install` for the terminal
 picker, or add `"opencode-sesh"` to `plugins` for the TUI panel
 ([details](#install)).
-
-```text
-Sessions (8)                              ▾ hide
-search…
-▾ …/Projects/portal                          (5)
-  ├○ Retry the OAuth token refr…            2h
-  ├○ Login rate limiting notes              3d
-  ├○ Draft the release notes                7d
-  ├○ Auth middleware cleanup                11d
-  └○ Rotate the signing keys                12d
-▾ ~/Projects/mobile                          (3)
-  ├○ Author avatar upload retry             1d
-  ├○ Fix session cookie on Safari           2d
-  └○ Auth redirect loop after log…          6d
-```
 
 ## Why sesh
 
@@ -87,6 +72,10 @@ existing plugins. Remove any copied
 switching to avoid loading them twice.
 
 ### Terminal picker
+
+<p align="center">
+  <img src="assets/demo.gif" alt="sesh: searching sessions across projects and previewing a transcript in the terminal picker" width="800">
+</p>
 
 Install the CLI with npm:
 
