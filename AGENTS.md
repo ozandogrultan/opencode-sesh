@@ -30,6 +30,7 @@ bun run build          # compile the panel to dist/tui.js
 bun run test           # build + fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite
+bun run test:tui-home  # real OpenTUI home layout regressions (also in bun run test)
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.config)
@@ -164,6 +165,11 @@ when opencode exits, the picker reopens with the query preserved.
   prepend mode). In the sidebar, pinned directories sort first, then directory groups
   by recency; sessions within each group sort by last update regardless of pins.
   In the home list, pinned sessions sort first.
+  The home list budgets its height for the native logo, maximum-height composer,
+  and status footer: compact spacing first, then fewer rows, hidden when too
+  short. Header/rows never wrap, and resizing releases captures for hidden rows.
+  `tests/tui-home.mjs` renders this against the native home layout with multiline
+  and wrapped prompts; keep that regression in the default test suite.
   Row markers alone signal session state: a running agent animates a loading
   spinner marker, the open session shows its own ●, and every other idle row
   stays neutral (polled periodically); Option-P previews

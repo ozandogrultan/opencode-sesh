@@ -1819,10 +1819,17 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 }
 
 const HOME_SESSION_LIMIT = 6
+// The native home needs room for its logo, composer chrome and status footer.
+// Reserve the editor's *maximum* height (one third of the terminal, at least
+// six lines), so typing/wrapping a prompt cannot push it into our footer.
+// Chrome: logo (4) + gap (1) + composer (6) + status (3). Below 44 columns,
+// the logo stacks to seven lines but the three-line status footer disappears.
+const HOME_CHROME_ROWS = 14
 
 function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
+  const [dimensions, setDimensions] = createSignal({ width: props.api.renderer.width, height: props.api.renderer.height })
   const [entries, setEntries] = createSignal<Entry[]>([])
   const [query, setQuery] = createSignal("")
   const [hovered, setHovered] = createSignal<string>()
@@ -1930,7 +1937,12 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   onMount(() => {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
-    onCleanup(() => rootMouseHandlers.delete(onRootMouseDown))
+    const resize = () => setDimensions({ width: props.api.renderer.width, height: props.api.renderer.height })
+    props.api.renderer.on("resize", resize)
+    onCleanup(() => {
+      rootMouseHandlers.delete(onRootMouseDown)
+      props.api.renderer.off("resize", resize)
+    })
   })
 
   const appendQuery = (input: string) => {
@@ -1991,37 +2003,57 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     setLoadFailed(snapshot.failed)
   })))
 
-  const visible = createMemo(() => {
+  const filtered = createMemo(() => {
     const q = query().trim().toLowerCase()
     const list = q
       ? entries().filter(
           (entry) => entry.title.toLowerCase().includes(q) || entry.dir.toLowerCase().includes(q),
         )
       : entries()
-    return pinnedFirst(list, props.pins()).slice(0, HOME_SESSION_LIMIT)
+    return pinnedFirst(list, props.pins())
+  })
+  const layout = createMemo(() => {
+    const rows = dimensions().height
+    const budget = Math.max(0, rows - Math.max(6, Math.floor(rows / 3)) - HOME_CHROME_ROWS)
+    // Drop decorative padding/spacing before sessions. Keep the full list in
+    // the picker when even a heading and one session cannot fit.
+    const padding = budget >= HOME_SESSION_LIMIT + 2 ? 1 : 0
+    const limit = Math.min(HOME_SESSION_LIMIT, Math.max(0, budget - padding - 1))
+    const count = Math.max(1, Math.min(filtered().length, limit))
+    return { budget, limit, padding, gap: budget >= 1 + padding + count * 2 ? 1 : 0 }
+  })
+  const visible = createMemo(() => filtered().slice(0, layout().limit))
+  createEffect(() => {
+    const ids = new Set(visible().map((entry) => entry.id))
+    if (hovered() && !ids.has(hovered()!)) setHovered(undefined)
+    if (pendingDelete() && !ids.has(pendingDelete()!)) cancelDelete()
+    if (layout().limit === 0) setSearching(false)
   })
 
   return (
-    <box width="100%" alignItems="center">
-      <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={1} gap={1}>
+    <box visible={layout().limit > 0} width="100%" flexShrink={0} maxHeight={layout().budget} overflow="hidden" alignItems="center">
+      <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={layout().padding} gap={layout().gap}>
         <Show
           when={entries().length > 0}
           fallback={
-            <box flexDirection="row" gap={1}>
-              <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <text style={{ fg: theme().textMuted }}>
-                {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
+            <box height={1} flexShrink={0}>
+              <text wrapMode="none" overflow="hidden" style={{ fg: theme().textMuted }}>
+                Recent sessions {loadFailed() ? "· list unavailable, will retry" : "· none yet, option+o to browse"}
               </text>
             </box>
           }
         >
-          <box flexDirection="row" justifyContent="space-between" gap={2}>
-            <box flexDirection="row" gap={1}>
-              <text style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <text style={{ fg: theme().textMuted }}>· option+o for all</text>
+          <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between" gap={2} overflow="hidden">
+            <box flexDirection="row" gap={1} flexShrink={0}>
+              <text wrapMode="none" style={{ fg: theme().textMuted }}>Recent sessions</text>
+              <Show when={dimensions().width >= 68}>
+                <text style={{ fg: theme().textMuted }}>· option+o for all</text>
+              </Show>
             </box>
             <box
               flexDirection="row"
+              flexShrink={1}
+              minWidth={0}
               gap={1}
               paddingLeft={1}
               paddingRight={1}
@@ -2031,7 +2063,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 setSearching(true)
               }}
             >
-              <box width={24}>
+              <box width={24} flexShrink={1} minWidth={0}>
                 <text
                   flexGrow={1}
                   flexShrink={1}
@@ -2053,6 +2085,9 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           <For each={visible()}>
             {(entry) => (
               <box
+                height={1}
+                flexShrink={0}
+                overflow="hidden"
                 flexDirection="row"
                 gap={1}
                 backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
@@ -2073,7 +2108,13 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                   color={theme().text}
                   matchColor={theme().warning}
                 />
-                <text flexShrink={0} style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}>
+                <text
+                  flexShrink={1}
+                  maxWidth={Math.max(0, Math.floor((Math.min(72, dimensions().width) - 4) / 2))}
+                  wrapMode="none"
+                  overflow="hidden"
+                  style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
+                >
                   {pendingDelete() === entry.id
                     ? "option+d again"
                     : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
@@ -2082,7 +2123,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             )}
           </For>
           <Show when={visible().length === 0}>
-              <text style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+              <text height={1} flexShrink={0} wrapMode="none" overflow="hidden" style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
           </Show>
         </Show>
       </box>

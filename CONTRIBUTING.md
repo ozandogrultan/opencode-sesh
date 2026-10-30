@@ -24,6 +24,7 @@ Run the full check suite and make sure it passes:
 bun run test           # builds dist/tui.js, then the fixture-database and changelog suites
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite
+bun run test:tui-home  # OpenTUI render regressions for the home list
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 ```
