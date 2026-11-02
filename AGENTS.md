@@ -31,6 +31,7 @@ bun run test           # build + fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite
 bun run test:tui-home  # real OpenTUI home layout regressions (also in bun run test)
+bun run test:tui-worker # real blob Worker + bun:sqlite regressions (also in bun run test)
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 HOME=/tmp/fakehome bash install.sh   # installer smoke test (never touches ~/.config)
@@ -181,10 +182,11 @@ when opencode exits, the picker reopens with the query preserved.
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
   **Needs input** group above the directories, with the count in the heading —
-  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`. The query is
-  synchronous on the TUI thread, so the shared poll runs it only while the
-  sidebar is subscribed (`poll(listener, { waiting: true })`); the home list
-  never triggers it.
+  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`. The query runs in
+  a blob Worker (`createDbClient`; failure means "local store unavailable"),
+  off the TUI thread but still costing worker CPU every poll, so the shared
+  poll runs it only while the sidebar is subscribed
+  (`poll(listener, { waiting: true })`); the home list never triggers it.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `option+o` and the command palette open it;
@@ -269,6 +271,9 @@ when opencode exits, the picker reopens with the query preserved.
   and Python 3).
 - `bun run test:tui-home` — real OpenTUI render regressions for the home list
   (also run by `bun run test`).
+- `bun run test:tui-worker` — starts the real blob Worker against a bun:sqlite
+  fixture; asserts results round-trip and the main thread keeps ticking during
+  a slow query (also run by `bun run test`).
 - `bun run typecheck` — `tsc` over `tui-plugins/` and `plugins/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.

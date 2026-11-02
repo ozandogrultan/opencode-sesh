@@ -1,0 +1,46 @@
+#!/usr/bin/env bun
+// Start the real blob Worker + bun:sqlite from tui.tsx against a fixture DB:
+// results must round-trip and a slow query must not stall this thread.
+import assert from "node:assert/strict"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { Database } from "bun:sqlite"
+
+const source = readFileSync(new URL("../tui-plugins/sesh-panel/tui.tsx", import.meta.url), "utf8")
+const start = source.indexOf("function shortDir")
+const end = source.indexOf("const TRANSCRIPT_PREVIEW_TURNS")
+assert.ok(start >= 0 && end > start, "could not locate the TUI data layer; update this test")
+const js = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(start, end))
+
+const dir = mkdtempSync(join(tmpdir(), "sesh-tui-worker-"))
+const dbPath = join(dir, "opencode.db")
+const seed = new Database(dbPath)
+seed.exec("CREATE TABLE t (a INTEGER, b TEXT); INSERT INTO t VALUES (1, 'x'), (2, 'y');")
+seed.close()
+
+const { createDbClient } = new Function(
+  "readFile", "process", "setTimeout", "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
+  `${js}; return { createDbClient }`,
+)(async () => "", { env: { SESH_DB: dbPath } }, setTimeout, setInterval, clearInterval, 15_000, () => false, () => ({ status: 1 }))
+
+const client = createDbClient()
+try {
+  assert.deepEqual(await client.run("SELECT b FROM t WHERE a = ?", [2]), [{ b: "y" }])
+  await assert.rejects(client.run("SELECT * FROM missing"), /missing/)
+  assert.deepEqual(await client.run("SELECT a FROM t ORDER BY a"), [{ a: 1 }, { a: 2 }], "worker survives a query error")
+
+  let ticks = 0
+  const timer = setInterval(() => ticks++, 5)
+  const began = performance.now()
+  const rows = await client.run("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 30000000) SELECT COUNT(*) AS c FROM n")
+  const elapsed = performance.now() - began
+  clearInterval(timer)
+  assert.deepEqual(rows, [{ c: 30000000 }])
+  assert.ok(elapsed > 200, `fixture query must be slow enough to measure (took ${Math.round(elapsed)} ms)`)
+  assert.ok(ticks >= elapsed / 5 / 3, `main thread stalled: ${ticks} ticks in ${Math.round(elapsed)} ms`)
+} finally {
+  client.close()
+  rmSync(dir, { recursive: true, force: true })
+}
+console.log("tui worker tests passed")

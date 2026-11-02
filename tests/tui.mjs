@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, addTranscript, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, addTranscript, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
   )
   return factory(
     readExtraction,
@@ -335,8 +335,24 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
+const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
   loadDataLayer()
+
+// Fake worker that runs DB_WORKER_SOURCE against node:sqlite, with the same
+// message protocol and handler properties a Bun Worker exposes.
+function fakeWorkerFactory(sqlite, log = {}) {
+  return () => {
+    const worker = { terminated: false }
+    log.created = (log.created ?? 0) + 1
+    log.workers = [...(log.workers ?? []), worker]
+    const inside = { postMessage: (message) => queueMicrotask(() => worker.onmessage?.({ data: message })) }
+    const loadSqlite = async () => ({ Database: class { query(sql) { return { all: (...args) => sqlite.prepare(sql).all(...args).map((row) => ({ ...row })) } } } })
+    new Function("self", "loadSqlite", DB_WORKER_SOURCE)(inside, loadSqlite)
+    worker.postMessage = (message) => { if (!worker.terminated && !log.hang) queueMicrotask(() => inside.onmessage({ data: message })) }
+    worker.terminate = () => { worker.terminated = true }
+    return worker
+  }
+}
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -386,7 +402,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /need input/)
 }
 
-// The needs-input query is synchronous on the TUI thread, so only the sidebar
+// The needs-input query costs worker CPU on every poll, so only the sidebar
 // (which renders the result) subscribes with `waiting`; the home list must not.
 {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
@@ -574,7 +590,9 @@ function makeApi(sessions, { latency = 0 } = {}) {
     msg("ses_archived", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
     addChildSession.run("ses_subagent_question", "ses_fresh", now)
     msg("ses_subagent_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
-    const details = await queryWaitingDetails({ query: (sql) => ({ all: (...args) => sqlite.prepare(sql).all(...args) }) })
+    const client = createDbClient(fakeWorkerFactory(sqlite))
+    const details = await queryWaitingDetails(client.run)
+    client.close()
     assert.equal(details.get("ses_question")?.reason, "question")
     assert.equal(details.get("ses_question")?.since, now - 3_600_000)
     assert.equal(details.get("ses_stuck")?.reason, "stuck")
@@ -585,6 +603,56 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.equal(details.has("ses_stuck_parent"), false)
     assert.equal(details.has("ses_archived"), false)
     assert.equal(details.has("ses_subagent_question"), false)
+  } finally {
+    sqlite.close()
+  }
+}
+
+// createDbClient: round trip, errors, worker failure, timeout recovery, close.
+{
+  const sqlite = new DatabaseSync(":memory:")
+  try {
+    sqlite.exec("CREATE TABLE t (a INTEGER, b TEXT); INSERT INTO t VALUES (1, 'x'), (2, 'y');")
+    const log = {}
+    const client = createDbClient(fakeWorkerFactory(sqlite, log))
+    assert.equal(log.created, undefined, "worker starts lazily")
+    assert.deepEqual(await client.run("SELECT b FROM t WHERE a = ?", [2]), [{ b: "y" }])
+    assert.deepEqual(await Promise.all([client.run("SELECT 1 AS n"), client.run("SELECT 2 AS n")]), [[{ n: 1 }], [{ n: 2 }]])
+    assert.equal(log.created, 1, "one worker serves every request")
+    await assert.rejects(client.run("SELECT * FROM missing"), /missing/)
+    assert.deepEqual(await client.run("SELECT 3 AS n"), [{ n: 3 }], "query errors keep the worker")
+    client.close()
+    assert.equal(log.workers[0].terminated, true)
+    assert.deepEqual(await client.run("SELECT 4 AS n"), [{ n: 4 }])
+    assert.equal(log.created, 2, "a closed client restarts on demand")
+    client.close()
+
+    const failing = createDbClient(() => { throw new Error("no worker") })
+    await assert.rejects(failing.run("SELECT 1"), /no worker/)
+
+    const hungLog = { hang: true }
+    const hung = createDbClient(fakeWorkerFactory(sqlite, hungLog))
+    const pendingA = hung.run("SELECT 1")
+    const pendingB = hung.run("SELECT 2")
+    hungLog.workers[0].onerror({ message: "boom", preventDefault() {} })
+    await assert.rejects(pendingA, /boom/)
+    await assert.rejects(pendingB, /boom/)
+    assert.equal(hungLog.workers[0].terminated, true)
+    hungLog.hang = false
+    assert.deepEqual(await hung.run("SELECT 5 AS n"), [{ n: 5 }])
+    assert.equal(hungLog.created, 2)
+    hung.close()
+
+    const slowLog = { hang: true }
+    const slow = createDbClient(fakeWorkerFactory(sqlite, slowLog), 20)
+    const keepAlive = setInterval(() => {}, 5) // the client's timer is unref'd
+    await assert.rejects(slow.run("SELECT 1"), /timed out/)
+    clearInterval(keepAlive)
+    assert.equal(slowLog.workers[0].terminated, true)
+    slowLog.hang = false
+    assert.deepEqual(await slow.run("SELECT 6 AS n"), [{ n: 6 }])
+    assert.equal(slowLog.created, 2, "a timeout recreates the worker")
+    slow.close()
   } finally {
     sqlite.close()
   }

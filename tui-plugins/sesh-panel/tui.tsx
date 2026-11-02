@@ -537,11 +537,96 @@ async function openTranscriptDb(): Promise<any | undefined> {
   }
 }
 
+// Runs in a blob Worker so slow queries never block the TUI thread. The
+// connection opens on the first request and stays open; `loadSqlite` is
+// injected only by tests.
+const DB_WORKER_SOURCE = `
+let opening
+const load = typeof loadSqlite === "function" ? loadSqlite : () => import("bun:sqlite")
+const open = (path) => opening ??= load().then((sqlite) => new sqlite.Database(path, { readonly: true }), (error) => { opening = undefined; throw error })
+self.onmessage = async (event) => {
+  const { id, path, sql, params } = event.data
+  try {
+    const db = await open(path)
+    self.postMessage({ id, rows: db.query(sql).all(...(params ?? [])) })
+  } catch (error) {
+    self.postMessage({ id, error: String(error?.message ?? error) })
+  }
+}`
+
+const DB_QUERY_TIMEOUT_MS = 30000
+
+type DbRun = (sql: string, params?: unknown[]) => Promise<unknown[]>
+
+function createDbWorker(): any {
+  return new (globalThis as any).Worker(URL.createObjectURL(new Blob([DB_WORKER_SOURCE], { type: "text/javascript" })))
+}
+
+// Read-only queries against the local store, served by one lazily started
+// worker. Any failure (no worker, no bun:sqlite, query error, timeout) rejects;
+// a timeout or worker error discards the worker so the next call starts afresh.
+function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB_QUERY_TIMEOUT_MS) {
+  type Pending = { resolve: (rows: unknown[]) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+  let worker: any
+  let nextId = 0
+  const pending = new Map<number, Pending>()
+  const reset = (error: Error) => {
+    const dead = worker
+    worker = undefined
+    try { dead?.terminate() } catch {}
+    const requests = [...pending.values()]
+    pending.clear()
+    for (const request of requests) {
+      clearTimeout(request.timer)
+      request.reject(error)
+    }
+  }
+  const start = () => {
+    const created = createWorker()
+    created.onmessage = (event: any) => {
+      const { id, rows, error } = event?.data ?? {}
+      const request = pending.get(id)
+      if (!request) return
+      pending.delete(id)
+      clearTimeout(request.timer)
+      if (typeof error === "string") request.reject(new Error(error))
+      else request.resolve(Array.isArray(rows) ? rows : [])
+    }
+    created.onerror = (event: any) => {
+      event?.preventDefault?.()
+      if (worker === created) reset(new Error(String(event?.message ?? "local store worker failed")))
+    }
+    created.unref?.()
+    return created
+  }
+  const run: DbRun = (sql, params = []) =>
+    new Promise((resolve, reject) => {
+      try {
+        worker ??= start()
+      } catch (error) {
+        reject(error)
+        return
+      }
+      const id = ++nextId
+      const timer = setTimeout(() => reset(new Error("local store query timed out")), timeoutMs)
+      ;(timer as any).unref?.()
+      pending.set(id, { resolve, reject, timer })
+      try {
+        worker.postMessage({ id, path: resolveDbPath(), sql, params })
+      } catch (error) {
+        reset(error as Error)
+      }
+    })
+  return { run, close: () => reset(new Error("local store closed")) }
+}
+
+const dbClient = createDbClient()
+
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
 
 function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
-  // Listener -> whether it reads `snapshot.waiting`. The needs-input query is
-  // synchronous on the TUI thread, so it only runs while such a listener exists.
+  // Listener -> whether it reads `snapshot.waiting`. The needs-input query
+  // costs worker CPU on every poll, so it only runs while such a listener exists.
   const listeners = new Map<(snapshot: SessionSnapshot) => void, boolean>()
   let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
   let clock: ReturnType<typeof setInterval> | undefined
@@ -569,17 +654,15 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
         snapshot = { ...snapshot, failed: true }
       }
       if (!active()) return
-      const db = wantsWaiting() ? await openTranscriptDb() : undefined
-      if (db) {
+      if (wantsWaiting()) {
         try {
+          const waiting = await queryWaitingIds(dbClient.run)
           if (wantsWaiting()) {
-            snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+            snapshot = { ...snapshot, waiting }
             waitingLoaded = true
           }
         } catch {
           // Keep the previous waiting set when the local store is unavailable.
-        } finally {
-          db.close()
         }
       } else if (!wantsWaiting()) {
         snapshot = { ...snapshot, waiting: new Map() }
@@ -674,8 +757,8 @@ WHERE COALESCE(s.time_archived, 0) = 0
       AND ${NO_RECENT_ACTIVITY("s.id", stuckBefore)}))
 ORDER BY s.time_updated DESC`
 
-async function queryWaitingIds(db: any): Promise<Map<string, string>> {
-  const rows = (db.query(NEEDS_INPUT_SQL(Date.now() - STUCK_AFTER_MS)).all() ?? []) as {
+async function queryWaitingIds(run: DbRun): Promise<Map<string, string>> {
+  const rows = (await run(NEEDS_INPUT_SQL(Date.now() - STUCK_AFTER_MS))) as {
     id: unknown
     reason: unknown
   }[]
@@ -697,8 +780,8 @@ type WaitingDetail = { reason: "question" | "stuck"; since?: number }
 // The shared needs-input query decides *which* sessions are waiting. Read the
 // oldest still-unanswered question or stuck tool for each result so triage can
 // show how long it has waited, rather than its last (unrelated) update time.
-async function queryWaitingDetails(db: any): Promise<Map<string, WaitingDetail>> {
-  const reasons = await queryWaitingIds(db)
+async function queryWaitingDetails(run: DbRun): Promise<Map<string, WaitingDetail>> {
+  const reasons = await queryWaitingIds(run)
   const details = new Map<string, WaitingDetail>(
     [...reasons].map(([id, reason]) => [id, { reason: reason as WaitingDetail["reason"] }]),
   )
@@ -706,12 +789,12 @@ async function queryWaitingDetails(db: any): Promise<Map<string, WaitingDetail>>
   const cutoff = Date.now() - STUCK_AFTER_MS
   for (let i = 0; i < ids.length; i += 200) {
     const batch = ids.slice(i, i + 200)
-    const rows = (db.query(`${LIVE_TOOLS_CTE(` AND m.session_id IN (${batch.map(() => "?").join(",")})`)}
+    const rows = (await run(`${LIVE_TOOLS_CTE(` AND m.session_id IN (${batch.map(() => "?").join(",")})`)}
 SELECT live.session_id AS id,
   MIN(CASE WHEN ${QUESTION_OPEN} THEN live.created END) AS question_since,
   MIN(CASE WHEN live.status = 'running' AND live.created < ${cutoff} THEN live.created END) AS stuck_since
 FROM live
-GROUP BY live.session_id`).all(...batch) ?? []) as { id: string; question_since: number | null; stuck_since: number | null }[]
+GROUP BY live.session_id`, batch)) as { id: string; question_since: number | null; stuck_since: number | null }[]
     for (const row of rows) {
       const detail = details.get(row.id)
       if (!detail) continue
@@ -2227,21 +2310,14 @@ const tui: TuiPlugin = async (api) => {
     const [waitingCoverage, setWaitingCoverage] = createSignal<"loading" | "ready" | "unavailable">("loading")
     let alive = true
     void (async () => {
-      const db = await openTranscriptDb()
-      if (!db) {
-        if (alive) setWaitingCoverage("unavailable")
-        return
-      }
       try {
-        const ids = await queryWaitingIds(db)
+        const ids = await queryWaitingIds(dbClient.run)
         if (alive) {
           setWaitingIds(new Set(ids.keys()))
           setWaitingCoverage("ready")
         }
       } catch {
         if (alive) setWaitingCoverage("unavailable")
-      } finally {
-        db.close()
       }
     })()
     const [pendingDelete, setPendingDelete] = createSignal<Entry>()
@@ -3059,16 +3135,12 @@ const tui: TuiPlugin = async (api) => {
     let items: { entry: Entry; reason: string; since?: number }[] = []
     try {
       const { entries } = await fetchEntries(api)
-      const db = await openTranscriptDb()
-      if (!db) {
-        api.ui.toast({ message: "Needs-input data unavailable", variant: "error" })
-        return
-      }
       let waiting: Map<string, WaitingDetail>
       try {
-        waiting = await queryWaitingDetails(db)
-      } finally {
-        db.close()
+        waiting = await queryWaitingDetails(dbClient.run)
+      } catch {
+        api.ui.toast({ message: "Needs-input data unavailable", variant: "error" })
+        return
       }
       items = entries
         .filter((entry) => waiting.has(entry.id))
@@ -3521,6 +3593,7 @@ export default Plugin.define({
       if (api.ui.dialog.open) api.ui.dialog.clear()
       disposeSlot()
       removeRootMouse?.()
+      dbClient.close()
     }
   },
 })
