@@ -182,7 +182,10 @@ when opencode exits, the picker reopens with the query preserved.
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
   **Needs input** group above the directories, with the count in the heading —
-  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`. The query runs in
+  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`. Message payloads are
+  scanned only for in-flight root sessions (`time_suspended` set, `time_busy` newer
+  than `time_idle`); databases lacking those columns (checked via
+  `pragma_table_info`) fall back to the full scan. The query runs in
   a blob Worker (`createDbClient`; failure means "local store unavailable"),
   off the TUI thread but still costing worker CPU every poll, so the shared
   poll runs it only while the sidebar is subscribed

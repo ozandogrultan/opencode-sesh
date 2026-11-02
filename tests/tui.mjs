@@ -573,15 +573,17 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const sqlite = new DatabaseSync(":memory:")
   try {
-    sqlite.exec(`CREATE TABLE session_v2 (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER);
+    sqlite.exec(`CREATE TABLE session_v2 (id TEXT, time_archived INTEGER, parent_id TEXT, time_updated INTEGER, time_busy INTEGER, time_idle INTEGER, time_suspended INTEGER);
       CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);`)
-    const addSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, NULL, ?)")
-    const addChildSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, ?, ?)")
+    const addSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, NULL, ?, ?, NULL, ?)")
+    const addChildSession = sqlite.prepare("INSERT INTO session_v2 VALUES (?, 0, ?, ?, 1, NULL, 1)")
     const addMessage = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?)")
     const now = Date.now()
     for (const id of ["ses_question", "ses_stuck", "ses_answered", "ses_fresh", "ses_stuck_active", "ses_stuck_parent"]) {
-      addSession.run(id, now)
+      addSession.run(id, now, 1, 1)
     }
+    addSession.run("ses_idlequestion", now, 5, null)
+    addSession.run("ses_idlestuck", now, 5, null)
     addChildSession.run("ses_stuck_child", "ses_stuck_parent", now)
     const question = (created) => JSON.stringify({
       content: [{ type: "tool", name: "question", state: { status: "running" }, time: { created } }]
@@ -600,13 +602,19 @@ function makeApi(sessions, { latency = 0 } = {}) {
     msg("ses_stuck_active", 2, "user", now - 200_000, JSON.stringify({}))
     msg("ses_stuck_parent", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
     msg("ses_stuck_child", 1, "user", now - 200_000, JSON.stringify({}))
-    sqlite.prepare("INSERT INTO session_v2 VALUES (?, ?, NULL, ?)").run("ses_archived", now, now)
+    sqlite.prepare("INSERT INTO session_v2 VALUES (?, ?, NULL, ?, 1, NULL, 1)").run("ses_archived", now, now)
+    sqlite.prepare("UPDATE session_v2 SET time_idle = 9 WHERE id = ?").run("ses_idlequestion")
+    sqlite.prepare("UPDATE session_v2 SET time_idle = 9 WHERE id = ?").run("ses_idlestuck")
+    msg("ses_idlequestion", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
+    msg("ses_idlestuck", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
     msg("ses_archived", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
     addChildSession.run("ses_subagent_question", "ses_fresh", now)
     msg("ses_subagent_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
     const client = createDbClient(fakeWorkerFactory(sqlite))
     const details = await queryWaitingDetails(client.run)
     client.close()
+    assert.equal(details.has("ses_idlequestion"), false)
+    assert.equal(details.has("ses_idlestuck"), false)
     assert.equal(details.get("ses_question")?.reason, "question")
     assert.equal(details.get("ses_question")?.since, now - 3_600_000)
     assert.equal(details.get("ses_stuck")?.reason, "stuck")
@@ -617,6 +625,17 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.equal(details.has("ses_stuck_parent"), false)
     assert.equal(details.has("ses_archived"), false)
     assert.equal(details.has("ses_subagent_question"), false)
+
+    // Without the in-flight columns the query scans every assistant message.
+    for (const column of ["time_busy", "time_idle", "time_suspended"]) sqlite.exec(`ALTER TABLE session_v2 DROP COLUMN ${column}`)
+    const legacyClient = createDbClient(fakeWorkerFactory(sqlite))
+    const legacy = await queryWaitingDetails(legacyClient.run)
+    legacyClient.close()
+    assert.equal(legacy.get("ses_question")?.reason, "question")
+    assert.equal(legacy.get("ses_stuck")?.reason, "stuck")
+    assert.equal(legacy.get("ses_idlequestion")?.reason, "question")
+    assert.equal(legacy.get("ses_idlestuck")?.reason, "stuck")
+    assert.equal(legacy.has("ses_answered"), false)
   } finally {
     sqlite.close()
   }

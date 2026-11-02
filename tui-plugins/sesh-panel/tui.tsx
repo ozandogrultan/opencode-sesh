@@ -733,9 +733,19 @@ ORDER BY lifetime_cost DESC`
 // orphaned or awaiting approval). Server-independent on purpose: the TUI
 // sync layer only sees permission/question state for sessions owned by the
 // current server, which is invisible cross-project.
+// Only a turn in flight can be waiting (time_suspended is set while a turn runs
+// and a question/permission prompt keeps it running), so message payloads are
+// scanned only for those candidate sessions. Databases without the in-flight
+// columns scan every assistant message.
 const STUCK_AFTER_MS = 600000
-const LIVE_TOOLS_CTE = (sessionFilter: string) => `
-WITH live AS (
+const IN_FLIGHT_COLUMNS = ["time_busy", "time_idle", "time_suspended"]
+const CANDIDATES_CTE = `cand AS (
+  SELECT id FROM session_v2
+  WHERE time_suspended IS NOT NULL AND parent_id IS NULL AND COALESCE(time_archived, 0) = 0
+    AND time_busy > COALESCE(time_idle, 0)
+), `
+const LIVE_TOOLS_CTE = (sessionFilter: string, prefilter = false) => `
+WITH ${prefilter ? CANDIDATES_CTE : ""}live AS (
   SELECT m.session_id AS session_id, m.seq AS seq,
     json_extract(c.value, '$.name') AS name,
     json_extract(c.value, '$.state.status') AS status,
@@ -744,7 +754,9 @@ WITH live AS (
   WHERE m.type = 'assistant'
     AND (m.data LIKE '%"status":"running"%' OR m.data LIKE '%"status":"pending"%')
     AND json_extract(c.value, '$.type') = 'tool'
-    AND json_extract(c.value, '$.state.status') IN ('pending', 'running')${sessionFilter}
+    AND json_extract(c.value, '$.state.status') IN ('pending', 'running')${sessionFilter}${
+      prefilter ? "\n    AND m.session_id IN (SELECT id FROM cand)" : ""
+    }
 )`
 const QUESTION_OPEN = `live.name = 'question'
   AND NOT EXISTS (
@@ -753,7 +765,7 @@ const QUESTION_OPEN = `live.name = 'question'
 const NO_RECENT_ACTIVITY = (sessionIdExpr: string, stuckBefore: number) => `NOT EXISTS (
       SELECT 1 FROM session_message r JOIN session_v2 f ON f.id = r.session_id
       WHERE (f.id = ${sessionIdExpr} OR f.parent_id = ${sessionIdExpr}) AND r.time_updated >= ${stuckBefore})`
-const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE("")}
+const NEEDS_INPUT_SQL = (stuckBefore: number, prefilter = false) => `${LIVE_TOOLS_CTE("", prefilter)}
 SELECT s.id AS id,
   CASE WHEN EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
     THEN 'question' ELSE 'stuck' END AS reason
@@ -767,8 +779,27 @@ WHERE COALESCE(s.time_archived, 0) = 0
       AND ${NO_RECENT_ACTIVITY("s.id", stuckBefore)}))
 ORDER BY s.time_updated DESC`
 
+const inFlightSupport = new WeakMap<DbRun, Promise<boolean>>()
+function hasInFlightColumns(run: DbRun): Promise<boolean> {
+  let known = inFlightSupport.get(run)
+  if (!known) {
+    known = run("SELECT name FROM pragma_table_info('session_v2')").then(
+      (rows) => {
+        const names = new Set((rows as { name?: unknown }[]).map((row) => row?.name))
+        return IN_FLIGHT_COLUMNS.every((name) => names.has(name))
+      },
+      () => {
+        inFlightSupport.delete(run)
+        return false
+      },
+    )
+    inFlightSupport.set(run, known)
+  }
+  return known
+}
+
 async function queryWaitingIds(run: DbRun): Promise<Map<string, string>> {
-  const rows = (await run(NEEDS_INPUT_SQL(Date.now() - STUCK_AFTER_MS))) as {
+  const rows = (await run(NEEDS_INPUT_SQL(Date.now() - STUCK_AFTER_MS, await hasInFlightColumns(run)))) as {
     id: unknown
     reason: unknown
   }[]
