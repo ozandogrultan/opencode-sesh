@@ -181,7 +181,10 @@ when opencode exits, the picker reopens with the query preserved.
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
   **Needs input** group above the directories, with the count in the heading —
-  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`.
+  same `NEEDS_INPUT_SQL` heuristic as `bin/sesh-waiting.sh`. The query is
+  synchronous on the TUI thread, so the shared poll runs it only while the
+  sidebar is subscribed (`poll(listener, { waiting: true })`); the home list
+  never triggers it.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `option+o` and the command palette open it;

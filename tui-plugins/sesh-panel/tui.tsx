@@ -540,11 +540,14 @@ async function openTranscriptDb(): Promise<any | undefined> {
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
 
 function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
-  const listeners = new Set<(snapshot: SessionSnapshot) => void>()
+  // Listener -> whether it reads `snapshot.waiting`. The needs-input query is
+  // synchronous on the TUI thread, so it only runs while such a listener exists.
+  const listeners = new Map<(snapshot: SessionSnapshot) => void, boolean>()
   let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
   let clock: ReturnType<typeof setInterval> | undefined
   let inFlight: Promise<void> | undefined
   const active = () => listeners.size > 0
+  const wantsWaiting = () => [...listeners.values()].some(Boolean)
   const load = () => {
     if (inFlight || !active()) return
     inFlight = (async () => {
@@ -563,25 +566,28 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
         snapshot = { ...snapshot, failed: true }
       }
       if (!active()) return
-      const db = await openTranscriptDb()
+      const db = wantsWaiting() ? await openTranscriptDb() : undefined
       if (db) {
         try {
-          if (active()) snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+          if (wantsWaiting()) snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
         } catch {
           // Keep the previous waiting set when the local store is unavailable.
         } finally {
           db.close()
         }
       }
-      for (const listener of listeners) listener(snapshot)
+      for (const listener of [...listeners.keys()]) listener(snapshot)
     })().finally(() => { inFlight = undefined })
   }
-  return (listener: (snapshot: SessionSnapshot) => void) => {
-    listeners.add(listener)
+  return (listener: (snapshot: SessionSnapshot) => void, options: { waiting?: boolean } = {}) => {
+    const needsWaiting = options.waiting === true
+    listeners.set(listener, needsWaiting)
     listener(snapshot)
     if (!clock) {
       load()
       clock = setInterval(load, POLL_MS)
+    } else if (needsWaiting) {
+      load()
     }
     return () => {
       listeners.delete(listener)
@@ -645,7 +651,8 @@ const QUESTION_OPEN = `live.name = 'question'
 const NO_RECENT_ACTIVITY = (sessionIdExpr: string, stuckBefore: number) => `NOT EXISTS (
       SELECT 1 FROM session_message r JOIN session_v2 f ON f.id = r.session_id
       WHERE (f.id = ${sessionIdExpr} OR f.parent_id = ${sessionIdExpr}) AND r.time_updated >= ${stuckBefore})`
-const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE("")}
+const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE(` AND m.session_id IN (
+      SELECT id FROM session_v2 WHERE COALESCE(time_archived, 0) = 0 AND parent_id IS NULL)`)}
 SELECT s.id AS id,
   CASE WHEN EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
     THEN 'question' ELSE 'stuck' END AS reason
@@ -1098,7 +1105,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setEntries(snapshot.entries)
     setLoadFailed(snapshot.failed)
     setWaiting(snapshot.waiting)
-  })))
+  }, { waiting: true })))
 
   const filteredEntries = createMemo(() => {
     const q = query().trim().toLowerCase()
