@@ -164,8 +164,8 @@ when opencode exits, the picker reopens with the query preserved.
   append mode by default — native sidebar content stays above Sessions;
   `sidebarPlacement: "prepend"` puts Sessions first) and `home_bottom` (`home.footer`
   prepend mode). `showSidebar: false` / `showHome: false` skip registering each
-  slot; with both off (picker-only) nothing polls. In the sidebar, pinned directories sort first, then directory groups
-  by recency; sessions within each group sort by last update regardless of pins.
+  slot; with both off (picker-only) nothing polls. In the sidebar, pinned
+  directories sort first, then directory groups by recency; sessions within each group sort by last update regardless of pins.
   In the home list, pinned sessions sort first.
   The home list budgets its height for the native logo, maximum-height composer,
   and status footer: compact spacing first, then fewer rows, hidden when too

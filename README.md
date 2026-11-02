@@ -239,16 +239,11 @@ the `opencode.json` entry unchanged:
   "plugins": [
     {
       "package": "opencode-sesh",
-      "options": { "showSidebar": true, "sidebarPlacement": "append" }
+      "options": { "showSidebar": true, "showHome": true, "sidebarPlacement": "append" }
     }
   ]
 }
 ```
-
-`showHome` (boolean, default: `true`) controls the session list on the home
-screen. Set both `showSidebar` and `showHome` to `false` for picker-only mode:
-no lists are mounted and nothing polls in the background, while `option+o`,
-`/sesh`, `/sesh-costs`, and `/sesh-needs` keep working.
 
 When the section is visible, click its `search…` box to filter sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
@@ -275,6 +270,11 @@ It shows up to six sessions, reducing spacing and then the row count on shorter
 terminals to leave room for multiline prompts. On very short terminals it hides;
 Option-O and `/sesh` still open the full picker. Long titles and paths stay on a
 single line, and the list adapts when the terminal is resized.
+
+`showHome` (boolean, default: `true`) controls the session list on the home
+screen. Set both `showSidebar` and `showHome` to `false` for picker-only mode:
+no lists are mounted and nothing polls in the background, while `option+o`,
+`/sesh`, `/sesh-costs`, and `/sesh-needs` keep working.
 
 ### Transcript search and needs-input triage
 
