@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.8] - 2026-11-02
+
+### Changed
+
+- **tui:** Prefilter needs-input candidates by in-flight session state (#38)
+
 ## [2.1.7] - 2026-11-02
 
 ### Changed
@@ -558,6 +564,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
+[2.1.8]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.1.7...v2.1.8
 [2.1.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.1.6...v2.1.7
 [2.1.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.1.5...v2.1.6
 [2.1.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.1.4...v2.1.5
