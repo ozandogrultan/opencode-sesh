@@ -386,6 +386,17 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /need input/)
 }
 
+// The needs-input query is synchronous on the TUI thread, so only the sidebar
+// (which renders the result) subscribes with `waiting`; the home list must not.
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  assert.equal(source.match(/props\.poll\(/g)?.length, 2)
+  assert.equal(source.match(/\{ waiting: true \}/g)?.length, 1)
+  const start = source.indexOf("function SidebarSessions(")
+  const sidebar = source.slice(start, source.indexOf("\nfunction ", start + 1))
+  assert.match(sidebar, /setWaiting\(snapshot\.waiting\)[\s\S]*\}, \{ waiting: true \}\)/)
+}
+
 // Space must remain available to both search boxes and the main prompt even
 // when a session row is hovered or selected in the sidebar.
 {
@@ -559,6 +570,10 @@ function makeApi(sessions, { latency = 0 } = {}) {
     msg("ses_stuck_active", 2, "user", now - 200_000, JSON.stringify({}))
     msg("ses_stuck_parent", 1, "assistant", now - 7_200_000, running(now - 7_200_000))
     msg("ses_stuck_child", 1, "user", now - 200_000, JSON.stringify({}))
+    sqlite.prepare("INSERT INTO session_v2 VALUES (?, ?, NULL, ?)").run("ses_archived", now, now)
+    msg("ses_archived", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
+    addChildSession.run("ses_subagent_question", "ses_fresh", now)
+    msg("ses_subagent_question", 1, "assistant", now - 3_600_000, question(now - 3_600_000))
     const details = await queryWaitingDetails({ query: (sql) => ({ all: (...args) => sqlite.prepare(sql).all(...args) }) })
     assert.equal(details.get("ses_question")?.reason, "question")
     assert.equal(details.get("ses_question")?.since, now - 3_600_000)
@@ -568,6 +583,8 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.equal(details.has("ses_fresh"), false)
     assert.equal(details.has("ses_stuck_active"), false)
     assert.equal(details.has("ses_stuck_parent"), false)
+    assert.equal(details.has("ses_archived"), false)
+    assert.equal(details.has("ses_subagent_question"), false)
   } finally {
     sqlite.close()
   }
@@ -950,6 +967,28 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.equal(clears, 1)
   tick()
   assert.equal(refreshes, 2)
+}
+
+// A running poll reloads for a new `waiting` subscriber that has no needs-input
+// result yet, never for a subscriber that does not read it.
+{
+  let tick
+  const data = loadDataLayer(undefined, { setInterval: (callback) => { tick = callback; return 1 }, clearInterval: () => {} })
+  let refreshes = 0
+  const subscribe = data.createSessionPoll(makeApi(sessionsFor(1)), () => refreshes++)
+  const home = subscribe(() => {})
+  await delay(10)
+  assert.equal(refreshes, 1)
+  subscribe(() => {})
+  await delay(10)
+  assert.equal(refreshes, 1)
+  subscribe(() => {}, { waiting: true })
+  await delay(10)
+  assert.equal(refreshes, 2)
+  home()
+  tick()
+  await delay(10)
+  assert.equal(refreshes, 3)
 }
 
 // Mutation fails closed for corrupt/unreadable existing pins; only an absent

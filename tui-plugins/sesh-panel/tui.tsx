@@ -540,11 +540,17 @@ async function openTranscriptDb(): Promise<any | undefined> {
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
 
 function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
-  const listeners = new Set<(snapshot: SessionSnapshot) => void>()
+  // Listener -> whether it reads `snapshot.waiting`. The needs-input query is
+  // synchronous on the TUI thread, so it only runs while such a listener exists.
+  const listeners = new Map<(snapshot: SessionSnapshot) => void, boolean>()
   let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
   let clock: ReturnType<typeof setInterval> | undefined
   let inFlight: Promise<void> | undefined
+  // Whether `snapshot.waiting` came from a poll that ran the query; a poll
+  // without waiting listeners clears it so a later subscriber never sees a stale set.
+  let waitingLoaded = false
   const active = () => listeners.size > 0
+  const wantsWaiting = () => [...listeners.values()].some(Boolean)
   const load = () => {
     if (inFlight || !active()) return
     inFlight = (async () => {
@@ -563,25 +569,34 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
         snapshot = { ...snapshot, failed: true }
       }
       if (!active()) return
-      const db = await openTranscriptDb()
+      const db = wantsWaiting() ? await openTranscriptDb() : undefined
       if (db) {
         try {
-          if (active()) snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+          if (wantsWaiting()) {
+            snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+            waitingLoaded = true
+          }
         } catch {
           // Keep the previous waiting set when the local store is unavailable.
         } finally {
           db.close()
         }
+      } else if (!wantsWaiting()) {
+        snapshot = { ...snapshot, waiting: new Map() }
+        waitingLoaded = false
       }
-      for (const listener of listeners) listener(snapshot)
+      for (const listener of [...listeners.keys()]) listener(snapshot)
     })().finally(() => { inFlight = undefined })
   }
-  return (listener: (snapshot: SessionSnapshot) => void) => {
-    listeners.add(listener)
+  return (listener: (snapshot: SessionSnapshot) => void, options: { waiting?: boolean } = {}) => {
+    const needsWaiting = options.waiting === true
+    listeners.set(listener, needsWaiting)
     listener(snapshot)
     if (!clock) {
       load()
       clock = setInterval(load, POLL_MS)
+    } else if (needsWaiting && !waitingLoaded) {
+      load()
     }
     return () => {
       listeners.delete(listener)
@@ -1098,7 +1113,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setEntries(snapshot.entries)
     setLoadFailed(snapshot.failed)
     setWaiting(snapshot.waiting)
-  })))
+  }, { waiting: true })))
 
   const filteredEntries = createMemo(() => {
     const q = query().trim().toLowerCase()
