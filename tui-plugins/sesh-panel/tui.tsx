@@ -2040,13 +2040,11 @@ const HOME_SESSION_LIMIT = 6
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/prompt/index.tsx#L1676
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/logo.tsx
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/feature-plugins/home/footer.tsx
-// The native home needs room for its logo, composer chrome and status footer.
-// Reserve the editor's *maximum* height (one third of the terminal, at least
-// six lines), so typing/wrapping a prompt cannot push it into our footer.
-// Chrome: logo (4) + gap (1) + composer (6) + status (3). Below 44 columns,
-// the logo stacks to seven lines but the three-line status footer disappears.
-const HOME_CHROME_ROWS = 14
-
+// The list floats just under the composer instead of taking layout space, so
+// it budgets from its measured position: whatever lies between it and the
+// native status footer (three lines, hidden below 44 columns or 14 rows, plus
+// one line of slack for other footer plugins).
+const HOME_FOOTER_ROWS = 3
 function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
@@ -2233,9 +2231,13 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       : entries()
     return pinnedFirst(list, props.pins())
   })
+  // Unmeasured (before the first frame) reads as no room.
+  const [top, setTop] = createSignal(dimensions().height)
+  let anchor: { y: number } | undefined
   const layout = createMemo(() => {
     const rows = dimensions().height
-    const budget = Math.max(0, rows - Math.max(6, Math.floor(rows / 3)) - HOME_CHROME_ROWS)
+    const footer = dimensions().width >= 44 && rows >= 14 ? HOME_FOOTER_ROWS : 0
+    const budget = Math.max(0, rows - footer - 1 - top())
     // Drop decorative padding/spacing before sessions. Keep the full list in
     // the picker when even a heading and one session cannot fit.
     const padding = budget >= HOME_SESSION_LIMIT + 2 ? 1 : 0
@@ -2252,8 +2254,21 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   return (
-    <box visible={layout().limit > 0} width="100%" flexShrink={0} maxHeight={layout().budget} overflow="hidden" alignItems="center">
-      <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={layout().padding} gap={layout().gap}>
+    <box
+      ref={(box: { y: number }) => { anchor = box }}
+      renderAfter={() => {
+        const y = anchor?.y
+        if (y !== undefined && y !== top()) queueMicrotask(() => setTop(y))
+      }}
+      position="absolute"
+      top={1}
+      left={0}
+      right={0}
+      maxHeight={layout().budget}
+      overflow="hidden"
+      alignItems="center"
+    >
+      <box visible={layout().limit > 0 && props.api.route.current.name === "home"} flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={layout().padding} gap={layout().gap}>
         <Show
           when={entries().length > 0}
           fallback={
@@ -3599,7 +3614,7 @@ function createApi(ctx: Plugin.Context) {
         }
         if (cfg.slots.home_bottom && ctx.options?.showHome !== false) {
           slotDisposers.push(ctx.ui.slot({
-            prepend: "home.footer",
+            append: "prompt.footer",
             render: cfg.slots.home_bottom as any,
           }))
         }

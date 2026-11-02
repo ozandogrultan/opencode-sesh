@@ -14,7 +14,7 @@ const source = readFileSync(new URL("../tui-plugins/sesh-panel/tui.tsx", import.
 // source exports, files in dist, or installed plugin copies need changing.
 const fixture = `
 export function HomeFixture(props) {
-  // Layout baseline: OpenCode 2.2.4, matching HOME_CHROME_ROWS in tui.tsx.
+  // Layout baseline: OpenCode 2.2.4, matching HOME_FOOTER_ROWS in tui.tsx.
   // Re-check both when upgrading OpenCode: this hand-built fixture does not
   // automatically track changes to the host layout. Sources pinned to 2.2.4:
   // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/routes/home.tsx
@@ -45,13 +45,15 @@ export function HomeFixture(props) {
               <box paddingTop={1} flexShrink={0}><text wrapMode="none">Plan · model · high</text></box>
             </box>
             <box height={1} flexShrink={0} />
-            <text height={1} wrapMode="none">project · tab agents · ctrl+p commands</text>
+            <box width="100%" height={1} flexDirection="row" justifyContent="space-between" gap={2}>
+              <text height={1} wrapMode="none">project · tab agents · ctrl+p commands</text>
+              <HomeSessions api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
+            </box>
           </box>
         </box>
         <box flexGrow={1} minHeight={0} />
       </box>
       <box width="100%" flexShrink={0}>
-        <HomeSessions api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
         <Show when={props.dimensions().height >= 14 && props.dimensions().width >= 44}>
           <box paddingTop={1} paddingBottom={1} flexShrink={0}><text>MCP · VERSION</text></box>
         </Show>
@@ -106,13 +108,13 @@ function assertLayout(expectedCount) {
   const lines = captured.split("\n")
   const recent = lines.findIndex((line) => line.includes("Recent sessions"))
   const sessionRows = lines.flatMap((line, index) => line.includes("○") ? [index] : [])
-  assert.equal(sessionRows.length, expectedCount, captured)
+  if (expectedCount !== undefined) assert.equal(sessionRows.length, expectedCount, captured)
   if (recent >= 0) {
     assert.ok(recent >= boxes.prompt.y + boxes.prompt.height, "home list must render below the composer\n" + captured)
     assert.ok(sessionRows.every((index) => index > recent), captured)
   }
   assert.match(captured, /Plan · model · high/)
-  if (dimensions().width >= 44) {
+  if (dimensions().width >= 44 && dimensions().height >= 14) {
     const status = lines.findIndex((line) => line.includes("MCP · VERSION"))
     assert.ok(status >= boxes.prompt.y + boxes.prompt.height, captured)
     assert.ok(sessionRows.every((index) => index < status), captured)
@@ -147,33 +149,51 @@ try {
     return () => { pollDisposed = true }
   } }), setup.renderer)
   await setup.flush()
-  // The screenshot regression: a six-line prompt and six recent sessions used
-  // to occupy the same rows in an ordinary 80x24 terminal.
-  assertLayout(1)
+  // The list floats directly under the composer, so it must never reach the
+  // status footer even with a six-line prompt in an ordinary 80x24 terminal.
+  assertLayout()
   for (const word of ["first", "second", "third", "fourth", "fifth", "sixth"]) {
     assert.match(frame(), new RegExp(`${word} line`))
   }
 
   // Resize in both directions without remounting. Fill the editor to its
-  // native maximum, including line wrapping, and keep the native footer visible.
-  for (const [width, height, count] of [[120, 40, 6], [80, 32, 6], [80, 30, 5], [80, 24, 1], [80, 22, 0], [44, 24, 1], [28, 30, 5], [120, 40, 6]]) {
+  // native maximum, including line wrapping: the list may shrink or vanish,
+  // but never overlaps the composer or the native footer.
+  for (const [width, height] of [[120, 40], [80, 32], [80, 30], [80, 24], [80, 22], [44, 24], [28, 30], [120, 40]]) {
     await resize(width, height)
     setMessage(Array.from({ length: Math.max(6, Math.floor(height / 3)) }, (_, i) => `line ${i}`).join("\n"))
     await setup.flush()
-    assertLayout(count)
+    assertLayout()
     setMessage("wrapped prompt ".repeat(100))
     await setup.flush()
+    assertLayout()
+  }
+
+  // With a one-line prompt the list sits right under the composer and uses the
+  // room the terminal offers, up to six rows.
+  for (const [width, height, count] of [[120, 50, 6], [120, 40, 6], [80, 32, 5], [80, 24, 1], [80, 22, 0], [80, 14, 0], [44, 24, 1], [28, 30, 4], [28, 50, 6], [200, 60, 6], [120, 12, 0]]) {
+    await resize(width, height)
+    setMessage("hi")
+    await setup.flush()
     assertLayout(count)
+    if (count > 0) {
+      const lines = frame().split("\n")
+      const footer = lines.findIndex((line) => line.includes("project ·"))
+      const heading = lines.findIndex((line) => line.includes("Recent sessions"))
+      assert.ok(heading > footer && heading <= footer + 2, "list must start right below the composer\n" + frame())
+    }
   }
 
   // Long titles/directories must stay on their own row on narrow terminals.
   publish({ entries: entries.map((entry) => ({ ...entry, title: entry.title + " very long title".repeat(10), dir: "/" + "long-directory-name/".repeat(12) })), failed: false })
   await resize(28, 30)
-  assertLayout(5)
+  setMessage("hi")
+  assertLayout(4)
   assert.doesNotMatch(frame(), /option\+o for all/)
 
   publish({ entries, failed: false })
   await resize(80, 24)
+  setMessage("hi")
   setPins({ sessions: ["ses_home7"], directories: [] })
   await setup.flush()
   assertLayout(1)

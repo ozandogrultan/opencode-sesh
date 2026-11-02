@@ -162,15 +162,16 @@ when opencode exits, the picker reopens with the query preserved.
 
 - **Sidebar & Home list:** `api.slots.register` on `sidebar_content` (`sidebar.content`
   append mode by default — native sidebar content stays above Sessions;
-  `sidebarPlacement: "prepend"` puts Sessions first) and `home_bottom` (`home.footer`
-  prepend mode). `showSidebar: false` / `showHome: false` skip registering each
+  `sidebarPlacement: "prepend"` puts Sessions first) and `home_bottom` (`prompt.footer`
+  append mode, absolutely positioned on the row right below the composer). `showSidebar: false` / `showHome: false` skip registering each
   slot; with both off (picker-only) nothing polls. In the sidebar, pinned
   directories sort first, then directory groups by recency; sessions within
   each group sort by last update regardless of pins.
   In the home list, pinned sessions sort first.
-  The home list budgets its height for the native logo, maximum-height composer,
-  and status footer: compact spacing first, then fewer rows, hidden when too
-  short. Header/rows never wrap, and resizing releases captures for hidden rows.
+  The home list takes no layout space: it budgets its height from its own
+  measured position (`renderAfter`) down to the native status footer, so it
+  tracks a growing composer. Compact spacing first, then fewer rows, hidden when
+  too short, and only on the `home` route (the session prompt shares the slot). Header/rows never wrap, and resizing releases captures for hidden rows.
   `tests/tui-home.mjs` renders this against the native home layout with multiline
   and wrapped prompts; keep that regression in the default test suite.
   Row markers alone signal session state: a running agent animates a loading
