@@ -565,10 +565,12 @@ function createDbWorker(): any {
 // Read-only queries against the local store, served by one lazily started
 // worker. Any failure (no worker, no bun:sqlite, query error, timeout) rejects;
 // a timeout or worker error discards the worker so the next call starts afresh.
+// `close` is final: later calls reject and never start a worker.
 function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB_QUERY_TIMEOUT_MS) {
   type Pending = { resolve: (rows: unknown[]) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
   let worker: any
   let nextId = 0
+  let closed = false
   const pending = new Map<number, Pending>()
   const reset = (error: Error) => {
     const dead = worker
@@ -601,6 +603,10 @@ function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB
   }
   const run: DbRun = (sql, params = []) =>
     new Promise((resolve, reject) => {
+      if (closed) {
+        reject(new Error("local store closed"))
+        return
+      }
       try {
         worker ??= start()
       } catch (error) {
@@ -617,10 +623,12 @@ function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB
         reset(error as Error)
       }
     })
-  return { run, close: () => reset(new Error("local store closed")) }
+  return { run, close: () => { closed = true; reset(new Error("local store closed")) } }
 }
 
-const dbClient = createDbClient()
+// Replaced on every plugin setup: a reload reuses this module instance, and
+// the previous setup's disposer closed its client for good.
+let dbClient = createDbClient()
 
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
 
@@ -3352,7 +3360,11 @@ function createApi(ctx: Plugin.Context) {
   const [dialogOpen, setDialogOpen] = createSignal(false)
   let sourceTheme: Plugin.Context["theme"] | undefined
   let currentTheme: ReturnType<typeof adaptTheme>
+  const slotDisposers: Array<() => void> = []
   return {
+    dispose() {
+      for (const dispose of slotDisposers.splice(0)) dispose()
+    },
     theme: {
       get current() {
         if (sourceTheme !== ctx.theme) {
@@ -3476,18 +3488,18 @@ function createApi(ctx: Plugin.Context) {
     slots: {
       register(cfg: { order?: number; slots: Record<string, () => any> }) {
         if (cfg.slots.sidebar_content && ctx.options?.showSidebar !== false) {
-          ctx.ui.slot({
+          slotDisposers.push(ctx.ui.slot({
             ...(ctx.options?.sidebarPlacement === "prepend"
               ? { prepend: "sidebar.content" as const }
               : { append: "sidebar.content" as const }),
             render: cfg.slots.sidebar_content as any,
-          })
+          }))
         }
         if (cfg.slots.home_bottom) {
-          ctx.ui.slot({
+          slotDisposers.push(ctx.ui.slot({
             prepend: "home.footer",
             render: cfg.slots.home_bottom as any,
-          })
+          }))
         }
       },
     },
@@ -3581,6 +3593,7 @@ function createApi(ctx: Plugin.Context) {
 export default Plugin.define({
   id: "sesh-panel",
   async setup(ctx) {
+    const client = dbClient = createDbClient()
     const api = createApi(ctx)
     let initialized = false
     const disposeSlot = ctx.ui.slot({
@@ -3597,8 +3610,9 @@ export default Plugin.define({
     return () => {
       if (api.ui.dialog.open) api.ui.dialog.clear()
       disposeSlot()
+      api.dispose()
       removeRootMouse?.()
-      dbClient.close()
+      client.close()
     }
   },
 })

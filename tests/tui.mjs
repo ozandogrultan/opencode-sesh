@@ -160,6 +160,8 @@ function loadAdapter(ctx) {
   assert.ok(layers.every((l) => l.commands.every((c) => c.id === undefined)))
   api.slots.register({ slots: { sidebar_content() {} } })
   assert.equal(slots[0].append, "sidebar.content")
+  api.slots.register({ slots: { home_bottom() {} } })
+  assert.equal(slots.length, 2)
   api.ui.toast({ title: "Costs", message: "Loaded" })
   api.ui.toast({ message: "Loaded" })
   assert.deepEqual(toasts.map((t) => t.title), ["Costs", "Sessions"])
@@ -176,6 +178,18 @@ function loadAdapter(ctx) {
   assert.match(source, /void openCosts\(true\)/)
   assert.match(source, /void openNeeds\(true\)/)
   assert.match(source, /if \(!command && api.renderer.currentFocusedEditor === null\) return/)
+}
+
+// Plugin disposal releases every slot registration so mounted components stop polling.
+{
+  const disposed = []
+  const api = loadAdapter({ ui: { slot(slot) { const key = slot.append ?? slot.prepend; return () => disposed.push(key) } } })
+  api.slots.register({ slots: { sidebar_content() {}, home_bottom() {} } })
+  assert.deepEqual(disposed, [])
+  api.dispose()
+  assert.deepEqual(disposed, ["sidebar.content", "home.footer"])
+  api.dispose()
+  assert.equal(disposed.length, 2, "dispose is idempotent")
 }
 
 // Hiding the session sidebar must not register its component (and therefore
@@ -623,9 +637,11 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.deepEqual(await client.run("SELECT 3 AS n"), [{ n: 3 }], "query errors keep the worker")
     client.close()
     assert.equal(log.workers[0].terminated, true)
-    assert.deepEqual(await client.run("SELECT 4 AS n"), [{ n: 4 }])
-    assert.equal(log.created, 2, "a closed client restarts on demand")
+    await assert.rejects(client.run("SELECT 4 AS n"), /local store closed/)
+    assert.equal(log.created, 1, "a closed client never starts another worker")
     client.close()
+    await assert.rejects(client.run("SELECT 5 AS n"), /local store closed/)
+    assert.equal(log.created, 1)
 
     const failing = createDbClient(() => { throw new Error("no worker") })
     await assert.rejects(failing.run("SELECT 1"), /no worker/)
