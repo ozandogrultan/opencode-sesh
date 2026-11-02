@@ -390,10 +390,11 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // (which renders the result) subscribes with `waiting`; the home list must not.
 {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
-  const subscriptions = [...source.matchAll(/props\.poll\(\(snapshot\) => \{[\s\S]*?\n  \}(, \{ waiting: true \})?\)\)\)/g)]
-  assert.equal(subscriptions.length, 2)
-  assert.equal(subscriptions.filter((match) => match[1]).length, 1)
-  assert.match(subscriptions.find((match) => match[1])[0], /setWaiting\(snapshot\.waiting\)/)
+  assert.equal(source.match(/props\.poll\(/g)?.length, 2)
+  assert.equal(source.match(/\{ waiting: true \}/g)?.length, 1)
+  const start = source.indexOf("function SidebarSessions(")
+  const sidebar = source.slice(start, source.indexOf("\nfunction ", start + 1))
+  assert.match(sidebar, /setWaiting\(snapshot\.waiting\)[\s\S]*\}, \{ waiting: true \}\)/)
 }
 
 // Space must remain available to both search boxes and the main prompt even
@@ -966,6 +967,28 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.equal(clears, 1)
   tick()
   assert.equal(refreshes, 2)
+}
+
+// A running poll reloads for a new `waiting` subscriber that has no needs-input
+// result yet, never for a subscriber that does not read it.
+{
+  let tick
+  const data = loadDataLayer(undefined, { setInterval: (callback) => { tick = callback; return 1 }, clearInterval: () => {} })
+  let refreshes = 0
+  const subscribe = data.createSessionPoll(makeApi(sessionsFor(1)), () => refreshes++)
+  const home = subscribe(() => {})
+  await delay(10)
+  assert.equal(refreshes, 1)
+  subscribe(() => {})
+  await delay(10)
+  assert.equal(refreshes, 1)
+  subscribe(() => {}, { waiting: true })
+  await delay(10)
+  assert.equal(refreshes, 2)
+  home()
+  tick()
+  await delay(10)
+  assert.equal(refreshes, 3)
 }
 
 // Mutation fails closed for corrupt/unreadable existing pins; only an absent

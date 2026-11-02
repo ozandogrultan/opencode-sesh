@@ -546,6 +546,9 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
   let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
   let clock: ReturnType<typeof setInterval> | undefined
   let inFlight: Promise<void> | undefined
+  // Whether `snapshot.waiting` came from a poll that ran the query; a poll
+  // without waiting listeners clears it so a later subscriber never sees a stale set.
+  let waitingLoaded = false
   const active = () => listeners.size > 0
   const wantsWaiting = () => [...listeners.values()].some(Boolean)
   const load = () => {
@@ -569,12 +572,18 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
       const db = wantsWaiting() ? await openTranscriptDb() : undefined
       if (db) {
         try {
-          if (wantsWaiting()) snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+          if (wantsWaiting()) {
+            snapshot = { ...snapshot, waiting: await queryWaitingIds(db) }
+            waitingLoaded = true
+          }
         } catch {
           // Keep the previous waiting set when the local store is unavailable.
         } finally {
           db.close()
         }
+      } else if (!wantsWaiting()) {
+        snapshot = { ...snapshot, waiting: new Map() }
+        waitingLoaded = false
       }
       for (const listener of [...listeners.keys()]) listener(snapshot)
     })().finally(() => { inFlight = undefined })
@@ -586,7 +595,7 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
     if (!clock) {
       load()
       clock = setInterval(load, POLL_MS)
-    } else if (needsWaiting) {
+    } else if (needsWaiting && !waitingLoaded) {
       load()
     }
     return () => {
@@ -651,8 +660,7 @@ const QUESTION_OPEN = `live.name = 'question'
 const NO_RECENT_ACTIVITY = (sessionIdExpr: string, stuckBefore: number) => `NOT EXISTS (
       SELECT 1 FROM session_message r JOIN session_v2 f ON f.id = r.session_id
       WHERE (f.id = ${sessionIdExpr} OR f.parent_id = ${sessionIdExpr}) AND r.time_updated >= ${stuckBefore})`
-const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE(` AND m.session_id IN (
-      SELECT id FROM session_v2 WHERE COALESCE(time_archived, 0) = 0 AND parent_id IS NULL)`)}
+const NEEDS_INPUT_SQL = (stuckBefore: number) => `${LIVE_TOOLS_CTE("")}
 SELECT s.id AS id,
   CASE WHEN EXISTS (SELECT 1 FROM live WHERE live.session_id = s.id AND ${QUESTION_OPEN})
     THEN 'question' ELSE 'stuck' END AS reason
