@@ -628,8 +628,8 @@ function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB
   return { run, close: () => { closed = true; reset(new Error("local store closed")) } }
 }
 
-// Replaced on every plugin setup: a reload reuses this module instance, and
-// the previous setup's disposer closed its client for good.
+// Each plugin setup installs its own client and closes only that one on
+// dispose: a reload reuses this module instance.
 let dbClient = createDbClient()
 
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
@@ -885,20 +885,29 @@ async function buildSearchIndex(
 
   if (!active()) return index
   try {
+    // `entries` must be the full session list: sessions missing from it are pruned.
     const idSet = new Set(ids)
     for (const sid of cache.keys()) if (!idSet.has(sid)) cache.delete(sid)
-    const signatures = new Map<string, { sig: string; bytes: number }>()
-    for (let i = 0; i < ids.length; i += SIGNATURE_CHUNK) {
-      const chunk = ids.slice(i, i + SIGNATURE_CHUNK)
-      const rows = (await run(transcriptSignatureQuery(chunk.length), chunk)) as { sid: string; n: number; m: number; bytes: number }[]
+    // Undefined when the signature query fails (octet_length needs SQLite
+    // >= 3.43, and macOS Bun uses the system SQLite): extract everything
+    // locally, batched by count only, and cache nothing.
+    let signatures: Map<string, { sig: string; bytes: number }> | undefined = new Map()
+    try {
+      for (let i = 0; i < ids.length; i += SIGNATURE_CHUNK) {
+        const chunk = ids.slice(i, i + SIGNATURE_CHUNK)
+        const rows = (await run(transcriptSignatureQuery(chunk.length), chunk)) as { sid: string; n: number; m: number; bytes: number }[]
+        if (!active()) return index
+        for (const row of rows) signatures.set(row.sid, { sig: `${row.n}:${row.m}:${row.bytes}`, bytes: row.bytes ?? 0 })
+      }
+    } catch {
       if (!active()) return index
-      for (const row of rows) signatures.set(row.sid, { sig: `${row.n}:${row.m}:${row.bytes}`, bytes: row.bytes ?? 0 })
+      signatures = undefined
     }
-    const sigs = new Map(entries.map((entry) => [entry.id, `${entry.updated}:${signatures.get(entry.id)?.sig ?? "0:0:0"}`]))
+    const sigs = signatures && new Map(entries.map((entry) => [entry.id, `${entry.updated}:${signatures!.get(entry.id)?.sig ?? "0:0:0"}`]))
     const stale: string[] = []
     for (const id of ids) {
       const hit = cache.get(id)
-      if (hit && hit.sig === sigs.get(id)) {
+      if (hit && sigs && hit.sig === sigs.get(id)) {
         if (hit.text) index.set(id, `${index.get(id) ?? ""} ${hit.text}`.trim())
         remaining.delete(id)
         indexed += 1
@@ -910,7 +919,7 @@ async function buildSearchIndex(
     let current: string[] = []
     let currentBytes = 0
     for (const id of stale) {
-      const bytes = signatures.get(id)?.bytes ?? 0
+      const bytes = signatures?.get(id)?.bytes ?? 0
       if (current.length > 0 && (current.length >= TRANSCRIPT_BATCH || currentBytes + bytes > TRANSCRIPT_BATCH_BYTES)) {
         batches.push(current)
         current = []
@@ -933,7 +942,7 @@ async function buildSearchIndex(
       }
       for (const id of batch) {
         const list = texts.get(id) ?? []
-        cache.set(id, { sig: sigs.get(id)!, text: list.join(" ").trim() })
+        if (sigs) cache.set(id, { sig: sigs.get(id)!, text: list.join(" ").trim() })
         if (list.length > 0) index.set(id, [index.get(id) ?? "", ...list].join(" ").trim())
         remaining.delete(id)
       }

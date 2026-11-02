@@ -1131,6 +1131,16 @@ function makeApi(sessions, { latency = 0 } = {}) {
     entries, undefined, undefined, async () => { throw new Error("no store") }, remoteCache)
   assert.equal(remoteCache.size, 0)
 
+  // A failing signature query (SQLite without octet_length) still extracts
+  // locally, but caches nothing.
+  const noSigCache = new Map()
+  const noSig = await data.buildSearchIndex(never, entries, undefined, undefined, async (sql, params = []) => {
+    if (!sql.startsWith("WITH msg")) throw new Error("no such function: octet_length")
+    return sqlite.prepare(sql).all(...params)
+  }, noSigCache)
+  assert.equal(noSig.get("ses_c2"), third.get("ses_c2"))
+  assert.equal(noSigCache.size, 0)
+
   // Cancellation during signature lookup issues no extraction.
   let active = true
   const before = calls.extract

@@ -204,7 +204,9 @@ when opencode exits, the picker reopens with the query preserved.
   query (session timestamp, message count, latest message timestamp, payload
   size; chunked by `SIGNATURE_CHUNK`) lets reopened pickers reuse unchanged
   sessions, extract only new or changed ones, and prune vanished ones. Sessions
-  indexed through the remote path are not cached.
+  indexed through the remote path are not cached. If the signature query fails
+  (`octet_length` needs SQLite ≥ 3.43; macOS Bun uses the system SQLite),
+  extraction still runs locally, batched by count only, and caches nothing.
   Local extraction is one SQL statement per batch in the DB worker
   (`transcriptTextQuery`, JSON-guarded) that returns only `{sid, text}` rows,
   so tool payloads never reach the UI thread; if the worker rejects, sessions
