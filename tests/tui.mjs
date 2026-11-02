@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, addTranscript, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
   )
   return factory(
     readExtraction,
@@ -973,13 +973,99 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const data = loadDataLayer()
   const entry = { id: "ses_case", title: "Original Title", dir: "/Case", group: "Case" }
-  const index = new Map([[entry.id, `${entry.title} ${entry.dir}`]])
-  data.addTranscript(index, entry.id, JSON.stringify({ text: "Read README.md and Use GitHub" }))
+  const sqlite = new DatabaseSync(":memory:")
+  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+  sqlite.prepare("INSERT INTO session_message VALUES (?, 1, 'user', ?)").run(entry.id, JSON.stringify({ text: "Read README.md and Use GitHub" }))
+  const index = await data.buildSearchIndex({}, [entry], undefined, undefined, async (sql, params = []) => sqlite.prepare(sql).all(...params))
+  sqlite.close()
   assert.match(data.transcriptMatchExcerpt(index.get(entry.id), entry, "readme"), /README\.md/)
   assert.deepEqual(data.filterPickerEntries([entry], { query: "GITHUB" }, index, new Set(), []), [entry])
   const toasts = []
   data.openInCmuxWorkspace({ ui: { toast: (value) => toasts.push(value) } }, { ...entry, id: "ses_bad;touch injected" })
   assert.equal(toasts[0].message, "Invalid session ID")
+}
+
+// Local extraction returns text only, equals the old JSON.parse extraction, and
+// survives malformed rows. The oracle below is the pre-SQL reference.
+{
+  const data = loadDataLayer()
+  const sqlite = new DatabaseSync(":memory:")
+  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+  const add = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?)")
+  const j = JSON.stringify
+  const total = data.TRANSCRIPT_BATCH * 2 + 3
+  const entries = Array.from({ length: total }, (_, n) => ({
+    id: `ses_idx${String(n).padStart(4, "0")}`, title: `Title ${n}`, dir: "/proj", group: "proj", updated: n,
+  }))
+  for (const [n, entry] of entries.entries()) {
+    add.run(entry.id, 3, "assistant", j({ content: [
+      { type: "text", text: `answer-a ${n}` }, { type: "tool", text: `SECRET_TOOL_${n}`, state: { output: "SECRET_OUT" } },
+      { type: "reasoning", text: `SECRET_REASONING_${n}` }, { type: "text", text: `answer-b ${n}` },
+    ] }))
+    add.run(entry.id, 1, "user", j({ text: `question ${n}` }))
+    add.run(entry.id, 2, "tool", j({ text: "SECRET_TOOL_MESSAGE" }))
+    add.run(entry.id, 4, "assistant", "{ not json")
+    add.run(entry.id, 5, "assistant", j({ content: "SECRET_STRING_CONTENT", text: 42 }))
+    add.run(entry.id, 6, "assistant", j({ content: { type: "text", text: "SECRET_OBJECT_CONTENT" } }))
+    add.run(entry.id, 7, "assistant", j({ content: ["bare string", 7, null, { type: "text", text: 9 }, { type: "text", text: `tail ${n}` }] }))
+    add.run(entry.id, 8, "assistant", j("scalar json string"))
+  }
+  const run = async (sql, params = []) => sqlite.prepare(sql).all(...params)
+  const oracle = (sid, base) => {
+    let value = base
+    const rows = sqlite.prepare("SELECT data FROM session_message WHERE session_id = ? AND type IN ('user','assistant') ORDER BY seq").all(sid)
+    for (const row of rows) {
+      try {
+        const message = JSON.parse(row.data)
+        const texts = []
+        if (typeof message?.text === "string") texts.push(message.text)
+        if (Array.isArray(message?.content)) for (const part of message.content) if (part?.type === "text" && typeof part.text === "string") texts.push(part.text)
+        for (const text of texts) value = `${value} ${text}`.trim()
+      } catch {}
+    }
+    return value
+  }
+
+  const progress = []
+  const index = await data.buildSearchIndex({}, entries, (p) => progress.push({ ...p }), undefined, run)
+  for (const [n, entry] of entries.entries()) {
+    assert.equal(index.get(entry.id), oracle(entry.id, `${entry.title} ${entry.dir}`), entry.id)
+    assert.equal(index.get(entry.id), `Title ${n} /proj question ${n} answer-a ${n} answer-b ${n} tail ${n}`)
+  }
+  assert.ok(![...index.values()].some((text) => text.includes("SECRET")), "tool/reasoning/non-text payloads must not be indexed")
+  assert.equal(progress.at(-1).total, total)
+  assert.equal(progress.at(-1).indexed, total)
+  assert.equal(progress.at(-1).complete, true)
+  assert.deepEqual(progress.filter((p) => !p.complete).map((p) => p.indexed), [0, data.TRANSCRIPT_BATCH, data.TRANSCRIPT_BATCH * 2, total])
+
+  // Cancellation after the first batch stops further queries.
+  let active = true
+  let queries = 0
+  const cancelled = await data.buildSearchIndex({ client: { session: { messages() { throw new Error("must not go remote") } } } }, entries, undefined, () => active, async (sql, params) => {
+    queries++
+    const rows = await run(sql, params)
+    active = false
+    return rows
+  })
+  assert.equal(queries, 1)
+  assert.equal(cancelled.get(entries[0].id), `${entries[0].title} ${entries[0].dir}`, "a cancelled batch must not publish")
+
+  // A rejecting run mid-walk sends only the unindexed sessions to the remote path.
+  let calls = 0
+  const remoteIds = []
+  const partial = await data.buildSearchIndex({ client: { session: { async messages(input) {
+    remoteIds.push(input.sessionID)
+    return { data: [{ parts: [{ type: "text", text: "from remote" }] }] }
+  } } } }, entries, undefined, undefined, async (sql, params) => {
+    if (++calls === 2) throw new Error("worker died")
+    return run(sql, params)
+  })
+  assert.equal(calls, 2)
+  assert.deepEqual(remoteIds.sort(), entries.slice(data.TRANSCRIPT_BATCH).map((entry) => entry.id))
+  assert.match(partial.get(entries[0].id), /answer-a 0/)
+  assert.doesNotMatch(partial.get(entries[0].id), /from remote/)
+  assert.match(partial.get(entries.at(-1).id), /from remote/)
+  sqlite.close()
 }
 
 // A successful fallback path is resolved once; unsuccessful resolution retries.
