@@ -805,33 +805,41 @@ GROUP BY live.session_id`, batch)) as { id: string; question_since: number | nul
   return details
 }
 
-function addTranscript(index: Map<string, string>, sid: string, data: string): void {
-  try {
-    const message = JSON.parse(data) as { text?: unknown; content?: unknown }
-    const texts: string[] = []
-    if (typeof message?.text === "string") texts.push(message.text)
-    if (Array.isArray(message?.content)) {
-      for (const part of message.content as { type?: unknown; text?: unknown }[]) {
-        if (part?.type === "text" && typeof part.text === "string") texts.push(part.text)
-      }
-    }
-    for (const text of texts) {
-      const base = index.get(sid) ?? ""
-      index.set(sid, `${base} ${text}`.trim())
-    }
-  } catch {
-    // ignore malformed messages
-  }
+// Text parts only, extracted inside SQLite so tool and reasoning payloads never
+// reach the caller. The CASE guards keep json_extract away from malformed rows
+// and non-object parts, which SQL AND ordering alone would not.
+function transcriptTextQuery(count: number): string {
+  const placeholders = Array.from({ length: count }, () => "?").join(",")
+  return `WITH msg AS (
+  SELECT session_id AS sid, seq, rowid AS rid, CASE WHEN json_valid(data) THEN data END AS doc
+  FROM session_message
+  WHERE session_id IN (${placeholders}) AND type IN ('user', 'assistant')
+), parts AS (
+  SELECT sid, seq, rid, 0 AS part,
+    CASE WHEN json_type(doc, '$.text') = 'text' THEN json_extract(doc, '$.text') END AS text
+  FROM msg
+  UNION ALL
+  SELECT msg.sid, msg.seq, msg.rid, 1 + item.key AS part,
+    CASE WHEN item.type = 'object' THEN
+      CASE WHEN json_extract(item.value, '$.type') = 'text' AND json_type(item.value, '$.text') = 'text'
+        THEN json_extract(item.value, '$.text') END
+    END AS text
+  FROM msg, json_each(msg.doc, '$.content') AS item
+  WHERE json_type(msg.doc, '$.content') = 'array'
+)
+SELECT sid, text FROM parts WHERE text IS NOT NULL AND text <> '' ORDER BY sid, seq, rid, part`
 }
 
 // Index titles/directories immediately, then add transcript text progressively
 // in batches so the render thread can breathe. Covers every entry, not a fixed
-// newest window; `onProgress` lets the picker show coverage.
+// newest window; `onProgress` lets the picker show coverage. Local extraction
+// runs through `run` (the worker client) and returns text only.
 async function buildSearchIndex(
   api: TuiPluginApi,
   entries: Entry[],
   onProgress?: (progress: IndexProgress, index: Map<string, string>) => void,
   active = () => true,
+  run: DbRun = dbClient.run,
 ): Promise<Map<string, string>> {
   const index = new Map<string, string>()
   for (const entry of entries) {
@@ -845,29 +853,26 @@ async function buildSearchIndex(
   report(false)
 
   if (!active()) return index
-  const db = await openTranscriptDb()
-  if (db) {
-    try {
-      for (let i = 0; i < ids.length; i += TRANSCRIPT_BATCH) {
-        if (!active()) break
-        const batch = ids.slice(i, i + TRANSCRIPT_BATCH)
-        const placeholders = batch.map(() => "?").join(",")
-        const rows = (db
-          .query(
-            `SELECT session_id AS sid, data FROM session_message WHERE session_id IN (${placeholders}) AND type IN ('user', 'assistant') ORDER BY seq`,
-          )
-          .all(...batch) ?? []) as { sid: string; data: string }[]
-        for (const row of rows) addTranscript(index, row.sid, row.data)
-        for (const id of batch) remaining.delete(id)
-        indexed += batch.length
-        report(false)
-        await nextTick()
+  try {
+    for (let i = 0; i < ids.length; i += TRANSCRIPT_BATCH) {
+      if (!active()) break
+      const batch = ids.slice(i, i + TRANSCRIPT_BATCH)
+      const rows = (await run(transcriptTextQuery(batch.length), batch)) as { sid: string; text: string }[]
+      if (!active()) break
+      const texts = new Map<string, string[]>()
+      for (const row of rows) {
+        const list = texts.get(row.sid)
+        if (list) list.push(row.text)
+        else texts.set(row.sid, [row.text])
       }
-    } catch {
-      // local store unavailable mid-walk; fall back to the remote path below
-    } finally {
-      db.close()
+      for (const [sid, list] of texts) index.set(sid, [index.get(sid) ?? "", ...list].join(" ").trim())
+      for (const id of batch) remaining.delete(id)
+      indexed += batch.length
+      report(false)
+      await nextTick()
     }
+  } catch {
+    // local store unavailable mid-walk; fall back to the remote path below
   }
 
   if (active() && remaining.size > 0) {

@@ -198,7 +198,10 @@ when opencode exits, the picker reopens with the query preserved.
   at `SESSION_MAX` and reported when truncated) rather than a fixed-size
   window, then indexes transcript text for **every** session in batches
   (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
-  The header shows indexing progress/coverage. Visible transcript hits get
+  Local extraction is one SQL statement per batch in the DB worker
+  (`transcriptTextQuery`, JSON-guarded) that returns only `{sid, text}` rows,
+  so tool payloads never reach the UI thread; if the worker rejects, sessions
+  not yet indexed fall back to the remote path. The header shows indexing progress/coverage. Visible transcript hits get
   short excerpts from the text-only index (never tool or reasoning payloads).
   Project, needs-input (Option-W), and pinned-session (Option-S) filters compose
   with the query; the picker remembers query/scope/filters until plugin restart.
@@ -273,7 +276,8 @@ when opencode exits, the picker reopens with the query preserved.
   (also run by `bun run test`).
 - `bun run test:tui-worker` — starts the real blob Worker against a bun:sqlite
   fixture; asserts results round-trip and the main thread keeps ticking during
-  a slow query (also run by `bun run test`).
+  a slow query and during transcript indexing of large tool payloads (also run
+  by `bun run test`).
 - `bun run typecheck` — `tsc` over `tui-plugins/` and `plugins/`.
 - `bun run lint:sh` — `bash -n` on every script.
 - `HOME=/tmp/fakehome bash install.sh` — installer smoke test.

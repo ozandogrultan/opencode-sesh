@@ -41,6 +41,61 @@ try {
   assert.ok(ticks >= elapsed / 5 / 3, `main thread stalled: ${ticks} ticks in ${Math.round(elapsed)} ms`)
 } finally {
   client.close()
+}
+
+// Transcript indexing through the default client: text only, equal to the
+// expected text, and the main thread keeps ticking while ~30 MB of tool output
+// is scanned in the worker.
+try {
+  const heavyPath = join(dir, "heavy.db")
+  const heavy = new Database(heavyPath)
+  heavy.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
+  const insert = heavy.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?)")
+  const payload = "x".repeat(100_000)
+  const entries = []
+  heavy.transaction(() => {
+    for (let n = 0; n < 300; n++) {
+      const id = `ses_heavy${n}`
+      entries.push({ id, title: `T${n}`, dir: "/p", group: "p", updated: n })
+      insert.run(id, 1, "user", JSON.stringify({ text: `question ${n}` }))
+      insert.run(id, 2, "assistant", JSON.stringify({ content: [
+        { type: "text", text: `answer ${n}` },
+        { type: "tool", text: `SECRET_${n}`, state: { output: payload } },
+      ] }))
+    }
+  })()
+  heavy.close()
+
+  const { buildSearchIndex } = new Function(
+    "readFile", "process", "setTimeout", "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
+    `${js}; return { buildSearchIndex }`,
+  )(async () => "", { env: { SESH_DB: heavyPath } }, setTimeout, setInterval, clearInterval, 15_000, () => false, () => ({ status: 1 }))
+
+  let last = performance.now()
+  let maxGap = 0
+  let ticks = 0
+  const timer = setInterval(() => {
+    const now = performance.now()
+    maxGap = Math.max(maxGap, now - last)
+    last = now
+    ticks++
+  }, 5)
+  const began = performance.now()
+  const index = await buildSearchIndex({ client: { session: { messages() { throw new Error("must stay local") } } } }, entries)
+  const elapsed = performance.now() - began
+  clearInterval(timer)
+
+  for (const [n, entry] of entries.entries()) assert.equal(index.get(entry.id), `T${n} /p question ${n} answer ${n}`)
+  assert.ok(![...index.values()].some((text) => text.includes("SECRET")))
+  assert.ok(ticks >= elapsed / 5 / 4, `main thread stalled: ${ticks} ticks in ${Math.round(elapsed)} ms`)
+
+  const sync = new Database(heavyPath, { readonly: true })
+  const syncBegan = performance.now()
+  for (const row of sync.query("SELECT data FROM session_message WHERE type IN ('user','assistant') AND session_id IN (SELECT DISTINCT session_id FROM session_message ORDER BY session_id LIMIT 64) ORDER BY seq").all()) JSON.parse(row.data)
+  const syncMs = performance.now() - syncBegan
+  sync.close()
+  console.log(`index: ${Math.round(elapsed)} ms, ${ticks} ticks, max main-thread gap ${Math.round(maxGap)} ms; old sync query+parse of one 64-session batch: ${Math.round(syncMs)} ms`)
+} finally {
   rmSync(dir, { recursive: true, force: true })
 }
 console.log("tui worker tests passed")
