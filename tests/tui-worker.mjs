@@ -49,8 +49,8 @@ try {
 try {
   const heavyPath = join(dir, "heavy.db")
   const heavy = new Database(heavyPath)
-  heavy.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
-  const insert = heavy.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?)")
+  heavy.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT, time_updated INTEGER DEFAULT 0)")
+  const insert = heavy.prepare("INSERT INTO session_message (session_id, seq, type, data) VALUES (?, ?, ?, ?)")
   const payload = "x".repeat(100_000)
   const entries = []
   heavy.transaction(() => {

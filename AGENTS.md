@@ -197,7 +197,16 @@ when opencode exits, the picker reopens with the query preserved.
 - **Picker search:** pages the global session list (`SESSION_PAGE_LIMIT`, capped
   at `SESSION_MAX` and reported when truncated) rather than a fixed-size
   window, then indexes transcript text for **every** session in batches
-  (`TRANSCRIPT_BATCH`) with bounded remote concurrency (`REMOTE_CONCURRENCY`).
+  (`TRANSCRIPT_BATCH`, also capped by `TRANSCRIPT_BATCH_BYTES` of message
+  payload; a single larger session forms its own batch) with bounded remote
+  concurrency (`REMOTE_CONCURRENCY`). Transcript text is cached in memory for
+  the plugin lifetime (never on disk, cleared on dispose); a worker signature
+  query (session timestamp, message count, latest message timestamp, payload
+  size; chunked by `SIGNATURE_CHUNK`) lets reopened pickers reuse unchanged
+  sessions, extract only new or changed ones, and prune vanished ones. Sessions
+  indexed through the remote path are not cached. If the signature query fails
+  (`octet_length` needs SQLite ≥ 3.43; macOS Bun uses the system SQLite),
+  extraction still runs locally, batched by count only, and caches nothing.
   Local extraction is one SQL statement per batch in the DB worker
   (`transcriptTextQuery`, JSON-guarded) that returns only `{sid, text}` rows,
   so tool payloads never reach the UI thread; if the worker rejects, sessions

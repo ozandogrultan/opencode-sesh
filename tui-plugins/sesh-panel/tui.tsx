@@ -503,6 +503,8 @@ async function fetchEntries(api: TuiPluginApi, active = () => true): Promise<Ent
 
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9]+$/
 const TRANSCRIPT_BATCH = 64
+const TRANSCRIPT_BATCH_BYTES = 8 * 1024 * 1024
+const SIGNATURE_CHUNK = 500
 const REMOTE_CONCURRENCY = 8
 
 type IndexProgress = { indexed: number; total: number; complete: boolean }
@@ -626,8 +628,8 @@ function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB
   return { run, close: () => { closed = true; reset(new Error("local store closed")) } }
 }
 
-// Replaced on every plugin setup: a reload reuses this module instance, and
-// the previous setup's disposer closed its client for good.
+// Each plugin setup installs its own client and closes only that one on
+// dispose: a reload reuses this module instance.
 let dbClient = createDbClient()
 
 type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
@@ -838,16 +840,37 @@ function transcriptTextQuery(count: number): string {
 SELECT sid, text FROM parts WHERE text IS NOT NULL AND text <> '' ORDER BY sid, seq, rid, part`
 }
 
+// Transcript text per session for the plugin lifetime; memory only, so
+// conversation text is never written anywhere. `sig` identifies the extracted
+// state of the session (see transcriptSignatureQuery).
+const transcriptCache = new Map<string, { sig: string; text: string }>()
+const clearTranscriptCache = () => transcriptCache.clear()
+
+// Cheap change detector mirroring the fzf extraction cache: message count and
+// latest message timestamp, plus the payload size that bounds extraction
+// batches. octet_length() reads the stored size, never the payload; length()
+// would read every payload to count characters.
+function transcriptSignatureQuery(count: number): string {
+  const placeholders = Array.from({ length: count }, () => "?").join(",")
+  return `SELECT session_id AS sid, COUNT(*) AS n, MAX(time_updated) AS m, SUM(octet_length(data)) AS bytes
+FROM session_message
+WHERE session_id IN (${placeholders}) AND type IN ('user', 'assistant')
+GROUP BY session_id`
+}
+
 // Index titles/directories immediately, then add transcript text progressively
 // in batches so the render thread can breathe. Covers every entry, not a fixed
 // newest window; `onProgress` lets the picker show coverage. Local extraction
-// runs through `run` (the worker client) and returns text only.
+// runs through `run` (the worker client) and returns text only; sessions whose
+// signature is unchanged reuse their cached text, and extraction batches are
+// bounded by session count and payload bytes.
 async function buildSearchIndex(
   api: TuiPluginApi,
   entries: Entry[],
   onProgress?: (progress: IndexProgress, index: Map<string, string>) => void,
   active = () => true,
   run: DbRun = dbClient.run,
+  cache = transcriptCache,
 ): Promise<Map<string, string>> {
   const index = new Map<string, string>()
   for (const entry of entries) {
@@ -862,9 +885,53 @@ async function buildSearchIndex(
 
   if (!active()) return index
   try {
-    for (let i = 0; i < ids.length; i += TRANSCRIPT_BATCH) {
+    // `entries` must be the full session list: sessions missing from it are pruned.
+    const idSet = new Set(ids)
+    for (const sid of cache.keys()) if (!idSet.has(sid)) cache.delete(sid)
+    // Undefined when the signature query fails (octet_length needs SQLite
+    // >= 3.43, and macOS Bun uses the system SQLite): extract everything
+    // locally, batched by count only, and cache nothing.
+    let signatures: Map<string, { sig: string; bytes: number }> | undefined = new Map()
+    try {
+      for (let i = 0; i < ids.length; i += SIGNATURE_CHUNK) {
+        const chunk = ids.slice(i, i + SIGNATURE_CHUNK)
+        const rows = (await run(transcriptSignatureQuery(chunk.length), chunk)) as { sid: string; n: number; m: number; bytes: number }[]
+        if (!active()) return index
+        for (const row of rows) signatures.set(row.sid, { sig: `${row.n}:${row.m}:${row.bytes}`, bytes: row.bytes ?? 0 })
+      }
+    } catch {
+      if (!active()) return index
+      signatures = undefined
+    }
+    const sigs = signatures && new Map(entries.map((entry) => [entry.id, `${entry.updated}:${signatures!.get(entry.id)?.sig ?? "0:0:0"}`]))
+    const stale: string[] = []
+    for (const id of ids) {
+      const hit = cache.get(id)
+      if (hit && sigs && hit.sig === sigs.get(id)) {
+        if (hit.text) index.set(id, `${index.get(id) ?? ""} ${hit.text}`.trim())
+        remaining.delete(id)
+        indexed += 1
+      } else stale.push(id)
+    }
+    if (indexed > 0) report(false)
+
+    const batches: string[][] = []
+    let current: string[] = []
+    let currentBytes = 0
+    for (const id of stale) {
+      const bytes = signatures?.get(id)?.bytes ?? 0
+      if (current.length > 0 && (current.length >= TRANSCRIPT_BATCH || currentBytes + bytes > TRANSCRIPT_BATCH_BYTES)) {
+        batches.push(current)
+        current = []
+        currentBytes = 0
+      }
+      current.push(id)
+      currentBytes += bytes
+    }
+    if (current.length > 0) batches.push(current)
+
+    for (const batch of batches) {
       if (!active()) break
-      const batch = ids.slice(i, i + TRANSCRIPT_BATCH)
       const rows = (await run(transcriptTextQuery(batch.length), batch)) as { sid: string; text: string }[]
       if (!active()) break
       const texts = new Map<string, string[]>()
@@ -873,8 +940,12 @@ async function buildSearchIndex(
         if (list) list.push(row.text)
         else texts.set(row.sid, [row.text])
       }
-      for (const [sid, list] of texts) index.set(sid, [index.get(sid) ?? "", ...list].join(" ").trim())
-      for (const id of batch) remaining.delete(id)
+      for (const id of batch) {
+        const list = texts.get(id) ?? []
+        if (sigs) cache.set(id, { sig: sigs.get(id)!, text: list.join(" ").trim() })
+        if (list.length > 0) index.set(id, [index.get(id) ?? "", ...list].join(" ").trim())
+        remaining.delete(id)
+      }
       indexed += batch.length
       report(false)
       await nextTick()
@@ -3612,6 +3683,7 @@ export default Plugin.define({
       disposeSlot()
       api.dispose()
       removeRootMouse?.()
+      clearTranscriptCache()
       client.close()
     }
   },
