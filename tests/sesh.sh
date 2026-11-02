@@ -418,10 +418,12 @@ tool_msg() { # session msg tool status created
 }
 now_ms=$(($(date +%s) * 1000))
 recent=$((now_ms - 300000))
+in_flight() { sqlite3 "$SESH_DB" "UPDATE session_v2 SET time_busy = 1600000100000, time_idle = NULL, time_suspended = 1600000100000 WHERE id = '$1';"; }
 add_session 'ses_waitq' "$one" 'Waiting question' 1600000000000 1600000100000
 sqlite3 "$SESH_DB" "UPDATE session_v2 SET parent_id = '' WHERE id = 'ses_waitq';"
 add_part 'ses_waitq' 'msg_wq0' 'user' 'text' 'should I refactor' 1600000050000
 tool_msg 'ses_waitq' 'msg_wq1' 'question' 'pending' 1600000100000
+in_flight ses_waitq
 add_session 'ses_waitok' "$one" 'Answered question' 1600000000000 1600000100000
 add_part 'ses_waitok' 'msg_wo0' 'user' 'text' 'should I refactor' 1600000050000
 tool_msg 'ses_waitok' 'msg_wo1' 'question' 'completed' 1600000060000
@@ -429,21 +431,36 @@ add_part 'ses_waitok' 'msg_wo2' 'user' 'text' 'yes do it' 1600000070000
 add_session 'ses_waitstuck' "$two" 'Stuck run' 1600000000000 1600000100000
 add_part 'ses_waitstuck' 'msg_ws0' 'user' 'text' 'run the migration' 1600000050000
 tool_msg 'ses_waitstuck' 'msg_ws1' 'bash' 'running' 1600000100000
+in_flight ses_waitstuck
 add_session 'ses_runnow' "$two" 'Active run' $recent $recent
 add_part 'ses_runnow' 'msg_rn0' 'user' 'text' 'keep working' $((recent - 60000))
 tool_msg 'ses_runnow' 'msg_rn1' 'bash' 'running' $recent
+in_flight ses_runnow
 add_session 'ses_waitactive' "$two" 'Stuck but active' 1600000000000 1600000100000
 add_part 'ses_waitactive' 'msg_wa0' 'user' 'text' 'start long job' 1600000050000
 tool_msg 'ses_waitactive' 'msg_wa1' 'bash' 'running' 1600000100000
 add_part 'ses_waitactive' 'msg_wa2' 'assistant' 'text' 'still working on it' $recent
+in_flight ses_waitactive
 add_session 'ses_waitparent' "$two" 'Stuck parent' 1600000000000 1600000100000
 add_part 'ses_waitparent' 'msg_wp0' 'user' 'text' 'run the long job' 1600000050000
 tool_msg 'ses_waitparent' 'msg_wp1' 'bash' 'running' 1600000100000
+in_flight ses_waitparent
 sqlite3 "$SESH_DB" "INSERT INTO session_v2 (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_waitchild', '$two', 'Spawned subagent', 1600000000000, $recent, NULL, 'ses_waitparent');"
 add_part 'ses_waitchild' 'msg_wc0' 'assistant' 'text' 'child progress update' $recent
+# Same tool data in a session that has since gone idle is not in flight.
+add_session 'ses_waitidle' "$two" 'Idle leftovers' 1600000000000 1600000100000
+add_part 'ses_waitidle' 'msg_wi0' 'user' 'text' 'run it' 1600000050000
+tool_msg 'ses_waitidle' 'msg_wi1' 'question' 'pending' 1600000100000
+tool_msg 'ses_waitidle' 'msg_wi2' 'bash' 'running' 1600000100000
+sqlite3 "$SESH_DB" "UPDATE session_v2 SET time_busy = 1600000100000, time_idle = 1600000200000, time_suspended = NULL WHERE id = 'ses_waitidle';"
+# Crash leftover: still busy and suspended, old running tool, no activity.
+add_session 'ses_waitcrash' "$two" 'Crash leftover' 1600000000000 1600000100000
+add_part 'ses_waitcrash' 'msg_wk0' 'user' 'text' 'run it' 1600000050000
+tool_msg 'ses_waitcrash' 'msg_wk1' 'bash' 'running' 1600000100000
+sqlite3 "$SESH_DB" "UPDATE session_v2 SET time_busy = 1600000100000, time_idle = 1600000050000, time_suspended = 1600000100000 WHERE id = 'ses_waitcrash';"
 waiting_ids="$("$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -r 'map(.id) | sort | join(",")')"
-[ "$waiting_ids" = 'ses_waitq,ses_waitstuck' ] || { echo "waiting set wrong: $waiting_ids" >&2; exit 1; }
-"$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -e 'map(.reason) | sort == ["question","stuck"]' >/dev/null
+[ "$waiting_ids" = 'ses_waitcrash,ses_waitq,ses_waitstuck' ] || { echo "waiting set wrong: $waiting_ids" >&2; exit 1; }
+"$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -e 'map(.reason) | sort == ["question","stuck","stuck"]' >/dev/null
 "$PACKAGE_DIR/bin/sesh-waiting.sh" > "$fixture/waiting.txt"
 grep -Fq 'Waiting question' "$fixture/waiting.txt"
 grep -Fq 'Stuck run' "$fixture/waiting.txt"
@@ -451,6 +468,15 @@ grep -Fq 'Answered question' "$fixture/waiting.txt" && { echo "answered question
 grep -Fq 'Active run' "$fixture/waiting.txt" && { echo "fresh run flagged" >&2; exit 1; }
 grep -Fq 'Stuck but active' "$fixture/waiting.txt" && { echo "stuck run with recent activity flagged" >&2; exit 1; }
 grep -Fq 'Stuck parent' "$fixture/waiting.txt" && { echo "stuck parent with recent child activity flagged" >&2; exit 1; }
+grep -Fq 'Idle leftovers' "$fixture/waiting.txt" && { echo "idle session flagged" >&2; exit 1; }
+grep -Fq 'Crash leftover' "$fixture/waiting.txt"
+
+# A database without the in-flight columns falls back to the full scan.
+legacy_db="$fixture/legacy-waiting.db"
+cp "$SESH_DB" "$legacy_db"
+sqlite3 "$legacy_db" "ALTER TABLE session_v2 DROP COLUMN time_busy; ALTER TABLE session_v2 DROP COLUMN time_idle; ALTER TABLE session_v2 DROP COLUMN time_suspended;"
+legacy_ids="$(SESH_DB="$legacy_db" "$PACKAGE_DIR/bin/sesh-waiting.sh" --json | "$SESH_JQ" -r 'map(.id) | sort | join(",")')"
+[ "$legacy_ids" = 'ses_waitcrash,ses_waitidle,ses_waitq,ses_waitstuck' ] || { echo "legacy waiting set wrong: $legacy_ids" >&2; exit 1; }
 
 # 23. Prune deletes stale sessions only: never pinned, waiting, fresh or
 # already archived ones. Non-TTY runs need --yes; --dry-run changes nothing.
@@ -523,7 +549,7 @@ if "$costs" --days x >/dev/null 2>&1; then echo "costs accepted a bad --days" >&
 
 sqlite3 "$SESH_DB" "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
 INSERT INTO session SELECT * FROM session_v2 WHERE id = 'ses_costA';
-INSERT INTO session VALUES ('ses_costLegacy', '$cost_dir', 'Legacy cost', $today, $today, NULL, NULL);
+INSERT INTO session (id, directory, title, time_created, time_updated, time_archived, parent_id) VALUES ('ses_costLegacy', '$cost_dir', 'Legacy cost', $today, $today, NULL, NULL);
 INSERT INTO message VALUES ('msg_legacynew', 'ses_costLegacy', $today, '{\"role\":\"assistant\",\"cost\":4,\"tokens\":{\"input\":10,\"output\":20}}');
 INSERT INTO message VALUES ('msg_legacyold', 'ses_costLegacy', $old, '{\"role\":\"assistant\",\"cost\":6}');
 INSERT INTO message VALUES ('msg_duplicate', 'ses_costA', $today, '{\"role\":\"assistant\",\"cost\":100}');

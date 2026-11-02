@@ -15,6 +15,9 @@
 #     (a long-running subagent/shell tool with recent activity is not stuck;
 #     V2 resumes interrupted runs server-side, so `running` with no activity
 #     means orphaned or awaiting approval).
+# Only a turn in flight can be waiting (time_suspended is set while a turn
+# runs), so message payloads are scanned only for those candidate sessions;
+# databases without the in-flight columns scan every assistant message.
 #
 # Usage: sesh-waiting.sh [--json]
 #   default prints a human table; --json prints [{id,reason,title,directory,updated}]
@@ -57,8 +60,23 @@ NOW_MS=$(python3 -c 'import time; print(int(time.time() * 1000))' 2>/dev/null ||
 STUCK_BEFORE=$((NOW_MS - 600000))
 
 # NEEDS_INPUT_SQL (shared heuristic — keep in sync with tui-plugins/sesh-panel/tui.tsx).
+CANDIDATES=''
+PREFILTER=''
+HAS_COLUMNS=0
+if [ -n "$SQLITE_BIN" ]; then
+  HAS_COLUMNS=$("$SQLITE_BIN" -readonly "$DB_PATH" "SELECT count(*) = 3 FROM pragma_table_info('session_v2') WHERE name IN ('time_busy', 'time_idle', 'time_suspended');" 2>/dev/null || echo 0)
+fi
+if [ "$HAS_COLUMNS" = 1 ]; then
+  CANDIDATES="cand AS (
+  SELECT id FROM session_v2
+  WHERE time_suspended IS NOT NULL AND COALESCE(parent_id, '') = '' AND COALESCE(time_archived, 0) = 0
+    AND time_busy > COALESCE(time_idle, 0)
+), "
+  PREFILTER="AND m.session_id IN (SELECT id FROM cand)"
+fi
+
 read -r -d '' QUERY <<SQL || true
-WITH live AS (
+WITH ${CANDIDATES}live AS (
   SELECT m.session_id AS session_id, m.seq AS seq,
     json_extract(c.value, '\$.name') AS name,
     json_extract(c.value, '\$.state.status') AS status,
@@ -68,6 +86,7 @@ WITH live AS (
     AND (m.data LIKE '%"status":"running"%' OR m.data LIKE '%"status":"pending"%')
     AND json_extract(c.value, '\$.type') = 'tool'
     AND json_extract(c.value, '\$.state.status') IN ('pending', 'running')
+    $PREFILTER
 )
 SELECT s.id AS id, s.directory AS directory, s.title AS title, s.time_updated AS updated,
   CASE WHEN EXISTS (
