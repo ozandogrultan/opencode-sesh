@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache }`,
   )
   return factory(
     readExtraction,
@@ -990,9 +990,9 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const data = loadDataLayer()
   const entry = { id: "ses_case", title: "Original Title", dir: "/Case", group: "Case" }
   const sqlite = new DatabaseSync(":memory:")
-  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
-  sqlite.prepare("INSERT INTO session_message VALUES (?, 1, 'user', ?)").run(entry.id, JSON.stringify({ text: "Read README.md and Use GitHub" }))
-  const index = await data.buildSearchIndex({}, [entry], undefined, undefined, async (sql, params = []) => sqlite.prepare(sql).all(...params))
+  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT, time_updated INTEGER DEFAULT 0)")
+  sqlite.prepare("INSERT INTO session_message (session_id, seq, type, data) VALUES (?, 1, 'user', ?)").run(entry.id, JSON.stringify({ text: "Read README.md and Use GitHub" }))
+  const index = await data.buildSearchIndex({}, [entry], undefined, undefined, async (sql, params = []) => sqlite.prepare(sql).all(...params), new Map())
   sqlite.close()
   assert.match(data.transcriptMatchExcerpt(index.get(entry.id), entry, "readme"), /README\.md/)
   assert.deepEqual(data.filterPickerEntries([entry], { query: "GITHUB" }, index, new Set(), []), [entry])
@@ -1006,8 +1006,8 @@ function makeApi(sessions, { latency = 0 } = {}) {
 {
   const data = loadDataLayer()
   const sqlite = new DatabaseSync(":memory:")
-  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT)")
-  const add = sqlite.prepare("INSERT INTO session_message VALUES (?, ?, ?, ?)")
+  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT, time_updated INTEGER DEFAULT 0)")
+  const add = sqlite.prepare("INSERT INTO session_message (session_id, seq, type, data) VALUES (?, ?, ?, ?)")
   const j = JSON.stringify
   const total = data.TRANSCRIPT_BATCH * 2 + 3
   const entries = Array.from({ length: total }, (_, n) => ({
@@ -1043,7 +1043,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
   }
 
   const progress = []
-  const index = await data.buildSearchIndex({}, entries, (p) => progress.push({ ...p }), undefined, run)
+  const index = await data.buildSearchIndex({}, entries, (p) => progress.push({ ...p }), undefined, run, new Map())
   for (const [n, entry] of entries.entries()) {
     assert.equal(index.get(entry.id), oracle(entry.id, `${entry.title} ${entry.dir}`), entry.id)
     assert.equal(index.get(entry.id), `Title ${n} /proj question ${n} answer-a ${n} answer-b ${n} tail ${n}`)
@@ -1058,11 +1058,10 @@ function makeApi(sessions, { latency = 0 } = {}) {
   let active = true
   let queries = 0
   const cancelled = await data.buildSearchIndex({ client: { session: { messages() { throw new Error("must not go remote") } } } }, entries, undefined, () => active, async (sql, params) => {
-    queries++
     const rows = await run(sql, params)
-    active = false
+    if (sql.startsWith("WITH msg")) { queries++; active = false }
     return rows
-  })
+  }, new Map())
   assert.equal(queries, 1)
   assert.equal(cancelled.get(entries[0].id), `${entries[0].title} ${entries[0].dir}`, "a cancelled batch must not publish")
 
@@ -1073,14 +1072,88 @@ function makeApi(sessions, { latency = 0 } = {}) {
     remoteIds.push(input.sessionID)
     return { data: [{ parts: [{ type: "text", text: "from remote" }] }] }
   } } } }, entries, undefined, undefined, async (sql, params) => {
-    if (++calls === 2) throw new Error("worker died")
+    if (++calls === 3) throw new Error("worker died")
     return run(sql, params)
-  })
-  assert.equal(calls, 2)
+  }, new Map())
+  assert.equal(calls, 3)
   assert.deepEqual(remoteIds.sort(), entries.slice(data.TRANSCRIPT_BATCH).map((entry) => entry.id))
   assert.match(partial.get(entries[0].id), /answer-a 0/)
   assert.doesNotMatch(partial.get(entries[0].id), /from remote/)
   assert.match(partial.get(entries.at(-1).id), /from remote/)
+  sqlite.close()
+}
+
+// Unchanged sessions reuse in-memory transcript text; changed ones re-extract,
+// vanished ones are pruned, and batches are bounded by payload bytes.
+{
+  const data = loadDataLayer()
+  const sqlite = new DatabaseSync(":memory:")
+  sqlite.exec("CREATE TABLE session_message (session_id TEXT, seq INTEGER, type TEXT, data TEXT, time_updated INTEGER DEFAULT 0)")
+  const add = (sid, seq, text, updated = 1) =>
+    sqlite.prepare("INSERT INTO session_message (session_id, seq, type, data, time_updated) VALUES (?, ?, 'user', ?, ?)").run(sid, seq, JSON.stringify({ text }), updated)
+  const entries = ["ses_c1", "ses_c2", "ses_c3"].map((id, n) => ({ id, title: `T${n}`, dir: "/p", group: "p", updated: 5 }))
+  for (const entry of entries) add(entry.id, 1, `hello ${entry.id}`)
+  const calls = { signature: 0, extract: 0 }
+  const run = async (sql, params = []) => {
+    calls[sql.startsWith("WITH msg") ? "extract" : "signature"]++
+    return sqlite.prepare(sql).all(...params)
+  }
+  const never = { client: { session: { messages() { throw new Error("must stay local") } } } }
+  const cache = new Map()
+
+  const first = await data.buildSearchIndex(never, entries, undefined, undefined, run, cache)
+  assert.deepEqual(calls, { signature: 1, extract: 1 })
+  assert.equal(first.get("ses_c2"), "T1 /p hello ses_c2")
+
+  const progress = []
+  const second = await data.buildSearchIndex(never, entries, (p) => progress.push({ ...p }), undefined, run, cache)
+  assert.deepEqual(calls, { signature: 2, extract: 1 }, "unchanged sessions issue no extraction query")
+  assert.deepEqual([...second], [...first])
+  assert.deepEqual(progress.map((p) => p.indexed), [0, 3, 3])
+  assert.equal(progress.at(-1).complete, true)
+
+  add("ses_c2", 2, "appended", 2)
+  const third = await data.buildSearchIndex(never, entries, undefined, undefined, run, cache)
+  assert.equal(calls.extract, 2)
+  assert.equal(third.get("ses_c2"), "T1 /p hello ses_c2 appended")
+  assert.equal(third.get("ses_c1"), first.get("ses_c1"))
+
+  const bumped = entries.map((entry) => entry.id === "ses_c3" ? { ...entry, updated: 6 } : entry)
+  await data.buildSearchIndex(never, bumped, undefined, undefined, run, cache)
+  assert.equal(calls.extract, 3, "a newer session timestamp re-extracts")
+
+  await data.buildSearchIndex(never, entries.slice(0, 1), undefined, undefined, run, cache)
+  assert.deepEqual([...cache.keys()], ["ses_c1"], "deleted sessions are pruned")
+
+  // Remote fallback results are never cached.
+  const remoteCache = new Map()
+  await data.buildSearchIndex({ client: { session: { async messages() { return { data: [{ parts: [{ type: "text", text: "r" }] }] } } } } },
+    entries, undefined, undefined, async () => { throw new Error("no store") }, remoteCache)
+  assert.equal(remoteCache.size, 0)
+
+  // Cancellation during signature lookup issues no extraction.
+  let active = true
+  const before = calls.extract
+  await data.buildSearchIndex(never, entries, undefined, () => active, async (sql, params) => { active = false; return run(sql, params) }, new Map())
+  assert.equal(calls.extract, before)
+
+  // The plugin-lifetime cache can be cleared.
+  data.transcriptCache.set("ses_x", { sig: "s", text: "t" })
+  data.clearTranscriptCache()
+  assert.equal(data.transcriptCache.size, 0)
+
+  // Batches are bounded by bytes; one oversized session forms its own batch.
+  const big = (n) => "x".repeat(Math.floor(data.TRANSCRIPT_BATCH_BYTES * n))
+  const sizes = [["ses_b1", 0.6], ["ses_b2", 0.6], ["ses_b3", 1.5], ["ses_b4", 0.01], ["ses_b5", 0.01]]
+  const bigEntries = sizes.map(([id]) => ({ id, title: id, dir: "/p", group: "p", updated: 1 }))
+  for (const [id, n] of sizes) add(id, 1, big(n))
+  const batches = []
+  const index = await data.buildSearchIndex(never, bigEntries, undefined, undefined, async (sql, params = []) => {
+    if (sql.startsWith("WITH msg")) batches.push(params)
+    return sqlite.prepare(sql).all(...params)
+  }, new Map())
+  assert.deepEqual(batches, [["ses_b1"], ["ses_b2"], ["ses_b3"], ["ses_b4", "ses_b5"]])
+  assert.equal(index.get("ses_b3").length, "ses_b3 /p ".length + big(1.5).length)
   sqlite.close()
 }
 
