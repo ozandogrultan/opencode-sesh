@@ -245,6 +245,11 @@ the `opencode.json` entry unchanged:
 }
 ```
 
+`showHome` (boolean, default: `true`) controls the session list on the home
+screen. Set both `showSidebar` and `showHome` to `false` for picker-only mode:
+no lists are mounted and nothing polls in the background, while `option+o`,
+`/sesh`, `/sesh-costs`, and `/sesh-needs` keep working.
+
 When the section is visible, click its `search…` box to filter sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,

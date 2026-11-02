@@ -192,6 +192,30 @@ function loadAdapter(ctx) {
   assert.equal(disposed.length, 2, "dispose is idempotent")
 }
 
+// Hiding the home list must not register its component; with the sidebar also
+// hidden only the picker and commands remain (picker-only mode).
+{
+  for (const [options, expected] of [
+    [{ showHome: true }, ["sidebar.content", "home.footer"]],
+    [{ showHome: false }, ["sidebar.content"]],
+    [{ showHome: false, showSidebar: false }, []],
+  ]) {
+    const slots = []
+    const layers = []
+    const api = loadAdapter({
+      options,
+      ui: { slot(slot) { slots.push(slot) } },
+      keymap: { layer(factory) { layers.push(factory()) } },
+    })
+    api.slots.register({ slots: { sidebar_content() {}, home_bottom() { throw new Error("home must not mount during registration") } } })
+    assert.deepEqual(slots.map((slot) => slot.append ?? slot.prepend), expected)
+    api.command.register(() => [{ title: "Sessions", value: "sesh", slash: { name: "sesh" }, onSelect() {} }])
+    api.keymap.registerLayer({ bindings: [{ key: "alt+o", cmd() {} }] })
+    assert.equal(layers[0].commands[0].slash.name, "sesh")
+    assert.equal(layers[1].commands[0].bind, "alt+o")
+  }
+}
+
 // Hiding the session sidebar must not register its component (and therefore
 // its polling or keyboard captures), or disable the home list and commands.
 {
