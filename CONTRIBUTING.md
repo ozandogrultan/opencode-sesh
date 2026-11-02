@@ -25,6 +25,7 @@ bun run test           # builds dist/tui.js, then the fixture-database and chang
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite
 bun run test:tui-home  # OpenTUI render regressions for the home list
+bun run test:tui-worker # real blob Worker + bun:sqlite regressions
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
 ```
