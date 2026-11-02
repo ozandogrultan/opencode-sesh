@@ -2240,7 +2240,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     const budget = Math.max(0, rows - footer - 1 - top())
     // Drop decorative padding/spacing before sessions. Keep the full list in
     // the picker when even a heading and one session cannot fit.
-    const padding = budget >= HOME_SESSION_LIMIT + 2 ? 1 : 0
+    const padding = budget >= 4 ? 1 : 0
     const limit = Math.min(HOME_SESSION_LIMIT, Math.max(0, budget - padding - 1))
     const count = Math.max(1, Math.min(filtered().length, limit))
     return { budget, limit, padding, gap: budget >= 1 + padding + count * 2 ? 1 : 0 }

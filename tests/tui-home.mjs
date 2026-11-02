@@ -171,7 +171,7 @@ try {
 
   // With a one-line prompt the list sits right under the composer and uses the
   // room the terminal offers, up to six rows.
-  for (const [width, height, count] of [[120, 50, 6], [120, 40, 6], [80, 32, 5], [80, 24, 1], [80, 22, 0], [80, 14, 0], [44, 24, 1], [28, 30, 4], [28, 50, 6], [200, 60, 6], [120, 12, 0]]) {
+  for (const [width, height, count] of [[120, 50, 6], [120, 40, 6], [80, 32, 4], [80, 24, 1], [80, 22, 0], [80, 14, 0], [44, 24, 1], [28, 30, 3], [28, 50, 6], [200, 60, 6], [120, 12, 0]]) {
     await resize(width, height)
     setMessage("hi")
     await setup.flush()
@@ -188,7 +188,7 @@ try {
   publish({ entries: entries.map((entry) => ({ ...entry, title: entry.title + " very long title".repeat(10), dir: "/" + "long-directory-name/".repeat(12) })), failed: false })
   await resize(28, 30)
   setMessage("hi")
-  assertLayout(4)
+  assertLayout(3)
   assert.doesNotMatch(frame(), /option\+o for all/)
 
   publish({ entries, failed: false })
