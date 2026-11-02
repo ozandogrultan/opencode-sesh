@@ -3597,7 +3597,7 @@ function createApi(ctx: Plugin.Context) {
             render: cfg.slots.sidebar_content as any,
           }))
         }
-        if (cfg.slots.home_bottom) {
+        if (cfg.slots.home_bottom && ctx.options?.showHome !== false) {
           slotDisposers.push(ctx.ui.slot({
             prepend: "home.footer",
             render: cfg.slots.home_bottom as any,
