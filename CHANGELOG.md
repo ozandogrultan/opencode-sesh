@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4] - 2026-11-06
+
+### Changed
+
+- **tui:** Memoize home list columns and drop the duplicate route check (#46)
+
+### Fixed
+
+- **tui:** Animate running home sessions with the sidebar spinner (#45)
+- **tui:** Disambiguate home directory labels and brighten the search label (#44)
+
 ## [2.3.3] - 2026-11-06
 
 ### Fixed
@@ -594,6 +605,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
+[2.3.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.2...v2.3.3
 [2.3.2]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.0...v2.3.1
