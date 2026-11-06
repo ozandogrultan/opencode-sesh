@@ -83,7 +83,7 @@ const [message, setMessage] = createSignal("first line\nsecond line\nthird line\
 const [dimensions, setDimensions] = createSignal({ width: 80, height: 24 })
 const [pins, setPins] = createSignal({ sessions: [], directories: [] })
 const boxes = {}
-const theme = Object.fromEntries(["text", "textMuted", "warning", "error", "backgroundElement"].map((name) => [name, RGBA.fromHex("#ffffff")]))
+const theme = Object.fromEntries(["text", "textMuted", "warning", "error", "success", "backgroundElement"].map((name) => [name, RGBA.fromHex("#ffffff")]))
 const entries = Array.from({ length: 8 }, (_, index) => ({
   id: `ses_home${index}`, title: `Session ${index}`, dir: "/project", group: "/project", updated: Date.now() - index * 1000,
 }))
@@ -97,6 +97,7 @@ const api = {
   ui: { dialog: { open: false } },
   keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
   route: { current: { name: "home" } },
+  state: { session: { status: (id) => (id === "ses_home1" ? "busy" : "idle") } },
 }
 
 function frame() {
@@ -107,7 +108,7 @@ function assertLayout(expectedCount) {
   const captured = frame()
   const lines = captured.split("\n")
   const recent = lines.findIndex((line) => line.includes("Recent sessions"))
-  const sessionRows = lines.flatMap((line, index) => line.includes("○") ? [index] : [])
+  const sessionRows = lines.flatMap((line, index) => /Session \d/.test(line) ? [index] : [])
   if (expectedCount !== undefined) assert.equal(sessionRows.length, expectedCount, captured)
   if (recent >= 0) {
     assert.ok(recent >= boxes.prompt.y + boxes.prompt.height, "home list must render below the composer\n" + captured)
@@ -136,9 +137,9 @@ function press(key) {
 
 async function search() {
   const lines = frame().split("\n")
-  const y = lines.findIndex((line) => line.includes("search…"))
+  const y = lines.findIndex((line) => line.includes("option+o all"))
   assert.ok(y >= 0, frame())
-  await setup.mockMouse.click(lines[y].indexOf("search…"), y)
+  await setup.mockMouse.click(lines[y].indexOf("option+o all"), y)
   await setup.flush()
 }
 
@@ -189,7 +190,47 @@ try {
   await resize(28, 30)
   setMessage("hi")
   assertLayout(3)
-  assert.doesNotMatch(frame(), /option\+o for all/)
+
+  // Age survives long directories; columns line up across rows.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: "/" + "long-directory-name/".repeat(12) + (index % 2 ? "data-science-DIAL-2764" : "x") })), failed: false })
+  for (const width of [120, 80, 44, 28]) {
+    await resize(width, 40)
+    setMessage("hi")
+    await setup.flush()
+    const rows = frame().split("\n").filter((line) => /Session \d/.test(line))
+    assert.ok(rows.length > 1, frame())
+    for (const row of rows) assert.match(row.trimEnd(), /\s(now|\d+[mhd])$/, "age must always render\n" + frame())
+    assert.equal(new Set(rows.map((row) => row.trimEnd().length)).size, 1, "age column must right-align\n" + frame())
+    if (width <= 28) {
+      assert.doesNotMatch(rows.join("\n"), /\bx\b|data-/, "narrow lists drop the directory column instead of starving titles\n" + frame())
+      assert.doesNotMatch(frame(), /option\+/, "header hint must be dropped when it cannot fit\n" + frame())
+    }
+    if (width >= 80) {
+      assert.equal(new Set(rows.map((row) => row.search(/x\s|data-science-DIAL-2764/) >= 0 ? 1 : 0)).size, 1, frame())
+      const dirCols = rows.map((row) => row.search(/\S+\s+(now|\d+[mhd])\s*$/))
+      assert.equal(new Set(dirCols).size, 1, "directory column must align\n" + frame())
+    }
+  }
+  const markerLines = frame().split("\n")
+  const busy = markerLines.find((line) => line.includes("Session 1"))
+  assert.match(busy, /^\s*●/, "running session gets a filled marker\n" + frame())
+  assert.doesNotMatch(markerLines.find((line) => line.includes("Session 0")), /●/)
+  const listLeft = markerLines.find((line) => line.includes("Recent sessions")).indexOf("Recent")
+  const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
+  assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
+
+  // Header hint right-aligns with the age column; $HOME shows as ~.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: index === 0 ? process.env.HOME : entry.dir })), failed: false })
+  await resize(100, 40)
+  setMessage("hi")
+  await setup.flush()
+  {
+    const lines = frame().split("\n")
+    const header = lines.find((line) => line.includes("Recent sessions")).trimEnd()
+    const row = lines.find((line) => line.includes("Session 0")).trimEnd()
+    assert.equal(header.length, row.length, "header hint must end at the age column\n" + frame())
+    assert.match(row, /\s~\s+now$/, "a $HOME directory shows as ~\n" + frame())
+  }
 
   publish({ entries, failed: false })
   await resize(80, 24)

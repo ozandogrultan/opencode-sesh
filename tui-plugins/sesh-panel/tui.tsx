@@ -217,7 +217,11 @@ function truncate(text: string, width: number): string {
 // so cap it a bit lower to guarantee separation.
 const SIDEBAR_TITLE_WIDTH = 27
 const SIDEBAR_GROUP_WIDTH = 30
-const HOME_TITLE_WIDTH = 30
+const HOME_TITLE_MIN = 20
+const HOME_DIR_MIN = 8
+const HOME_HINT_MIN_WIDTH = 32
+const HOME_DIR_MAX = 22
+const HOME_AGE_WIDTH = 4
 
 // The sidebar lists every session (newest first, pins ahead) and fills
 // whatever vertical space it gets: overflow scrolls inside the stretched
@@ -2233,7 +2237,28 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
   // Unmeasured (before the first frame) reads as no room.
   const [top, setTop] = createSignal(dimensions().height)
-  let anchor: { y: number } | undefined
+  const [listWidth, setListWidth] = createSignal(Math.min(75, dimensions().width))
+  let anchor: { y: number; width: number } | undefined
+  // Fixed columns: marker, title (flexes), directory (last segment), age.
+  const columns = () => {
+    const width = Math.max(1, listWidth())
+    const age = HOME_AGE_WIDTH
+    const wanted = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
+    const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
+    // A starved title is worse than no directory: drop the column instead.
+    const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
+    const pending = pendingDelete() ? Math.max(dir, 14) : dir
+    return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
+  }
+  const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${home && entry.dir === home ? "~" : shortDir(entry.dir, home)}`
+  // Running state comes from the host's live session store: no polling here.
+  const isRunning = (id: string): boolean => {
+    try {
+      return sidebarMarker(false, props.api.state.session.status(id)) === "running"
+    } catch {
+      return false
+    }
+  }
   const layout = createMemo(() => {
     const rows = dimensions().height
     const footer = dimensions().width >= 44 && rows >= 14 ? HOME_FOOTER_ROWS : 0
@@ -2255,10 +2280,12 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
 
   return (
     <box
-      ref={(box: { y: number }) => { anchor = box }}
+      ref={(box: { y: number; width: number }) => { anchor = box }}
       renderAfter={() => {
         const y = anchor?.y
         if (y !== undefined && y !== top()) queueMicrotask(() => setTop(y))
+        const width = anchor?.width
+        if (width && width !== listWidth()) queueMicrotask(() => setListWidth(width))
       }}
       position="absolute"
       top={1}
@@ -2266,9 +2293,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       right={0}
       maxHeight={layout().budget}
       overflow="hidden"
-      alignItems="center"
     >
-      <box visible={layout().limit > 0 && props.api.route.current.name === "home"} flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={layout().padding} gap={layout().gap}>
+      <box visible={layout().limit > 0 && props.api.route.current.name === "home"} flexDirection="column" width="100%" paddingTop={layout().padding} gap={layout().gap}>
         <Show
           when={entries().length > 0}
           fallback={
@@ -2281,33 +2307,31 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         >
           <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between" gap={2} overflow="hidden">
             <box flexDirection="row" gap={1} flexShrink={0}>
-              <text wrapMode="none" style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <Show when={dimensions().width >= 68}>
-                <text style={{ fg: theme().textMuted }}>· option+o for all</text>
-              </Show>
+              <text wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>Recent sessions</text>
             </box>
+            <Show when={listWidth() >= HOME_HINT_MIN_WIDTH || query() || searching()}>
             <box
               flexDirection="row"
               flexShrink={1}
               minWidth={0}
               gap={1}
               paddingLeft={1}
-              paddingRight={1}
               backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
               onMouseDown={(event: { stopPropagation: () => void }) => {
                 event.stopPropagation()
                 setSearching(true)
               }}
             >
-              <box width={24} flexShrink={1} minWidth={0}>
+              <box width={query() || searching() ? 24 : 12} flexShrink={1} minWidth={0}>
                 <text
                   flexGrow={1}
                   flexShrink={1}
                   overflow="hidden"
                   wrapMode="none"
+                  attributes={query() ? undefined : TextAttributes.DIM}
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
-                  {query() || (searching() ? "" : "search…")}
+                  {query() || (searching() ? "" : "option+o all")}
                   {searching() ? "▏" : ""}
                 </text>
               </box>
@@ -2317,6 +2341,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
               </Show>
             </box>
+            </Show>
           </box>
           <For each={visible()}>
             {(entry) => (
@@ -2335,25 +2360,31 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                     : props.api.route.navigate("session", { sessionID: entry.id })
                 }
               >
-                <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                  ○
+                <text width={1} flexShrink={0} style={{ fg: theme().success }}>
+                  {isRunning(entry.id) ? "●" : " "}
                 </text>
-                <Highlighted
-                  text={`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${truncate(entry.title, HOME_TITLE_WIDTH - (props.pins().sessions.includes(entry.id) ? 2 : 0))}`}
-                  query={query()}
-                  color={theme().text}
-                  matchColor={theme().warning}
-                />
-                <text
-                  flexShrink={1}
-                  maxWidth={Math.max(0, Math.floor((Math.min(72, dimensions().width) - 4) / 2))}
-                  wrapMode="none"
-                  overflow="hidden"
-                  style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
-                >
-                  {pendingDelete() === entry.id
-                    ? "option+d again"
-                    : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
+                <box width={columns().title} flexShrink={0} overflow="hidden">
+                  <Highlighted
+                    text={truncate(`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${entry.title}`, columns().title)}
+                    query={query()}
+                    color={theme().text}
+                    matchColor={theme().warning}
+                  />
+                </box>
+                <Show when={columns().dir > 0}>
+                  <text
+                    width={columns().dir}
+                    flexShrink={0}
+                    wrapMode="none"
+                    overflow="hidden"
+                    attributes={pendingDelete() === entry.id ? undefined : TextAttributes.DIM}
+                    style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
+                  >
+                    {truncate(pendingDelete() === entry.id ? "option+d again" : rowDir(entry), columns().dir)}
+                  </text>
+                </Show>
+                <text width={columns().age} flexShrink={0} wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>
+                  {ago(entry.updated).padStart(columns().age)}
                 </text>
               </box>
             )}
