@@ -273,6 +273,11 @@ when opencode exits, the picker reopens with the query preserved.
   same row. The section lists every session with no row cap
   (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the
   stretched section.
+- **Hover shortcuts yield to typing.** Sidebar and home rows bind Option-P/D/S/R
+  (and `/` in the sidebar) only while hovered; any keypress no keymap layer
+  consumed (composer typing) drops the hover (`releaseHoverOnTyping`), and
+  pointer movement over a row restores it. A resting pointer must never shadow
+  composer keys such as Option-D (delete word).
 - **Delete in the TUI is two-step.** The first `option+d` arms `pendingDelete`,
   the second (or `y`, or Enter) commits the armed row
   wherever the pointer or cursor is, and `n`/Esc (or a timeout)
