@@ -2329,12 +2329,12 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     const rows = dimensions().height
     const footer = dimensions().width >= 44 && rows >= 14 ? HOME_FOOTER_ROWS : 0
     const budget = Math.max(0, rows - footer - 1 - top())
-    // Drop decorative padding/spacing before sessions. Keep the full list in
-    // the picker when even a heading and one session cannot fit.
+    // Rows stay single-spaced whatever the match count, so filtering never
+    // reflows the list. Drop the top padding before sessions; keep the full
+    // list in the picker when even a heading and one session cannot fit.
     const padding = budget >= 4 ? 1 : 0
     const limit = Math.min(HOME_SESSION_LIMIT, Math.max(0, budget - padding - 1))
-    const count = Math.max(1, Math.min(filtered().length, limit))
-    return { budget, limit, padding, gap: budget >= 1 + padding + count * 2 ? 1 : 0 }
+    return { budget, limit, padding }
   })
   const visible = createMemo(() => filtered().slice(0, layout().limit))
   const dirLabels = createMemo(() => homeDirLabels(visible().map((entry) => entry.dir), home))
@@ -2376,7 +2376,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       maxHeight={layout().budget}
       overflow="hidden"
     >
-      <box visible={layout().limit > 0} flexDirection="column" width="100%" paddingTop={layout().padding} gap={layout().gap}>
+      <box visible={layout().limit > 0} flexDirection="column" width="100%" paddingTop={layout().padding}>
         <Show
           when={entries().length > 0}
           fallback={

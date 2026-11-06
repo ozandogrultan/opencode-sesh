@@ -311,6 +311,15 @@ try {
     assert.match(row, /\s~\s+now$/, "a $HOME directory shows as ~\n" + frame())
   }
 
+  // Few rows in a tall terminal (as after filtering) stay single-spaced.
+  publish({ entries: entries.slice(0, 3), failed: false })
+  await setup.flush()
+  {
+    const rows = frame().split("\n").flatMap((line, index) => /Session \d/.test(line) ? [index] : [])
+    assert.equal(rows.length, 3, frame())
+    assert.deepEqual(rows, [rows[0], rows[0] + 1, rows[0] + 2], "rows must not spread out when fewer match\n" + frame())
+  }
+
   publish({ entries, failed: false })
   await resize(80, 24)
   setMessage("hi")
