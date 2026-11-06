@@ -2360,8 +2360,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                     : props.api.route.navigate("session", { sessionID: entry.id })
                 }
               >
-                <text width={1} flexShrink={0} style={{ fg: theme().success }}>
-                  {isRunning(entry.id) ? "●" : " "}
+                <text width={1} flexShrink={0} style={{ fg: isRunning(entry.id) ? theme().success : theme().textMuted }}>
+                  {isRunning(entry.id) ? "●" : "○"}
                 </text>
                 <box width={columns().title} flexShrink={0} overflow="hidden">
                   <Highlighted
