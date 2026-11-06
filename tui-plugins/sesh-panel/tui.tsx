@@ -237,6 +237,22 @@ const HOME_HINT = " (option+o all)"
 const HOME_SEARCH_LABEL = "search…"
 const HOME_DIR_MAX = 23
 const HOME_AGE_WIDTH = 4
+const HOME_ARMED_LABEL = "option+d again"
+const HOME_ARMED_SHORT = "delete?"
+// An armed row must still say which session it deletes.
+const HOME_ARMED_TITLE_MIN = 10
+const HOME_NO_MATCH = "No title or directory matches · option+o to search transcripts"
+const HOME_NO_MATCH_SHORT = "No matches · option+o"
+
+function armedLabel(width: number): string {
+  return truncate(width > HOME_ARMED_LABEL.length ? HOME_ARMED_LABEL : HOME_ARMED_SHORT, width)
+}
+
+// Typing appends, so a query wider than its box shows its end.
+function queryTail(query: string, width: number): string {
+  if (width <= 0) return ""
+  return query.length <= width ? query : "…" + query.slice(query.length - width + 1)
+}
 
 // The sidebar lists every session (newest first, pins ahead) and fills
 // whatever vertical space it gets: overflow scrolls inside the stretched
@@ -2350,7 +2366,12 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     // A starved title is worse than no directory: drop the column instead.
     const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
     // The armed-delete prompt may not push the age out of a narrow list.
-    const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
+    // The armed prompt keeps the age and HOME_ARMED_TITLE_MIN title columns,
+    // never shrinking below the short label.
+    const free = width - 1 - age - 3
+    const pending = pendingDelete()
+      ? Math.max(0, Math.min(free - 1, Math.max(HOME_ARMED_SHORT.length, Math.min(Math.max(dir, HOME_ARMED_LABEL.length + 1), free - HOME_ARMED_TITLE_MIN))))
+      : dir
     return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
   })
   createEffect(() => {
@@ -2411,7 +2432,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                   wrapMode="none"
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
-                  {query() || (searching() ? "" : HOME_SEARCH_LABEL)}
+                  {query() ? queryTail(query(), searchInner() - (searching() ? 1 : 0)) : searching() ? "" : HOME_SEARCH_LABEL}
                   {searching() ? "▏" : ""}
                 </text>
               </box>
@@ -2445,7 +2466,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
                 <box width={columns().title} flexShrink={0} overflow="hidden">
                   <Highlighted
-                    text={truncate(`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${entry.title}`, columns().title - 1)}
+                    text={truncate(`${props.pins().sessions.includes(entry.id) || (columns().dir === 0 && props.pins().directories.includes(entry.dir)) ? "★ " : ""}${entry.title}`, columns().title - 1)}
                     query={query()}
                     color={theme().text}
                     matchColor={theme().warning}
@@ -2460,7 +2481,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                     attributes={pendingDelete() === entry.id ? undefined : TextAttributes.DIM}
                     style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
                   >
-                    {pendingDelete() === entry.id ? truncate("option+d again", columns().dir) : truncate(rowDir(entry), columns().dir - 1)}
+                    {pendingDelete() === entry.id ? armedLabel(columns().dir) : truncate(rowDir(entry), columns().dir - 1)}
                   </text>
                 </Show>
                 <text width={columns().age} flexShrink={0} wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>
@@ -2470,7 +2491,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
             )}
           </For>
           <Show when={visible().length === 0}>
-              <text height={1} flexShrink={0} wrapMode="none" overflow="hidden" style={{ fg: theme().textMuted }}>No title or directory matches · option+o to search transcripts</text>
+              <text height={1} flexShrink={0} wrapMode="none" overflow="hidden" style={{ fg: theme().textMuted }}>{listWidth() >= HOME_NO_MATCH.length ? HOME_NO_MATCH : HOME_NO_MATCH_SHORT}</text>
           </Show>
         </Show>
       </box>
