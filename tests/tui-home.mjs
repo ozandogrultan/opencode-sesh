@@ -250,6 +250,14 @@ try {
   const idle = markerLines.find((line) => line.includes("Session 0"))
   assert.match(idle, /^\s*○/, "idle session gets a hollow marker\n" + frame())
   assert.doesNotMatch(idle, /●/)
+  // A session running in another OpenCode process reaches the list only
+  // through the polled DB set; it must spin like a live one.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: "/" + "long-directory-name/".repeat(12) + (index % 2 ? "data-science-DIAL-2764" : "x") })), running: new Set(["ses_home0"]), failed: false })
+  await setup.flush()
+  assert.match(frame().split("\n").find((line) => line.includes("Session 0")), /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, "polled running session spins\n" + frame())
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: "/" + "long-directory-name/".repeat(12) + (index % 2 ? "data-science-DIAL-2764" : "x") })), failed: false })
+  await setup.flush()
+  assert.match(frame().split("\n").find((line) => line.includes("Session 0")), /^\s*○/, "a session leaving the polled set stops spinning\n" + frame())
   const listLeft = markerLines.find((line) => line.includes("Recent")).indexOf("Recent")
   const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
   assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
