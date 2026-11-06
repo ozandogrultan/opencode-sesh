@@ -1,6 +1,6 @@
 {
   "name": "opencode-sesh",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "OpenCode session browser: search, preview, and resume every session across every project from the terminal or TUI.",
   "type": "module",
   "license": "MIT",
