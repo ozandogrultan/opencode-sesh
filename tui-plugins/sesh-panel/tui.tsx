@@ -2247,7 +2247,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
     // A starved title is worse than no directory: drop the column instead.
     const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
-    const pending = pendingDelete() ? Math.max(dir, 14) : dir
+    // The armed-delete prompt may not push the age out of a narrow list.
+    const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
     return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
   }
   const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${home && entry.dir === home ? "~" : shortDir(entry.dir, home)}`

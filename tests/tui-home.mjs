@@ -221,6 +221,25 @@ try {
   const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
   assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
 
+  // Arming a delete in a 22-column list must keep the age visible.
+  publish({ entries, failed: false })
+  await resize(26, 40)
+  setMessage("hi")
+  await setup.flush()
+  {
+    const lines = frame().split("\n")
+    const y = lines.findIndex((line) => line.includes("Session 0"))
+    await setup.mockMouse.moveTo(lines[y].indexOf("Session 0"), y)
+    await setup.flush()
+    press("alt+d")
+    await setup.flush()
+    const armed = frame().split("\n").find((line) => line.includes("option+d"))
+    assert.ok(armed, frame())
+    assert.match(armed.trimEnd(), /\s(now|\d+[mhd])$/, "age must survive an armed delete in a narrow list\n" + frame())
+    press("escape")
+    await setup.flush()
+  }
+
   // Header hint right-aligns with the age column; $HOME shows as ~.
   publish({ entries: entries.map((entry, index) => ({ ...entry, dir: index === 0 ? process.env.HOME : entry.dir })), failed: false })
   await resize(100, 40)
