@@ -291,12 +291,34 @@ try {
     await setup.flush()
     press("alt+d")
     await setup.flush()
-    const armed = frame().split("\n").find((line) => line.includes("option+d"))
+    const armed = frame().split("\n").find((line) => /option\+d|delete\?/.test(line))
     assert.ok(armed, frame())
     assert.match(armed.trimEnd(), /\s(now|\d+[mhd])$/, "age must survive an armed delete in a narrow list\n" + frame())
+    assert.match(armed, /○ Sess/, "an armed row must still show which session it deletes\n" + frame())
     press("escape")
     await setup.flush()
   }
+
+  // Narrow list: a pinned directory marks the title once its column is hidden,
+  // a long query shows its end, and the no-match notice fits.
+  setPins({ sessions: [], directories: ["/project"] })
+  await setup.flush()
+  for (const row of frame().split("\n").filter((line) => /Sess/.test(line))) {
+    assert.match(row, /★/, "every pinned-directory row needs a marker, in the directory column or the title\n" + frame())
+  }
+  setPins({ sessions: [], directories: [] })
+  await setup.flush()
+  await search()
+  for (const key of "abcdefghijklmnopqrstuvwxyz") press(key)
+  await setup.flush()
+  {
+    const header = frame().split("\n").find((line) => line.includes("Recent"))
+    assert.match(header, /…\S*xyz/, "a long query must show its last characters\n" + frame())
+    assert.match(frame(), /No matches · option\+o/, "no-match notice must fit a narrow list\n" + frame())
+  }
+  for (let i = 0; i < 26; i++) press("backspace")
+  press("escape")
+  await setup.flush()
 
   // Header hint right-aligns with the age column; $HOME shows as ~.
   publish({ entries: entries.map((entry, index) => ({ ...entry, dir: index === 0 ? process.env.HOME : entry.dir })), failed: false })
