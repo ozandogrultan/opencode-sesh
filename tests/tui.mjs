@@ -1018,8 +1018,11 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(
     sidebar,
     /releaseHoverOnTyping\(props\.api\.renderer, \(\) => setHovered\(undefined\)\)/,
-    "composer typing must release sidebar hover shortcuts (Option-D, /) back to the composer",
+    "composer typing must release sidebar hover shortcuts back to the composer",
   )
+  const hover = sidebar.slice(sidebar.indexOf("const hoveredEntry"), sidebar.indexOf("// Keyboard navigation is opt-in"))
+  assert.doesNotMatch(hover, /key: "\/"/, "hovering a sidebar row must not capture slash commands")
+  assert.match(hover, /key: "alt\+d"/, "Option-D remains available while hovering a sidebar row")
   assert.match(sidebar, /onMouseMove=\{\(\) => setHovered\(row\.entry\.id\)\}/)
 }
 

@@ -1832,12 +1832,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         },
         { key: "alt+s", desc: "Pin session", preventDefault: true, cmd: () => props.onTogglePin("sessions", entry.id) },
         { key: "alt+r", desc: "Pin directory", preventDefault: true, cmd: () => props.onTogglePin("directories", entry.dir) },
-        {
-          key: "/",
-          desc: "Search sessions",
-          preventDefault: true,
-          cmd: () => setSearching(true),
-        },
       ],
     })
   })

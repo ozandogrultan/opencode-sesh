@@ -291,7 +291,8 @@ when opencode exits, the picker reopens with the query preserved.
   `Highlighted` with `fit` to reserve a blank cell and show an ellipsis at
   their measured width rather than hard-clipping against the age column.
 - **Hover shortcuts yield to typing.** Sidebar and home rows bind Option-P/D/S/R
-  (and `/` in the sidebar) only while hovered; any keypress no keymap layer
+  only while hovered; `/` is never a hover shortcut (click the search box to
+  search sessions). Any keypress no keymap layer
   consumed (composer typing) drops the hover (`releaseHoverOnTyping`), and
   pointer movement over a row restores it. A resting pointer must never shadow
   composer keys such as Option-D (delete word).
