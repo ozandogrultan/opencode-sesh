@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.8] - 2026-11-06
+
+### Fixed
+
+- **tui:** Preserve slash commands while hovering sidebar sessions (#52)
+
 ## [2.3.7] - 2026-11-06
 
 ### Fixed
@@ -624,6 +630,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
+[2.3.8]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.7...v2.3.8
 [2.3.7]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.6...v2.3.7
 [2.3.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.4...v2.3.5
