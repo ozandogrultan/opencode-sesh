@@ -97,7 +97,7 @@ if sys.argv[1:3] == ['session', 'delete']:
     def add_session(self, name, updated):
         with sqlite3.connect(self.db) as db:
             db.execute(
-                "INSERT INTO session_v2 VALUES (?, ?, ?, 1, ?, NULL, NULL)",
+                "INSERT INTO session_v2 (id, directory, title, time_created, time_updated) VALUES (?, ?, ?, 1, ?)",
                 (
                     "ses_" + name,
                     str(self.root / "project"),
