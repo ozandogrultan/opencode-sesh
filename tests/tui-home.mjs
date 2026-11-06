@@ -47,7 +47,7 @@ export function HomeFixture(props) {
             <box height={1} flexShrink={0} />
             <box width="100%" height={1} flexDirection="row" justifyContent="space-between" gap={2}>
               <text height={1} wrapMode="none">project · tab agents · ctrl+p commands</text>
-              <HomeSessions api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
+              <HomeBottom api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
             </box>
           </box>
         </box>
@@ -88,6 +88,8 @@ const entries = Array.from({ length: 8 }, (_, index) => ({
   id: `ses_home${index}`, title: `Session ${index}`, dir: "/project", group: "/project", updated: Date.now() - index * 1000,
 }))
 const layers = new Set()
+const [routeName, setRouteName] = createSignal("home")
+let subscriptions = 0
 const resizeListeners = setup.renderer.listenerCount("resize")
 let publish
 let pollDisposed = false
@@ -96,7 +98,7 @@ const api = {
   theme: { current: theme },
   ui: { dialog: { open: false } },
   keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
-  route: { current: { name: "home" } },
+  route: { get current() { return { name: routeName() } } },
   state: { session: { status: (id) => (id === "ses_home1" ? "busy" : "idle") } },
 }
 
@@ -146,6 +148,7 @@ async function search() {
 try {
   await render(() => HomeFixture({ api, boxes, message, dimensions, pins, poll(callback) {
     publish = callback
+    subscriptions += 1
     callback({ entries, failed: false })
     return () => { pollDisposed = true }
   } }), setup.renderer)
@@ -220,6 +223,23 @@ try {
   const listLeft = markerLines.find((line) => line.includes("Recent sessions")).indexOf("Recent")
   const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
   assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
+
+  // Leaving home unmounts the list: no polling subscription on session routes.
+  await resize(80, 40)
+  assert.equal(subscriptions, 1)
+  pollDisposed = false
+  setRouteName("session")
+  await setup.flush()
+  assert.ok(pollDisposed, "session route must dispose the home poll subscription")
+  assert.equal(layers.size, 0)
+  assert.doesNotMatch(frame(), /Recent sessions/)
+  setRouteName("home")
+  await setup.flush()
+  await setup.flush()
+  await setup.flush()
+  assert.equal(subscriptions, 2, "returning home resubscribes")
+  assert.match(frame(), /Recent sessions/)
+  pollDisposed = false
 
   // Arming a delete in a 22-column list must keep the age visible.
   publish({ entries, failed: false })

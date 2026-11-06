@@ -2399,6 +2399,15 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   )
 }
 
+// prompt.footer also mounts in session composers: only home subscribes to polling.
+function HomeBottom(props: { api: TuiPluginApi } & PinProps) {
+  return (
+    <Show when={props.api.route.current.name === "home"}>
+      <HomeSessions api={props.api} pins={props.pins} onTogglePin={props.onTogglePin} poll={props.poll} />
+    </Show>
+  )
+}
+
 const tui: TuiPlugin = async (api) => {
   const [pins, setPins] = createSignal<Pins>(emptyPins())
   // Keep exploratory context while the plugin remains loaded; a full OpenCode
@@ -2433,7 +2442,7 @@ const tui: TuiPlugin = async (api) => {
         return <SidebarSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
       home_bottom() {
-        return <HomeSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
+        return <HomeBottom api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
     },
   })
