@@ -337,6 +337,16 @@ try {
   const rowY = rowLines.findIndex((line) => line.includes("★ Session 7"))
   await setup.mockMouse.moveTo(rowLines[rowY].indexOf("★ Session 7"), rowY)
   await setup.flush()
+  const hoverBound = () => [...layers].some((layer) => layer.bindings.some((binding) => binding.key === "alt+d"))
+  assert.ok(hoverBound(), "hovering a row binds its shortcuts")
+  // Typing into the composer with the pointer resting on a row must hand
+  // composer shortcuts such as Option-D (delete word) back to the composer.
+  await setup.mockInput.typeText("x")
+  await setup.flush()
+  assert.ok(!hoverBound(), "an unhandled keypress must release hover shortcuts")
+  await setup.mockMouse.moveTo(rowLines[rowY].indexOf("★ Session 7") + 1, rowY)
+  await setup.flush()
+  assert.ok(hoverBound(), "moving the pointer over the row restores hover")
   press("alt+d")
   await setup.flush()
   assert.match(frame(), /option\+d again/)

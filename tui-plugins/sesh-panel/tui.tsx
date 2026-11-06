@@ -282,6 +282,17 @@ type SidebarMarker = "current" | "running" | "idle"
 const LEFT_BUTTON = 0
 const RIGHT_BUTTON = 2
 
+// Keymap layers consume their keys before this listener runs, so an unhandled
+// keypress is composer typing: drop hover shortcuts so a pointer resting on a
+// row stops shadowing composer keys such as Option-D.
+function releaseHoverOnTyping(renderer: TuiPluginApi["renderer"], release: () => void) {
+  const listener = (event: { defaultPrevented: boolean }) => {
+    if (!event.defaultPrevented) release()
+  }
+  renderer.keyInput.on("keypress", listener)
+  onCleanup(() => renderer.keyInput.off("keypress", listener))
+}
+
 function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
   if (!SESSION_ID_PATTERN.test(entry.id)) {
     api.ui.toast({ message: "Invalid session ID", variant: "error" })
@@ -1649,6 +1660,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   onMount(() => {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
+    releaseHoverOnTyping(props.api.renderer, () => setHovered(undefined))
     const closeMenu = () => menu.close()
     props.api.renderer.on("resize", closeMenu)
     onCleanup(() => {
@@ -1916,6 +1928,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                     if (index >= 0) setCursor(index)
                   }
                 }}
+                onMouseMove={() => setHovered(row.entry.id)}
                 onMouseOut={() => setHovered(undefined)}
                 onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
                   if (event.button === RIGHT_BUTTON) {
@@ -2162,6 +2175,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   onMount(() => {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
+    releaseHoverOnTyping(props.api.renderer, () => setHovered(undefined))
     const resize = () => setDimensions({ width: props.api.renderer.width, height: props.api.renderer.height })
     props.api.renderer.on("resize", resize)
     onCleanup(() => {
@@ -2362,6 +2376,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 gap={1}
                 backgroundColor={entry.id === hovered() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
                 onMouseOver={() => setHovered(entry.id)}
+                onMouseMove={() => setHovered(entry.id)}
                 onMouseOut={() => setHovered(undefined)}
                 onMouseDown={(event: { button?: number }) =>
                   event.button === RIGHT_BUTTON
@@ -3618,6 +3633,9 @@ function createApi(ctx: Plugin.Context) {
       },
       get currentFocusedEditor() {
         return ctx.renderer.currentFocusedEditor
+      },
+      get keyInput() {
+        return ctx.renderer.keyInput
       },
       get nativeSession() {
         return (ctx.renderer as any)?.nativeSession

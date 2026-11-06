@@ -957,6 +957,12 @@ function makeApi(sessions, { latency = 0 } = {}) {
   )
   assert.doesNotMatch(sidebar, /menu\.activate\(index\(\)\)/)
   assert.match(sidebar, /onCleanup\(\(\) => \{[\s\S]{0,120}menu\.close\(\)/)
+  assert.match(
+    sidebar,
+    /releaseHoverOnTyping\(props\.api\.renderer, \(\) => setHovered\(undefined\)\)/,
+    "composer typing must release sidebar hover shortcuts (Option-D, /) back to the composer",
+  )
+  assert.match(sidebar, /onMouseMove=\{\(\) => setHovered\(row\.entry\.id\)\}/)
 }
 
 // Transcript preview esc label allows closing on click
