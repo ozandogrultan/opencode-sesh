@@ -181,7 +181,11 @@ when opencode exits, the picker reopens with the query preserved.
   at 22 — distinct visible directories sharing one also show their parent (`homeDirLabels`) —, right-aligned age that is never dropped); the directory shrinks first,
   and the list spans the composer's width, flush with its left edge.
   Row markers alone signal session state: a running agent animates a loading
-  spinner marker, the open session shows its own ●, and every other idle row
+  spinner marker (`createRunningState`: the host's live status decides a
+  session this process ran until the polled DB set agrees it is idle; every
+  other session uses that set — `queryRunningIds`, root sessions in flight with
+  activity within `STUCK_AFTER_MS`, run on every poll for both lists because it
+  touches only in-flight sessions), the open session shows its own ●, and every other idle row
   stays neutral (polled periodically); Option-P previews
   a row and option+d deletes one (armed, then confirmed). Right-clicking a
   sidebar row opens an action context menu (open, preview, cmux workspace when

@@ -682,13 +682,13 @@ function createDbClient(createWorker: () => any = createDbWorker, timeoutMs = DB
 // dispose: a reload reuses this module instance.
 let dbClient = createDbClient()
 
-type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; failed: boolean }
+type SessionSnapshot = { entries: Entry[]; waiting: Map<string, string>; running: Set<string>; failed: boolean }
 
 function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
   // Listener -> whether it reads `snapshot.waiting`. The needs-input query
   // costs worker CPU on every poll, so it only runs while such a listener exists.
   const listeners = new Map<(snapshot: SessionSnapshot) => void, boolean>()
-  let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), failed: false }
+  let snapshot: SessionSnapshot = { entries: [], waiting: new Map(), running: new Set(), failed: false }
   let clock: ReturnType<typeof setInterval> | undefined
   let inFlight: Promise<void> | undefined
   // Whether `snapshot.waiting` came from a poll that ran the query; a poll
@@ -712,6 +712,14 @@ function createSessionPoll(api: TuiPluginApi, refreshPins: () => void) {
         snapshot = { ...snapshot, entries: unchanged ? snapshot.entries : entries, failed: false }
       } catch {
         snapshot = { ...snapshot, failed: true }
+      }
+      if (!active()) return
+      try {
+        const running = await queryRunningIds(dbClient.run)
+        const same = running.size === snapshot.running.size && [...running].every((id) => snapshot.running.has(id))
+        if (!same) snapshot = { ...snapshot, running }
+      } catch {
+        // Keep the previous running set when the local store is unavailable.
       }
       if (!active()) return
       if (wantsWaiting()) {
@@ -864,6 +872,44 @@ async function queryWaitingIds(run: DbRun): Promise<Map<string, string>> {
     }
   }
   return out
+}
+
+// Root sessions with a turn in flight and activity (in them or their direct
+// children) within STUCK_AFTER_MS. Covers sessions run by other OpenCode
+// processes, which the host's live store never sees; a crashed run stops
+// counting once it goes quiet, where the needs-input heuristic takes over.
+const RUNNING_SQL = (activeAfter: number) => `WITH cand AS (
+  SELECT id, time_busy FROM session_v2
+  WHERE parent_id IS NULL AND COALESCE(time_archived, 0) = 0
+    AND time_busy > COALESCE(time_idle, 0)
+)
+SELECT c.id AS id FROM cand c
+WHERE c.time_busy >= ${activeAfter} OR NOT ${NO_RECENT_ACTIVITY("c.id", activeAfter)}`
+
+async function queryRunningIds(run: DbRun): Promise<Set<string>> {
+  if (!(await hasInFlightColumns(run))) return new Set()
+  const rows = (await run(RUNNING_SQL(Date.now() - STUCK_AFTER_MS))) as { id: unknown }[]
+  return new Set(rows.flatMap((row) => (typeof row?.id === "string" && SESSION_ID_PATTERN.test(row.id) ? [row.id] : [])))
+}
+
+// The live store is authoritative (and instant) for a session this process ran
+// until the polled DB set also reports it idle; the DB set covers the rest,
+// including a session later resumed in another process.
+function createRunningState(status: (id: string) => string | undefined, polled: () => Set<string>) {
+  const ownedHere = new Set<string>()
+  return (id: string): boolean => {
+    let live: string | undefined
+    try {
+      live = status(id)
+    } catch {}
+    if (sidebarMarker(false, live) === "running") {
+      ownedHere.add(id)
+      return true
+    }
+    const inDb = polled().has(id)
+    if (!inDb) ownedHere.delete(id)
+    return inDb && !ownedHere.has(id)
+  }
 }
 
 type WaitingDetail = { reason: "question" | "stuck"; since?: number }
@@ -1349,6 +1395,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [cursor, setCursor] = createSignal(0)
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [waiting, setWaiting] = createSignal<Map<string, string>>(new Map())
+  const [polledRunning, setPolledRunning] = createSignal<Set<string>>(new Set())
+  const isRunning = createRunningState((id) => props.api.state.session.status(id), polledRunning)
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
   const currentID = createMemo(() => {
     const route = props.api.route.current
@@ -1361,6 +1409,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     setEntries(snapshot.entries)
     setLoadFailed(snapshot.failed)
     setWaiting(snapshot.waiting)
+    setPolledRunning(snapshot.running ?? new Set())
   }, { waiting: true })))
 
   const filteredEntries = createMemo(() => {
@@ -1499,13 +1548,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   // Marker only: a spinner for a working agent, the open-session dot, and the
   // neutral row for idle sessions. Titles stay plain and no status text is
   // rendered.
-  const markerOf = (id: string): SidebarMarker => {
-    let live: string | undefined
-    try {
-      live = props.api.state.session.status(id)
-    } catch {}
-    return sidebarMarker(id === currentID(), live)
-  }
+  const markerOf = (id: string): SidebarMarker => sidebarMarker(id === currentID(), isRunning(id) ? "running" : undefined)
 
   const spinFrame = createSpinner(() => itemRows().some((entry) => markerOf(entry.id) === "running"))
 
@@ -2090,6 +2133,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const [hovered, setHovered] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
   const [loadFailed, setLoadFailed] = createSignal(false)
+  const [polledRunning, setPolledRunning] = createSignal<Set<string>>(new Set())
   const [pendingDelete, setPendingDelete] = createSignal<string>()
   const [deleting, setDeleting] = createSignal<string>()
   let confirmTimer: ReturnType<typeof setTimeout> | undefined
@@ -2257,6 +2301,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   onMount(() => onCleanup(props.poll((snapshot) => {
     setEntries(snapshot.entries)
     setLoadFailed(snapshot.failed)
+    setPolledRunning(snapshot.running ?? new Set())
   })))
 
   const filtered = createMemo(() => {
@@ -2273,14 +2318,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const [listWidth, setListWidth] = createSignal(Math.min(75, dimensions().width))
   let anchor: { y: number; width: number } | undefined
   const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${dirLabels().get(entry.dir) ?? shortDir(entry.dir, home)}`
-  // Running state comes from the host's live session store: no polling here.
-  const isRunning = (id: string): boolean => {
-    try {
-      return sidebarMarker(false, props.api.state.session.status(id)) === "running"
-    } catch {
-      return false
-    }
-  }
+  const isRunning = createRunningState((id) => props.api.state.session.status(id), polledRunning)
   // The search box is never truncated: the header title gives way first,
   // dropping the "(option+o all)" hint before shortening "Recent sessions".
   const searchActive = () => Boolean(query() || searching())

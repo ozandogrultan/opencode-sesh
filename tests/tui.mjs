@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
   return factory(
     readExtraction,
@@ -373,7 +373,7 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
 }
 
-const { homeDirLabels, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
+const { homeDirLabels, queryRunningIds, createRunningState, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
   loadDataLayer()
 
 // Fake worker that runs DB_WORKER_SOURCE against node:sqlite, with the same
@@ -438,6 +438,35 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /__needs_input__/)
   assert.match(source, /NEEDS_INPUT_SQL/)
   assert.match(source, /need input/)
+}
+
+// Live status decides sessions this process ran until the DB agrees they are
+// idle; the polled DB set covers sessions running in other processes.
+{
+  const live = new Map()
+  let polled = new Set(["ses_other", "ses_mine"])
+  const isRunning = createRunningState((id) => live.get(id), () => polled)
+  assert.equal(isRunning("ses_other"), true, "another process's run shows from the DB")
+  assert.equal(isRunning("ses_none"), false)
+  live.set("ses_mine", "running")
+  assert.equal(isRunning("ses_mine"), true)
+  live.set("ses_mine", "idle")
+  assert.equal(isRunning("ses_mine"), false, "a local finish wins over a stale DB poll")
+  polled = new Set(["ses_other"])
+  assert.equal(isRunning("ses_mine"), false)
+  polled = new Set(["ses_other", "ses_mine"])
+  assert.equal(isRunning("ses_mine"), true, "resumed elsewhere after the DB saw it idle")
+  live.set("ses_err", "busy")
+  const throwing = createRunningState(() => { throw new Error("no store") }, () => new Set(["ses_x"]))
+  assert.equal(throwing("ses_x"), true)
+  assert.equal(throwing("ses_y"), false)
+}
+
+// Both lists read the polled running set through createRunningState.
+{
+  const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
+  assert.equal(source.match(/setPolledRunning\(snapshot\.running \?\? new Set\(\)\)/g)?.length, 2)
+  assert.equal(source.match(/createRunningState\(\(id\) => props\.api\.state\.session\.status\(id\), polledRunning\)/g)?.length, 2)
 }
 
 // The needs-input query costs worker CPU on every poll, so only the sidebar
@@ -658,10 +687,31 @@ function makeApi(sessions, { latency = 0 } = {}) {
     assert.equal(details.has("ses_archived"), false)
     assert.equal(details.has("ses_subagent_question"), false)
 
+    // Running = root turn in flight with activity in it or a child within
+    // STUCK_AFTER_MS; quiet in-flight sessions are left to needs-input.
+    // (IDs must pass SESSION_ID_PATTERN, so these sessions avoid inner underscores.)
+    addSession.run("ses_runrecent", now, 1, 1)
+    msg("ses_runrecent", 1, "user", now - 200_000, JSON.stringify({}))
+    addSession.run("ses_runchild", now, 1, 1)
+    addChildSession.run("ses_runchildsub", "ses_runchild", now)
+    msg("ses_runchildsub", 1, "assistant", now - 60_000, JSON.stringify({}))
+    addSession.run("ses_runquiet", now, 1, 1)
+    msg("ses_runquiet", 1, "assistant", now - 3_600_000, running(now - 3_600_000))
+    addSession.run("ses_runstarted", now, now, null)
+    addSession.run("ses_runidle", now, 5, null)
+    sqlite.prepare("UPDATE session_v2 SET time_idle = 9 WHERE id = ?").run("ses_runidle")
+    msg("ses_runidle", 1, "user", now - 1_000, JSON.stringify({}))
+    const runningClient = createDbClient(fakeWorkerFactory(sqlite))
+    const runningIds = await queryRunningIds(runningClient.run)
+    runningClient.close()
+    for (const id of ["ses_runrecent", "ses_runchild", "ses_runstarted"]) assert.ok(runningIds.has(id), `${id} is running`)
+    for (const id of ["ses_runquiet", "ses_runidle", "ses_runchildsub"]) assert.ok(!runningIds.has(id), `${id} is not running`)
+
     // Without the in-flight columns the query scans every assistant message.
     for (const column of ["time_busy", "time_idle", "time_suspended"]) sqlite.exec(`ALTER TABLE session_v2 DROP COLUMN ${column}`)
     const legacyClient = createDbClient(fakeWorkerFactory(sqlite))
     const legacy = await queryWaitingDetails(legacyClient.run)
+    assert.equal((await queryRunningIds(legacyClient.run)).size, 0, "no in-flight columns: no polled running set")
     legacyClient.close()
     assert.equal(legacy.get("ses_question")?.reason, "question")
     assert.equal(legacy.get("ses_stuck")?.reason, "stuck")
