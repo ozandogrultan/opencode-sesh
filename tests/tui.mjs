@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels }`,
   )
   return factory(
     readExtraction,
@@ -373,7 +373,7 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
 }
 
-const { fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
+const { homeDirLabels, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
   loadDataLayer()
 
 // Fake worker that runs DB_WORKER_SOURCE against node:sqlite, with the same
@@ -480,6 +480,14 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 // Sidebar markers: a working agent spins (even when it is the open session),
 // the open session keeps its own dot and every other idle row stays neutral.
 {
+  {
+    const labels = homeDirLabels(["/w/a/app", "/w/b/app", "/w/Projects", "/w/Projects", "/h", "/h/x"], "/h")
+    assert.equal(labels.get("/w/a/app"), "a/app", "clashing last segments show their parent")
+    assert.equal(labels.get("/w/b/app"), "b/app")
+    assert.equal(labels.get("/w/Projects"), "Projects", "one directory on several rows stays short")
+    assert.equal(labels.get("/h"), "~")
+    assert.equal(labels.get("/h/x"), "x")
+  }
   assert.equal(sidebarMarker(false, "running"), "running")
   assert.equal(sidebarMarker(false, "busy"), "running")
   assert.equal(sidebarMarker(false, "retry"), "running")

@@ -198,6 +198,19 @@ function prettyDir(dir: string, home: string): string {
   return "…/" + parts.slice(-2).join("/")
 }
 
+// Home rows show a directory's last segment; distinct directories that share
+// one also show their parent (`a/app`, `b/app`).
+function homeDirLabels(dirs: string[], home: string): Map<string, string> {
+  const unique = [...new Set(dirs)]
+  const short = (dir: string) => (home && dir === home ? "~" : shortDir(dir, home))
+  return new Map(unique.map((dir) => {
+    const label = short(dir)
+    const clash = unique.some((other) => other !== dir && short(other) === label)
+    const parts = dir.replace(/\/+$/, "").split("/").filter(Boolean)
+    return [dir, clash && parts.length >= 2 ? parts.slice(-2).join("/") : label]
+  }))
+}
+
 function ago(ms: number): string {
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000))
   if (s < 60) return "now"
@@ -2269,7 +2282,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
     return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
   }
-  const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${home && entry.dir === home ? "~" : shortDir(entry.dir, home)}`
+  const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${dirLabels().get(entry.dir) ?? shortDir(entry.dir, home)}`
   // Running state comes from the host's live session store: no polling here.
   const isRunning = (id: string): boolean => {
     try {
@@ -2296,6 +2309,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     return { budget, limit, padding, gap: budget >= 1 + padding + count * 2 ? 1 : 0 }
   })
   const visible = createMemo(() => filtered().slice(0, layout().limit))
+  const dirLabels = createMemo(() => homeDirLabels(visible().map((entry) => entry.dir), home))
   createEffect(() => {
     const ids = new Set(visible().map((entry) => entry.id))
     if (hovered() && !ids.has(hovered()!)) setHovered(undefined)
@@ -2352,7 +2366,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                   flexGrow={1}
                   overflow="hidden"
                   wrapMode="none"
-                  attributes={query() ? undefined : TextAttributes.DIM}
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
                   {query() || (searching() ? "" : HOME_SEARCH_LABEL)}
