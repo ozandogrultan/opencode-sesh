@@ -170,7 +170,7 @@ when opencode exits, the picker reopens with the query preserved.
   In the home list, pinned sessions sort first.
   The home list takes no layout space: it budgets its height from its own
   measured position (`renderAfter`) down to the native status footer, so it
-  tracks a growing composer. Compact spacing first, then fewer rows, hidden when
+  tracks a growing composer. Rows are always single-spaced (filtering never reflows them); it drops the top padding first, then rows, hidden when
   too short, and only on the `home` route (the session prompt shares the slot). Header/rows never wrap, and resizing releases captures for hidden rows.
   The header is `Recent sessions (option+o all)` with a right-aligned clickable `search…` box
   (ends at the age column); on narrow lists `(option+o all)` is dropped first, then the title
