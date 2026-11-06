@@ -245,7 +245,7 @@ the `opencode.json` entry unchanged:
 }
 ```
 
-When the section is visible, click its `search…` box to filter sessions in place; click
+When the section is visible, click its `search…` box (on the home list, the `option+o all` box) to filter sessions in place; click
 elsewhere or press Esc to leave search. Click the **Sessions** heading to drive
 the list from the keyboard instead of the mouse (`↑`/`↓` to move, Enter to open,
 Option-P to preview, Option-S to pin a session, Option-R to pin its directory,

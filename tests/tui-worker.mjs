@@ -24,7 +24,8 @@ const { createDbClient } = new Function(
   `${js}; return { createDbClient }`,
 )(async () => "", { env: { SESH_DB: dbPath } }, setTimeout, setInterval, clearInterval, 15_000, () => false, () => ({ status: 1 }))
 
-const client = createDbClient()
+// The 30M-row fixture query can exceed the 30 s default on slow machines.
+const client = createDbClient(undefined, 120_000)
 try {
   assert.deepEqual(await client.run("SELECT b FROM t WHERE a = ?", [2]), [{ b: "y" }])
   await assert.rejects(client.run("SELECT * FROM missing"), /missing/)

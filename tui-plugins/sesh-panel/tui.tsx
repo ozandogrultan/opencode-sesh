@@ -217,7 +217,11 @@ function truncate(text: string, width: number): string {
 // so cap it a bit lower to guarantee separation.
 const SIDEBAR_TITLE_WIDTH = 27
 const SIDEBAR_GROUP_WIDTH = 30
-const HOME_TITLE_WIDTH = 30
+const HOME_TITLE_MIN = 20
+const HOME_DIR_MIN = 8
+const HOME_HINT_MIN_WIDTH = 32
+const HOME_DIR_MAX = 22
+const HOME_AGE_WIDTH = 4
 
 // The sidebar lists every session (newest first, pins ahead) and fills
 // whatever vertical space it gets: overflow scrolls inside the stretched
@@ -2040,13 +2044,11 @@ const HOME_SESSION_LIMIT = 6
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/prompt/index.tsx#L1676
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/component/logo.tsx
 // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/feature-plugins/home/footer.tsx
-// The native home needs room for its logo, composer chrome and status footer.
-// Reserve the editor's *maximum* height (one third of the terminal, at least
-// six lines), so typing/wrapping a prompt cannot push it into our footer.
-// Chrome: logo (4) + gap (1) + composer (6) + status (3). Below 44 columns,
-// the logo stacks to seven lines but the three-line status footer disappears.
-const HOME_CHROME_ROWS = 14
-
+// The list floats just under the composer instead of taking layout space, so
+// it budgets from its measured position: whatever lies between it and the
+// native status footer (three lines, hidden below 44 columns or 14 rows, plus
+// one line of slack for other footer plugins).
+const HOME_FOOTER_ROWS = 3
 function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const theme = () => props.api.theme.current
   const home = process.env.HOME ?? ""
@@ -2233,12 +2235,38 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       : entries()
     return pinnedFirst(list, props.pins())
   })
+  // Unmeasured (before the first frame) reads as no room.
+  const [top, setTop] = createSignal(dimensions().height)
+  const [listWidth, setListWidth] = createSignal(Math.min(75, dimensions().width))
+  let anchor: { y: number; width: number } | undefined
+  // Fixed columns: marker, title (flexes), directory (last segment), age.
+  const columns = () => {
+    const width = Math.max(1, listWidth())
+    const age = HOME_AGE_WIDTH
+    const wanted = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
+    const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
+    // A starved title is worse than no directory: drop the column instead.
+    const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
+    // The armed-delete prompt may not push the age out of a narrow list.
+    const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
+    return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
+  }
+  const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${home && entry.dir === home ? "~" : shortDir(entry.dir, home)}`
+  // Running state comes from the host's live session store: no polling here.
+  const isRunning = (id: string): boolean => {
+    try {
+      return sidebarMarker(false, props.api.state.session.status(id)) === "running"
+    } catch {
+      return false
+    }
+  }
   const layout = createMemo(() => {
     const rows = dimensions().height
-    const budget = Math.max(0, rows - Math.max(6, Math.floor(rows / 3)) - HOME_CHROME_ROWS)
+    const footer = dimensions().width >= 44 && rows >= 14 ? HOME_FOOTER_ROWS : 0
+    const budget = Math.max(0, rows - footer - 1 - top())
     // Drop decorative padding/spacing before sessions. Keep the full list in
     // the picker when even a heading and one session cannot fit.
-    const padding = budget >= HOME_SESSION_LIMIT + 2 ? 1 : 0
+    const padding = budget >= 4 ? 1 : 0
     const limit = Math.min(HOME_SESSION_LIMIT, Math.max(0, budget - padding - 1))
     const count = Math.max(1, Math.min(filtered().length, limit))
     return { budget, limit, padding, gap: budget >= 1 + padding + count * 2 ? 1 : 0 }
@@ -2252,8 +2280,22 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   return (
-    <box visible={layout().limit > 0} width="100%" flexShrink={0} maxHeight={layout().budget} overflow="hidden" alignItems="center">
-      <box flexDirection="column" width="100%" maxWidth={72} paddingLeft={1} paddingRight={1} paddingTop={layout().padding} gap={layout().gap}>
+    <box
+      ref={(box: { y: number; width: number }) => { anchor = box }}
+      renderAfter={() => {
+        const y = anchor?.y
+        if (y !== undefined && y !== top()) queueMicrotask(() => setTop(y))
+        const width = anchor?.width
+        if (width && width !== listWidth()) queueMicrotask(() => setListWidth(width))
+      }}
+      position="absolute"
+      top={1}
+      left={0}
+      right={0}
+      maxHeight={layout().budget}
+      overflow="hidden"
+    >
+      <box visible={layout().limit > 0 && props.api.route.current.name === "home"} flexDirection="column" width="100%" paddingTop={layout().padding} gap={layout().gap}>
         <Show
           when={entries().length > 0}
           fallback={
@@ -2266,33 +2308,31 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         >
           <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between" gap={2} overflow="hidden">
             <box flexDirection="row" gap={1} flexShrink={0}>
-              <text wrapMode="none" style={{ fg: theme().textMuted }}>Recent sessions</text>
-              <Show when={dimensions().width >= 68}>
-                <text style={{ fg: theme().textMuted }}>· option+o for all</text>
-              </Show>
+              <text wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>Recent sessions</text>
             </box>
+            <Show when={listWidth() >= HOME_HINT_MIN_WIDTH || query() || searching()}>
             <box
               flexDirection="row"
               flexShrink={1}
               minWidth={0}
               gap={1}
               paddingLeft={1}
-              paddingRight={1}
               backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
               onMouseDown={(event: { stopPropagation: () => void }) => {
                 event.stopPropagation()
                 setSearching(true)
               }}
             >
-              <box width={24} flexShrink={1} minWidth={0}>
+              <box width={query() || searching() ? 24 : 12} flexShrink={1} minWidth={0}>
                 <text
                   flexGrow={1}
                   flexShrink={1}
                   overflow="hidden"
                   wrapMode="none"
+                  attributes={query() ? undefined : TextAttributes.DIM}
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
-                  {query() || (searching() ? "" : "search…")}
+                  {query() || (searching() ? "" : "option+o all")}
                   {searching() ? "▏" : ""}
                 </text>
               </box>
@@ -2302,6 +2342,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
               </Show>
             </box>
+            </Show>
           </box>
           <For each={visible()}>
             {(entry) => (
@@ -2320,25 +2361,31 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                     : props.api.route.navigate("session", { sessionID: entry.id })
                 }
               >
-                <text flexShrink={0} style={{ fg: theme().textMuted }}>
-                  ○
+                <text width={1} flexShrink={0} style={{ fg: isRunning(entry.id) ? theme().success : theme().textMuted }}>
+                  {isRunning(entry.id) ? "●" : "○"}
                 </text>
-                <Highlighted
-                  text={`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${truncate(entry.title, HOME_TITLE_WIDTH - (props.pins().sessions.includes(entry.id) ? 2 : 0))}`}
-                  query={query()}
-                  color={theme().text}
-                  matchColor={theme().warning}
-                />
-                <text
-                  flexShrink={1}
-                  maxWidth={Math.max(0, Math.floor((Math.min(72, dimensions().width) - 4) / 2))}
-                  wrapMode="none"
-                  overflow="hidden"
-                  style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
-                >
-                  {pendingDelete() === entry.id
-                    ? "option+d again"
-                    : `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${prettyDir(entry.dir, home)} · ${ago(entry.updated)}`}
+                <box width={columns().title} flexShrink={0} overflow="hidden">
+                  <Highlighted
+                    text={truncate(`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${entry.title}`, columns().title)}
+                    query={query()}
+                    color={theme().text}
+                    matchColor={theme().warning}
+                  />
+                </box>
+                <Show when={columns().dir > 0}>
+                  <text
+                    width={columns().dir}
+                    flexShrink={0}
+                    wrapMode="none"
+                    overflow="hidden"
+                    attributes={pendingDelete() === entry.id ? undefined : TextAttributes.DIM}
+                    style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
+                  >
+                    {truncate(pendingDelete() === entry.id ? "option+d again" : rowDir(entry), columns().dir)}
+                  </text>
+                </Show>
+                <text width={columns().age} flexShrink={0} wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>
+                  {ago(entry.updated).padStart(columns().age)}
                 </text>
               </box>
             )}
@@ -2349,6 +2396,15 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
       </box>
     </box>
+  )
+}
+
+// prompt.footer also mounts in session composers: only home subscribes to polling.
+function HomeBottom(props: { api: TuiPluginApi } & PinProps) {
+  return (
+    <Show when={props.api.route.current.name === "home"}>
+      <HomeSessions api={props.api} pins={props.pins} onTogglePin={props.onTogglePin} poll={props.poll} />
+    </Show>
   )
 }
 
@@ -2386,7 +2442,7 @@ const tui: TuiPlugin = async (api) => {
         return <SidebarSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
       home_bottom() {
-        return <HomeSessions api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
+        return <HomeBottom api={api} pins={pins} onTogglePin={onTogglePin} poll={poll} />
       },
     },
   })
@@ -3599,7 +3655,7 @@ function createApi(ctx: Plugin.Context) {
         }
         if (cfg.slots.home_bottom && ctx.options?.showHome !== false) {
           slotDisposers.push(ctx.ui.slot({
-            prepend: "home.footer",
+            append: "prompt.footer",
             render: cfg.slots.home_bottom as any,
           }))
         }

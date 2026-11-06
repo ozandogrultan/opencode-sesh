@@ -187,7 +187,7 @@ function loadAdapter(ctx) {
   api.slots.register({ slots: { sidebar_content() {}, home_bottom() {} } })
   assert.deepEqual(disposed, [])
   api.dispose()
-  assert.deepEqual(disposed, ["sidebar.content", "home.footer"])
+  assert.deepEqual(disposed, ["sidebar.content", "prompt.footer"])
   api.dispose()
   assert.equal(disposed.length, 2, "dispose is idempotent")
 }
@@ -196,7 +196,7 @@ function loadAdapter(ctx) {
 // hidden only the picker and commands remain (picker-only mode).
 {
   for (const [options, expected] of [
-    [{ showHome: true }, ["sidebar.content", "home.footer"]],
+    [{ showHome: true }, ["sidebar.content", "prompt.footer"]],
     [{ showHome: false }, ["sidebar.content"]],
     [{ showHome: false, showSidebar: false }, []],
   ]) {
@@ -240,8 +240,8 @@ function loadAdapter(ctx) {
     const sidebar = () => { throw new Error("sidebar must not mount during registration") }
     const home = () => {}
     api.slots.register({ slots: { sidebar_content: sidebar, home_bottom: home } })
-    assert.deepEqual(slots.map((slot) => slot.append ?? slot.prepend), visible ? ["sidebar.content", "home.footer"] : ["home.footer"])
-    assert.equal(slots.at(-1).prepend, "home.footer")
+    assert.deepEqual(slots.map((slot) => slot.append ?? slot.prepend), visible ? ["sidebar.content", "prompt.footer"] : ["prompt.footer"])
+    assert.equal(slots.at(-1).append, "prompt.footer")
     assert.equal(slots.at(-1).render, home)
     if (visible) {
       assert.equal(slots[0][placement], "sidebar.content")

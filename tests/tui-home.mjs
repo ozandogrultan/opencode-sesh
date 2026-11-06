@@ -14,7 +14,7 @@ const source = readFileSync(new URL("../tui-plugins/sesh-panel/tui.tsx", import.
 // source exports, files in dist, or installed plugin copies need changing.
 const fixture = `
 export function HomeFixture(props) {
-  // Layout baseline: OpenCode 2.2.4, matching HOME_CHROME_ROWS in tui.tsx.
+  // Layout baseline: OpenCode 2.2.4, matching HOME_FOOTER_ROWS in tui.tsx.
   // Re-check both when upgrading OpenCode: this hand-built fixture does not
   // automatically track changes to the host layout. Sources pinned to 2.2.4:
   // https://github.com/anomalyco/opencode/blob/45898d0f8569225eb1ddb4ee13f8581b34dff311/packages/tui/src/routes/home.tsx
@@ -45,13 +45,15 @@ export function HomeFixture(props) {
               <box paddingTop={1} flexShrink={0}><text wrapMode="none">Plan · model · high</text></box>
             </box>
             <box height={1} flexShrink={0} />
-            <text height={1} wrapMode="none">project · tab agents · ctrl+p commands</text>
+            <box width="100%" height={1} flexDirection="row" justifyContent="space-between" gap={2}>
+              <text height={1} wrapMode="none">project · tab agents · ctrl+p commands</text>
+              <HomeBottom api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
+            </box>
           </box>
         </box>
         <box flexGrow={1} minHeight={0} />
       </box>
       <box width="100%" flexShrink={0}>
-        <HomeSessions api={props.api} poll={props.poll} pins={props.pins} onTogglePin={() => {}} />
         <Show when={props.dimensions().height >= 14 && props.dimensions().width >= 44}>
           <box paddingTop={1} paddingBottom={1} flexShrink={0}><text>MCP · VERSION</text></box>
         </Show>
@@ -81,11 +83,13 @@ const [message, setMessage] = createSignal("first line\nsecond line\nthird line\
 const [dimensions, setDimensions] = createSignal({ width: 80, height: 24 })
 const [pins, setPins] = createSignal({ sessions: [], directories: [] })
 const boxes = {}
-const theme = Object.fromEntries(["text", "textMuted", "warning", "error", "backgroundElement"].map((name) => [name, RGBA.fromHex("#ffffff")]))
+const theme = Object.fromEntries(["text", "textMuted", "warning", "error", "success", "backgroundElement"].map((name) => [name, RGBA.fromHex("#ffffff")]))
 const entries = Array.from({ length: 8 }, (_, index) => ({
   id: `ses_home${index}`, title: `Session ${index}`, dir: "/project", group: "/project", updated: Date.now() - index * 1000,
 }))
 const layers = new Set()
+const [routeName, setRouteName] = createSignal("home")
+let subscriptions = 0
 const resizeListeners = setup.renderer.listenerCount("resize")
 let publish
 let pollDisposed = false
@@ -94,7 +98,8 @@ const api = {
   theme: { current: theme },
   ui: { dialog: { open: false } },
   keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
-  route: { current: { name: "home" } },
+  route: { get current() { return { name: routeName() } } },
+  state: { session: { status: (id) => (id === "ses_home1" ? "busy" : "idle") } },
 }
 
 function frame() {
@@ -105,14 +110,14 @@ function assertLayout(expectedCount) {
   const captured = frame()
   const lines = captured.split("\n")
   const recent = lines.findIndex((line) => line.includes("Recent sessions"))
-  const sessionRows = lines.flatMap((line, index) => line.includes("○") ? [index] : [])
-  assert.equal(sessionRows.length, expectedCount, captured)
+  const sessionRows = lines.flatMap((line, index) => /Session \d/.test(line) ? [index] : [])
+  if (expectedCount !== undefined) assert.equal(sessionRows.length, expectedCount, captured)
   if (recent >= 0) {
     assert.ok(recent >= boxes.prompt.y + boxes.prompt.height, "home list must render below the composer\n" + captured)
     assert.ok(sessionRows.every((index) => index > recent), captured)
   }
   assert.match(captured, /Plan · model · high/)
-  if (dimensions().width >= 44) {
+  if (dimensions().width >= 44 && dimensions().height >= 14) {
     const status = lines.findIndex((line) => line.includes("MCP · VERSION"))
     assert.ok(status >= boxes.prompt.y + boxes.prompt.height, captured)
     assert.ok(sessionRows.every((index) => index < status), captured)
@@ -134,46 +139,143 @@ function press(key) {
 
 async function search() {
   const lines = frame().split("\n")
-  const y = lines.findIndex((line) => line.includes("search…"))
+  const y = lines.findIndex((line) => line.includes("option+o all"))
   assert.ok(y >= 0, frame())
-  await setup.mockMouse.click(lines[y].indexOf("search…"), y)
+  await setup.mockMouse.click(lines[y].indexOf("option+o all"), y)
   await setup.flush()
 }
 
 try {
   await render(() => HomeFixture({ api, boxes, message, dimensions, pins, poll(callback) {
     publish = callback
+    subscriptions += 1
     callback({ entries, failed: false })
     return () => { pollDisposed = true }
   } }), setup.renderer)
   await setup.flush()
-  // The screenshot regression: a six-line prompt and six recent sessions used
-  // to occupy the same rows in an ordinary 80x24 terminal.
-  assertLayout(1)
+  // The list floats directly under the composer, so it must never reach the
+  // status footer even with a six-line prompt in an ordinary 80x24 terminal.
+  assertLayout()
   for (const word of ["first", "second", "third", "fourth", "fifth", "sixth"]) {
     assert.match(frame(), new RegExp(`${word} line`))
   }
 
   // Resize in both directions without remounting. Fill the editor to its
-  // native maximum, including line wrapping, and keep the native footer visible.
-  for (const [width, height, count] of [[120, 40, 6], [80, 32, 6], [80, 30, 5], [80, 24, 1], [80, 22, 0], [44, 24, 1], [28, 30, 5], [120, 40, 6]]) {
+  // native maximum, including line wrapping: the list may shrink or vanish,
+  // but never overlaps the composer or the native footer.
+  for (const [width, height] of [[120, 40], [80, 32], [80, 30], [80, 24], [80, 22], [44, 24], [28, 30], [120, 40]]) {
     await resize(width, height)
     setMessage(Array.from({ length: Math.max(6, Math.floor(height / 3)) }, (_, i) => `line ${i}`).join("\n"))
     await setup.flush()
-    assertLayout(count)
+    assertLayout()
     setMessage("wrapped prompt ".repeat(100))
     await setup.flush()
+    assertLayout()
+  }
+
+  // With a one-line prompt the list sits right under the composer and uses the
+  // room the terminal offers, up to six rows.
+  for (const [width, height, count] of [[120, 50, 6], [120, 40, 6], [80, 32, 4], [80, 24, 1], [80, 22, 0], [80, 14, 0], [44, 24, 1], [28, 30, 3], [28, 50, 6], [200, 60, 6], [120, 12, 0]]) {
+    await resize(width, height)
+    setMessage("hi")
+    await setup.flush()
     assertLayout(count)
+    if (count > 0) {
+      const lines = frame().split("\n")
+      const footer = lines.findIndex((line) => line.includes("project ·"))
+      const heading = lines.findIndex((line) => line.includes("Recent sessions"))
+      assert.ok(heading > footer && heading <= footer + 2, "list must start right below the composer\n" + frame())
+    }
   }
 
   // Long titles/directories must stay on their own row on narrow terminals.
   publish({ entries: entries.map((entry) => ({ ...entry, title: entry.title + " very long title".repeat(10), dir: "/" + "long-directory-name/".repeat(12) })), failed: false })
   await resize(28, 30)
-  assertLayout(5)
-  assert.doesNotMatch(frame(), /option\+o for all/)
+  setMessage("hi")
+  assertLayout(3)
+
+  // Age survives long directories; columns line up across rows.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: "/" + "long-directory-name/".repeat(12) + (index % 2 ? "data-science-DIAL-2764" : "x") })), failed: false })
+  for (const width of [120, 80, 44, 28]) {
+    await resize(width, 40)
+    setMessage("hi")
+    await setup.flush()
+    const rows = frame().split("\n").filter((line) => /Session \d/.test(line))
+    assert.ok(rows.length > 1, frame())
+    for (const row of rows) assert.match(row.trimEnd(), /\s(now|\d+[mhd])$/, "age must always render\n" + frame())
+    assert.equal(new Set(rows.map((row) => row.trimEnd().length)).size, 1, "age column must right-align\n" + frame())
+    if (width <= 28) {
+      assert.doesNotMatch(rows.join("\n"), /\bx\b|data-/, "narrow lists drop the directory column instead of starving titles\n" + frame())
+      assert.doesNotMatch(frame(), /option\+/, "header hint must be dropped when it cannot fit\n" + frame())
+    }
+    if (width >= 80) {
+      assert.equal(new Set(rows.map((row) => row.search(/x\s|data-science-DIAL-2764/) >= 0 ? 1 : 0)).size, 1, frame())
+      const dirCols = rows.map((row) => row.search(/\S+\s+(now|\d+[mhd])\s*$/))
+      assert.equal(new Set(dirCols).size, 1, "directory column must align\n" + frame())
+    }
+  }
+  const markerLines = frame().split("\n")
+  const busy = markerLines.find((line) => line.includes("Session 1"))
+  assert.match(busy, /^\s*●/, "running session gets a filled marker\n" + frame())
+  const idle = markerLines.find((line) => line.includes("Session 0"))
+  assert.match(idle, /^\s*○/, "idle session gets a hollow marker\n" + frame())
+  assert.doesNotMatch(idle, /●/)
+  const listLeft = markerLines.find((line) => line.includes("Recent sessions")).indexOf("Recent")
+  const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
+  assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
+
+  // Leaving home unmounts the list: no polling subscription on session routes.
+  await resize(80, 40)
+  assert.equal(subscriptions, 1)
+  pollDisposed = false
+  setRouteName("session")
+  await setup.flush()
+  assert.ok(pollDisposed, "session route must dispose the home poll subscription")
+  assert.equal(layers.size, 0)
+  assert.doesNotMatch(frame(), /Recent sessions/)
+  setRouteName("home")
+  await setup.flush()
+  await setup.flush()
+  await setup.flush()
+  assert.equal(subscriptions, 2, "returning home resubscribes")
+  assert.match(frame(), /Recent sessions/)
+  pollDisposed = false
+
+  // Arming a delete in a 22-column list must keep the age visible.
+  publish({ entries, failed: false })
+  await resize(26, 40)
+  setMessage("hi")
+  await setup.flush()
+  {
+    const lines = frame().split("\n")
+    const y = lines.findIndex((line) => line.includes("Session 0"))
+    await setup.mockMouse.moveTo(lines[y].indexOf("Session 0"), y)
+    await setup.flush()
+    press("alt+d")
+    await setup.flush()
+    const armed = frame().split("\n").find((line) => line.includes("option+d"))
+    assert.ok(armed, frame())
+    assert.match(armed.trimEnd(), /\s(now|\d+[mhd])$/, "age must survive an armed delete in a narrow list\n" + frame())
+    press("escape")
+    await setup.flush()
+  }
+
+  // Header hint right-aligns with the age column; $HOME shows as ~.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: index === 0 ? process.env.HOME : entry.dir })), failed: false })
+  await resize(100, 40)
+  setMessage("hi")
+  await setup.flush()
+  {
+    const lines = frame().split("\n")
+    const header = lines.find((line) => line.includes("Recent sessions")).trimEnd()
+    const row = lines.find((line) => line.includes("Session 0")).trimEnd()
+    assert.equal(header.length, row.length, "header hint must end at the age column\n" + frame())
+    assert.match(row, /\s~\s+now$/, "a $HOME directory shows as ~\n" + frame())
+  }
 
   publish({ entries, failed: false })
   await resize(80, 24)
+  setMessage("hi")
   setPins({ sessions: ["ses_home7"], directories: [] })
   await setup.flush()
   assertLayout(1)
