@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.6] - 2026-11-06
+
+### Fixed
+
+- **tui:** Keep narrow home rows readable while deleting, searching and pinning (#50)
+- **tui:** Keep home rows single-spaced when few sessions match (#49)
+
 ## [2.3.5] - 2026-11-06
 
 ### Fixed
@@ -611,6 +618,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixture-database regression suite, TypeScript typechecking, and ShellCheck in
   CI.
 
+[2.3.6]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.4...v2.3.5
 [2.3.4]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.3...v2.3.4
 [2.3.3]: https://github.com/ozandogrultan/opencode-sesh/compare/v2.3.2...v2.3.3
