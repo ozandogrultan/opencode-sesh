@@ -109,7 +109,7 @@ function frame() {
 function assertLayout(expectedCount) {
   const captured = frame()
   const lines = captured.split("\n")
-  const recent = lines.findIndex((line) => line.includes("Recent sessions"))
+  const recent = lines.findIndex((line) => line.includes("Recent"))
   const sessionRows = lines.flatMap((line, index) => /Session \d/.test(line) ? [index] : [])
   if (expectedCount !== undefined) assert.equal(sessionRows.length, expectedCount, captured)
   if (recent >= 0) {
@@ -139,9 +139,9 @@ function press(key) {
 
 async function search() {
   const lines = frame().split("\n")
-  const y = lines.findIndex((line) => line.includes("option+o all"))
+  const y = lines.findIndex((line) => line.includes("search…"))
   assert.ok(y >= 0, frame())
-  await setup.mockMouse.click(lines[y].indexOf("option+o all"), y)
+  await setup.mockMouse.click(lines[y].indexOf("search…"), y)
   await setup.flush()
 }
 
@@ -183,7 +183,7 @@ try {
     if (count > 0) {
       const lines = frame().split("\n")
       const footer = lines.findIndex((line) => line.includes("project ·"))
-      const heading = lines.findIndex((line) => line.includes("Recent sessions"))
+      const heading = lines.findIndex((line) => line.includes("Recent"))
       assert.ok(heading > footer && heading <= footer + 2, "list must start right below the composer\n" + frame())
     }
   }
@@ -204,9 +204,15 @@ try {
     assert.ok(rows.length > 1, frame())
     for (const row of rows) assert.match(row.trimEnd(), /\s(now|\d+[mhd])$/, "age must always render\n" + frame())
     assert.equal(new Set(rows.map((row) => row.trimEnd().length)).size, 1, "age column must right-align\n" + frame())
+    const headerLine = frame().split("\n").find((line) => line.includes("Recent"))
+    assert.match(headerLine, /search…\s*$/, "search box must always render at the right edge\n" + frame())
+    assert.equal(headerLine.trimEnd().length, rows[0].trimEnd().length, "search label must end at the age column\n" + frame())
+    if (width >= 80) assert.match(headerLine, /Recent sessions \(option\+o all\)\s+search…/, frame())
+    if (width >= 44) assert.match(headerLine, /\(option\+o all\)/, frame())
     if (width <= 28) {
+      assert.doesNotMatch(headerLine, /option\+/, "hint must be dropped when it cannot fit\n" + frame())
       assert.doesNotMatch(rows.join("\n"), /\bx\b|data-/, "narrow lists drop the directory column instead of starving titles\n" + frame())
-      assert.doesNotMatch(frame(), /option\+/, "header hint must be dropped when it cannot fit\n" + frame())
+      assert.match(headerLine, /^\s*Recent \S* +search…\s*$/, "title truncates, never the search box\n" + frame())
     }
     if (width >= 80) {
       assert.equal(new Set(rows.map((row) => row.search(/x\s|data-science-DIAL-2764/) >= 0 ? 1 : 0)).size, 1, frame())
@@ -220,7 +226,7 @@ try {
   const idle = markerLines.find((line) => line.includes("Session 0"))
   assert.match(idle, /^\s*○/, "idle session gets a hollow marker\n" + frame())
   assert.doesNotMatch(idle, /●/)
-  const listLeft = markerLines.find((line) => line.includes("Recent sessions")).indexOf("Recent")
+  const listLeft = markerLines.find((line) => line.includes("Recent")).indexOf("Recent")
   const composerLeft = markerLines.find((line) => line.includes("project ·")).indexOf("project")
   assert.equal(listLeft, composerLeft, "list must align with the composer's left edge\n" + frame())
 
@@ -267,7 +273,7 @@ try {
   await setup.flush()
   {
     const lines = frame().split("\n")
-    const header = lines.find((line) => line.includes("Recent sessions")).trimEnd()
+    const header = lines.find((line) => line.includes("Recent")).trimEnd()
     const row = lines.find((line) => line.includes("Session 0")).trimEnd()
     assert.equal(header.length, row.length, "header hint must end at the age column\n" + frame())
     assert.match(row, /\s~\s+now$/, "a $HOME directory shows as ~\n" + frame())

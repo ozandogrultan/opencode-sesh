@@ -172,6 +172,9 @@ when opencode exits, the picker reopens with the query preserved.
   measured position (`renderAfter`) down to the native status footer, so it
   tracks a growing composer. Compact spacing first, then fewer rows, hidden when
   too short, and only on the `home` route (the session prompt shares the slot). Header/rows never wrap, and resizing releases captures for hidden rows.
+  The header is `Recent sessions (option+o all)` with a right-aligned clickable `search…` box
+  (ends at the age column); on narrow lists `(option+o all)` is dropped first, then the title
+  truncates — the search box is always shown.
   `tests/tui-home.mjs` renders this against the native home layout with multiline
   and wrapped prompts; keep that regression in the default test suite.
   Home rows are fixed columns (marker ● running / ○ idle, title, last directory segment capped

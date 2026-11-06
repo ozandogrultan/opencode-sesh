@@ -219,7 +219,9 @@ const SIDEBAR_TITLE_WIDTH = 27
 const SIDEBAR_GROUP_WIDTH = 30
 const HOME_TITLE_MIN = 20
 const HOME_DIR_MIN = 8
-const HOME_HINT_MIN_WIDTH = 32
+const HOME_TITLE = "Recent sessions"
+const HOME_HINT = " (option+o all)"
+const HOME_SEARCH_LABEL = "search…"
 const HOME_DIR_MAX = 22
 const HOME_AGE_WIDTH = 4
 
@@ -2260,6 +2262,12 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       return false
     }
   }
+  // The search box is never truncated: the header title gives way first,
+  // dropping the "(option+o all)" hint before shortening "Recent sessions".
+  const searchActive = () => Boolean(query() || searching())
+  const searchInner = () => (searchActive() ? Math.max(HOME_SEARCH_LABEL.length, Math.min(24, listWidth() - 2 - HOME_TITLE.length - 1 - (query() ? 2 : 0))) : HOME_SEARCH_LABEL.length)
+  const searchBoxWidth = () => 1 + searchInner() + (query() ? 2 : 0)
+  const headerTitle = () => (listWidth() >= HOME_TITLE.length + HOME_HINT.length + 2 + searchBoxWidth() ? HOME_TITLE + HOME_HINT : HOME_TITLE)
   const layout = createMemo(() => {
     const rows = dimensions().height
     const footer = dimensions().width >= 44 && rows >= 14 ? HOME_FOOTER_ROWS : 0
@@ -2307,14 +2315,14 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           }
         >
           <box height={1} flexShrink={0} flexDirection="row" justifyContent="space-between" gap={2} overflow="hidden">
-            <box flexDirection="row" gap={1} flexShrink={0}>
-              <text wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>Recent sessions</text>
+            <box flexShrink={1} minWidth={0} overflow="hidden">
+              <text wrapMode="none" overflow="hidden" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>
+                {truncate(headerTitle(), Math.max(1, listWidth() - 2 - searchBoxWidth()))}
+              </text>
             </box>
-            <Show when={listWidth() >= HOME_HINT_MIN_WIDTH || query() || searching()}>
             <box
               flexDirection="row"
-              flexShrink={1}
-              minWidth={0}
+              flexShrink={0}
               gap={1}
               paddingLeft={1}
               backgroundColor={searching() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
@@ -2323,16 +2331,15 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 setSearching(true)
               }}
             >
-              <box width={query() || searching() ? 24 : 12} flexShrink={1} minWidth={0}>
+              <box width={searchInner()} flexShrink={0}>
                 <text
                   flexGrow={1}
-                  flexShrink={1}
                   overflow="hidden"
                   wrapMode="none"
                   attributes={query() ? undefined : TextAttributes.DIM}
                   style={{ fg: query() ? theme().text : theme().textMuted }}
                 >
-                  {query() || (searching() ? "" : "option+o all")}
+                  {query() || (searching() ? "" : HOME_SEARCH_LABEL)}
                   {searching() ? "▏" : ""}
                 </text>
               </box>
@@ -2342,7 +2349,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
               </Show>
             </box>
-            </Show>
           </box>
           <For each={visible()}>
             {(entry) => (
