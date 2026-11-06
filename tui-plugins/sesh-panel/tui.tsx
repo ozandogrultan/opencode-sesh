@@ -1208,11 +1208,29 @@ function Highlighted(props: {
   color: RGBA
   matchColor: RGBA
   bold?: boolean
+  fit?: boolean
 }) {
+  const [width, setWidth] = createSignal(Number.POSITIVE_INFINITY)
+  let element: { width: number } | undefined
+  if (props.fit) return (
+    <box
+      flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden"
+      ref={(ref: { width: number }) => { element = ref }}
+      renderAfter={() => {
+        if (element && element.width !== width()) {
+          const measured = element.width
+          queueMicrotask(() => setWidth(measured))
+        }
+      }}
+    >
+      <Highlighted {...props} fit={false} text={truncate(props.text, Math.max(0, width() - 1))} />
+    </box>
+  )
   const parts = createMemo(() => {
-    const range = matchRange(props.text, props.query)
-    if (!range) return [props.text, "", ""] as const
-    return [props.text.slice(0, range[0]), props.text.slice(range[0], range[1]), props.text.slice(range[1])] as const
+    const value = props.text
+    const range = matchRange(value, props.query)
+    if (!range) return [value, "", ""] as const
+    return [value.slice(0, range[0]), value.slice(range[0], range[1]), value.slice(range[1])] as const
   })
   return (
     <text
@@ -1389,6 +1407,30 @@ function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Ent
   let start = rows.length - 1
   while (start > 0 && pickerWindow(rows, start - 1, height, excerpt).at(-1) === rows.at(-1)) start--
   return start
+}
+
+const PICKER_HINT_SEGMENTS = [
+  "↑↓ move", "enter open", "ctrl+g project", "option+w input", "option+s pinned", "option+p preview",
+  "ctrl+s/d pin", "option+d delete", "ctrl+f fork", "esc close",
+]
+const PICKER_HINT_COMPACT = ["↑↓ move · enter open · esc close", "ctrl+g project · ctrl+f fork"]
+
+// The footer hint as non-wrapping lines: the two-line form when it fits, else
+// the segments packed into at most three lines, else a two-line compact form.
+// A fixed line count lets the picker budget its chrome exactly.
+function pickerHintLines(width: number): string[] {
+  const join = (parts: string[]) => parts.join(" · ")
+  const wide = [join(PICKER_HINT_SEGMENTS.slice(0, 6)), join(PICKER_HINT_SEGMENTS.slice(6))]
+  if (wide.every((line) => line.length <= width)) return wide
+  const packed: string[] = []
+  for (const segment of PICKER_HINT_SEGMENTS) {
+    const last = packed.at(-1)
+    if (last !== undefined && last.length + 3 + segment.length <= width) packed[packed.length - 1] = `${last} · ${segment}`
+    else packed.push(segment)
+  }
+  return packed.length <= 3 && packed.every((line) => line.length <= width)
+    ? packed
+    : PICKER_HINT_COMPACT.map((line) => truncate(line, width))
 }
 
 type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; poll: ReturnType<typeof createSessionPoll> }
@@ -1895,7 +1937,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   return (
     <box flexDirection="column" paddingRight={1} flexGrow={1} flexShrink={1}>
       <box flexDirection="row" justifyContent="space-between" gap={1}>
-        <text flexShrink={1} onMouseDown={(event: { stopPropagation: () => void }) => {
+        <text flexShrink={1} wrapMode="none" overflow="hidden" onMouseDown={(event: { stopPropagation: () => void }) => {
           // Sidebar-internal: keep this click from reaching the root handler,
           // which would release the nav layer this toggle just activated.
           event.stopPropagation()
@@ -2036,6 +2078,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                   </span>
                 </text>
                 <Highlighted
+                  fit
                   text={`${props.pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, SIDEBAR_TITLE_WIDTH - (props.pins().sessions.includes(row.entry.id) ? 2 : 0))}`}
                   query={query()}
                   color={isPendingDelete(row.entry.id) ? theme().error : theme().text}
@@ -2675,10 +2718,15 @@ const tui: TuiPlugin = async (api) => {
     // lets it size to content, so a taller picker drifts downward. Pin the
     // content height and offset it up by the same amount to keep it centred.
     const dialogWidth = Math.min(116, api.renderer.width - 2)
-    const CHROME_ROWS = 13
-    const listHeight = () => Math.max(6, Math.floor(termHeight * 0.75) - CHROME_ROWS)
-    const dialogHeight = () => listHeight() + CHROME_ROWS
-    const dialogOffset = () => Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1))
+    const hintLines = pickerHintLines(dialogWidth - 8)
+    const compactFilters = dialogWidth - 8 < 40
+    const chromeGap = termHeight < 20 ? 0 : 1
+    // Padding and gaps (4), title (1), search (2), coverage (2), filters (2), footer hint.
+    const chromeRows = 6 + chromeGap * 5 + hintLines.length
+    const dialogHeight = () => Math.min(Math.max(Math.floor(termHeight * 0.75), chromeRows + 4), Math.max(termHeight - 2, 1))
+    const listHeight = () => Math.max(1, dialogHeight() - chromeRows)
+    // Never lift the dialog above the first terminal row.
+    const dialogOffset = () => Math.max(-Math.floor(termHeight / 4), Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1)))
     const hasExcerpt = (entry: Entry) => !!transcriptMatchExcerpt(searchIndex().get(entry.id), entry, query())
     const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt))
     const visiblePickerRows = createMemo(() => pickerWindow(
@@ -3008,10 +3056,10 @@ const tui: TuiPlugin = async (api) => {
           marginTop={dialogOffset()}
           paddingTop={1}
           paddingBottom={1}
-          gap={1}
+          gap={chromeGap}
           backgroundColor={api.theme.current.backgroundPanel}
         >
-          <box paddingLeft={4} paddingRight={4}>
+          <box paddingLeft={4} paddingRight={4} flexShrink={0}>
             <box flexDirection="row" justifyContent="space-between">
               <text attributes={TextAttributes.BOLD}>
                 Sessions <span style={{ fg: api.theme.current.textMuted }}>({selectableEntries().length})</span>
@@ -3020,7 +3068,7 @@ const tui: TuiPlugin = async (api) => {
                 esc
               </text>
             </box>
-            <box paddingTop={1}>
+            <box paddingTop={chromeGap}>
               <input
                 focused
                 placeholder="Search title, directory, transcript…"
@@ -3073,23 +3121,23 @@ const tui: TuiPlugin = async (api) => {
               />
             </box>
             <Show when={coverageLabel()}>
-              <box paddingTop={1}>
+              <box paddingTop={chromeGap}>
                 <text style={{ fg: api.theme.current.textMuted }}>{coverageLabel()}</text>
               </box>
             </Show>
-            <box flexDirection="row" gap={2} paddingTop={1}>
-              <text style={{ fg: scope() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => {
+            <box flexDirection="row" gap={compactFilters ? 1 : 2} paddingTop={chromeGap}>
+              <text flexShrink={0} wrapMode="none" style={{ fg: scope() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => {
                 const group = currentProject()
                 if (group) setScope(scope() === group ? undefined : group)
                 else api.ui.toast({ message: "No current project to filter", variant: "info" })
               }}>
-                {scope() ? `Project: ${truncate(scope()!, 22)}` : "Project: all"}
+                {scope() ? `Project: ${truncate(scope()!, compactFilters ? 10 : 22)}` : "Project: all"}
               </text>
-              <text style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
-                {waitingOnly() ? "● Needs input" : "○ Needs input"}
+              <text flexShrink={0} wrapMode="none" style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
+                {waitingOnly() ? (compactFilters ? "● Input" : "● Needs input") : (compactFilters ? "○ Input" : "○ Needs input")}
               </text>
-              <text style={{ fg: pinnedOnly() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => setPinnedOnly((value) => !value)}>
-                {pinnedOnly() ? "★ Pinned" : "☆ Pinned"}
+              <text flexShrink={0} wrapMode="none" style={{ fg: pinnedOnly() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => setPinnedOnly((value) => !value)}>
+                {pinnedOnly() ? (compactFilters ? "★ Pin" : "★ Pinned") : (compactFilters ? "☆ Pin" : "☆ Pinned")}
               </text>
             </box>
           </box>
@@ -3152,6 +3200,7 @@ const tui: TuiPlugin = async (api) => {
                         </text>
                       </Show>
                       <Highlighted
+                        fit
                         text={`${pins().sessions.includes(row.entry.id) ? "★ " : ""}${truncate(row.entry.title, pins().sessions.includes(row.entry.id) ? 59 : 61)}`}
                         query={query()}
                         bold={row.entry.id === selectableEntries()[cursor()]?.id}
@@ -3192,6 +3241,7 @@ const tui: TuiPlugin = async (api) => {
                           <box flexDirection="row" gap={1} paddingLeft={2}>
                             <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>↳</text>
                             <Highlighted
+                              fit
                               text={match()}
                               query={query()}
                               color={row.entry.id === selectableEntries()[cursor()]?.id ? api.theme.current.text : api.theme.current.textMuted}
@@ -3224,18 +3274,20 @@ const tui: TuiPlugin = async (api) => {
                 </box>
               </Show>
             </box>
-          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column">
-            <text
-              style={{
-                fg: pendingDelete() ? api.theme.current.warning : api.theme.current.textMuted,
-              }}
+          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column" height={hintLines.length}>
+            <Show
+              when={pendingDelete()}
+              fallback={
+                <For each={hintLines}>
+                  {(line) => <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{line}</text>}
+                </For>
+              }
             >
-              {pendingDelete()
-                ? `Delete "${truncate(pendingDelete()!.title, 40)}"? y confirm · n cancel`
-                : "↑↓ move · enter open · ctrl+g project · option+w input · option+s pinned · option+p preview"}
-            </text>
-            <Show when={!pendingDelete()}>
-              <text style={{ fg: api.theme.current.textMuted }}>ctrl+s/d pin · option+d delete · ctrl+f fork · esc close</text>
+              <text wrapMode="none" style={{ fg: api.theme.current.warning }}>
+                {dialogWidth < 70
+                  ? "y delete · n cancel"
+                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth - 40)}"? y confirm · n cancel`}
+              </text>
             </Show>
           </box>
           <Show when={showPreview()}>
@@ -3253,16 +3305,21 @@ const tui: TuiPlugin = async (api) => {
               paddingBottom={1}
               gap={1}
             >
-              <box flexDirection="row" justifyContent="space-between">
+              <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
                 <text attributes={TextAttributes.BOLD}>
                   {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth - 18) : "Preview"}
                 </text>
                 <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
               </box>
               <Show when={previewID()}>
-                <text style={{ fg: api.theme.current.textMuted }}>
-                  {prettyDir(selectableEntries()[cursor()]!.dir, process.env.HOME ?? "")} · {ago(selectableEntries()[cursor()]!.updated)}
-                </text>
+                <box flexDirection="row" gap={1} flexShrink={0}>
+                  <text flexGrow={1} flexShrink={1} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+                    {prettyDir(selectableEntries()[cursor()]!.dir, process.env.HOME ?? "")}
+                  </text>
+                  <text flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+                    {ago(selectableEntries()[cursor()]!.updated)}
+                  </text>
+                </box>
               </Show>
               <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }}>
                 <Show when={previewID()} fallback={<text style={{ fg: api.theme.current.textMuted }}>Select a session to preview</text>}>
@@ -3281,7 +3338,9 @@ const tui: TuiPlugin = async (api) => {
                   </Show>
                 </Show>
               </scrollbox>
-              <text style={{ fg: api.theme.current.textMuted }}>↑↓ switch session · esc back to picker</text>
+              <text flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+                {dialogWidth < 48 ? "↑↓ session · esc back" : "↑↓ switch session · esc back to picker"}
+              </text>
             </box>
           </Show>
         </box>
@@ -3344,6 +3403,8 @@ const tui: TuiPlugin = async (api) => {
       failed = true
     }
     const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
+    const windowWidth = Math.max(1, ...rows.map((row) => money(row.window).length))
+    const lifetimeWidth = Math.max(1, ...rows.map((row) => money(row.lifetime).length))
     const home = process.env.HOME ?? ""
     const disposeKeys = api.keymap.registerLayer({
       mode: "modal",
@@ -3354,7 +3415,7 @@ const tui: TuiPlugin = async (api) => {
     api.ui.dialog.replace(
       () => (
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
-          <text attributes={TextAttributes.BOLD}>
+          <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
             Cost digest{" "}
             <span style={{ fg: api.theme.current.textMuted }}>(24h · lifetime)</span>
           </text>
@@ -3366,14 +3427,15 @@ const tui: TuiPlugin = async (api) => {
               </text>
             }
           >
+            <scrollbox height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)} scrollbarOptions={{ visible: false }}>
             <For each={rows}>
               {(row) => (
-                <box flexDirection="row" gap={2}>
-                  <text flexShrink={0} style={{ fg: api.theme.current.success }}>
-                    {money(row.window)}
+                <box flexDirection="row" gap={2} height={1} flexShrink={0}>
+                  <text width={windowWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.success }}>
+                    {money(row.window).padStart(windowWidth)}
                   </text>
-                  <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
-                    {money(row.lifetime)}
+                  <text width={lifetimeWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+                    {money(row.lifetime).padStart(lifetimeWidth)}
                   </text>
                   <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
                     ({row.sessions})
@@ -3384,6 +3446,7 @@ const tui: TuiPlugin = async (api) => {
                 </box>
               )}
             </For>
+            </scrollbox>
           </Show>
           <box flexShrink={0}>
             <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
@@ -3433,6 +3496,14 @@ const tui: TuiPlugin = async (api) => {
     const currentID = route.name === "session" ? route.params?.sessionID : undefined
     const previous = items.findIndex((item) => item.entry.id === (currentID ?? lastNeedsID))
     const [cursor, setCursor] = createSignal(previous < 0 ? 0 : (previous + 1) % items.length)
+    let needsScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
+    const revealCursor = () => {
+      const row = cursor()
+      if (!needsScroll || needsScroll.height <= 0) return
+      if (row < needsScroll.scrollTop) needsScroll.scrollTo(row)
+      else if (row >= needsScroll.scrollTop + needsScroll.height) needsScroll.scrollTo(row - needsScroll.height + 1)
+    }
+    createEffect(revealCursor)
     const moveCursor = (delta: number) =>
       setCursor((value) => Math.max(0, Math.min(items.length - 1, value + delta)))
     const choose = (target = items[cursor()]) => {
@@ -3466,11 +3537,15 @@ const tui: TuiPlugin = async (api) => {
     api.ui.dialog.replace(
       () => (
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
-          <text attributes={TextAttributes.BOLD}>
+          <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
             Needs input{" "}
             <span style={{ fg: api.theme.current.textMuted }}>({items.length} · longest waiting first)</span>
           </text>
-          <scrollbox flexGrow={1} height={Math.max(6, Math.floor(api.renderer.height / 2) - 10)} scrollbarOptions={{ visible: false }}>
+          <scrollbox
+            ref={(box) => { needsScroll = box; queueMicrotask(revealCursor) }}
+            height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)}
+            scrollbarOptions={{ visible: false }}
+          >
             <For each={items}>
               {(item, index) => (
                 <box
@@ -3491,6 +3566,7 @@ const tui: TuiPlugin = async (api) => {
                   <text
                     flexGrow={1}
                     flexShrink={1}
+                    minWidth={12}
                     wrapMode="none"
                     style={{
                       fg:
@@ -3499,10 +3575,11 @@ const tui: TuiPlugin = async (api) => {
                           : api.theme.current.text,
                     }}
                   >
-                    {truncate(item.entry.title, 48)}
+                    {truncate(item.entry.title, api.renderer.width < 80 ? 18 : 48)}
                   </text>
                   <text
                     flexShrink={0}
+                    wrapMode="none"
                     style={{
                       fg:
                         index() === cursor()
@@ -3510,10 +3587,12 @@ const tui: TuiPlugin = async (api) => {
                           : api.theme.current.warning,
                     }}
                   >
-                    {item.reason}
+                    {api.renderer.width < 80 ? (item.reason === "awaiting answer" ? "answer" : "stuck") : item.reason}
                   </text>
+                  <Show when={api.renderer.width >= 80}>
                   <text
-                    flexShrink={0}
+                    flexShrink={1}
+                    wrapMode="none"
                     style={{
                       fg:
                         index() === cursor()
@@ -3523,12 +3602,15 @@ const tui: TuiPlugin = async (api) => {
                   >
                     {prettyDir(item.entry.dir, home)} · {item.since === undefined ? "time unknown" : `waiting ${ago(item.since)}`}
                   </text>
+                  </Show>
                 </box>
               )}
             </For>
           </scrollbox>
           <box flexShrink={0}>
-            <text style={{ fg: api.theme.current.textMuted }}>↑↓ navigate · enter open · n open next waiting · esc close</text>
+            <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+              {api.renderer.width < 80 ? "↑↓ move · enter open · esc close" : "↑↓ navigate · enter open · n open next waiting · esc close"}
+            </text>
           </box>
         </box>
       ),

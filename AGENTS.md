@@ -31,6 +31,7 @@ bun run test           # build + fixture-DB regression suite — must stay green
 bun run test:changelog # release-tooling regressions (scripts/changelog.sh)
 bun run test:picker    # PTY picker suite
 bun run test:tui-home  # real OpenTUI home layout regressions (also in bun run test)
+bun run test:tui-dialogs # picker / needs / costs / sidebar rendered through tui() (also in bun run test)
 bun run test:tui-worker # real blob Worker + bun:sqlite regressions (also in bun run test)
 bun run typecheck      # tsc over tui-plugins/ and plugins/
 bun run lint:sh        # bash -n on every script
@@ -246,6 +247,15 @@ when opencode exits, the picker reopens with the query preserved.
   `dialog.replace(...)`; `replace` resets the size to medium.
 - Use the `backgroundColor` **prop** on boxes, never `style={{backgroundColor}}`.
 - No percentage heights/widths in the picker; size the list window explicitly.
+  The dialog height is clamped to the terminal; the header block never shrinks
+  (`flexShrink={0}`) and the footer hint is a fixed number of non-wrapping
+  lines (`pickerHintLines`, compact form on narrow widths), so the chrome
+  budget (`chromeRows`) is exact and the list absorbs any shortfall.
+  Below 20 rows, decorative gaps collapse before functional chrome. Preview
+  metadata and its back hint never shrink or wrap. `/sesh-costs` scrolls its
+  bounded rows with right-aligned money columns; `/sesh-needs` keeps titles
+  readable by dropping directory metadata and shortening reasons below 80
+  columns, and scrolls keyboard selection into view.
 - The picker windows by visible terminal lines: directory headings take two
   lines, transcript excerpts can take a second line, and a sticky directory
   heading keeps a scrolled group identifiable. Wheel scroll follows every
@@ -277,6 +287,9 @@ when opencode exits, the picker reopens with the query preserved.
   same row. The section lists every session with no row cap
   (`tests/tui.mjs` asserts the cap stays out); overflow scrolls inside the
   stretched section.
+  Its heading never wraps. Sidebar/picker titles and picker excerpts use
+  `Highlighted` with `fit` to reserve a blank cell and show an ellipsis at
+  their measured width rather than hard-clipping against the age column.
 - **Hover shortcuts yield to typing.** Sidebar and home rows bind Option-P/D/S/R
   (and `/` in the sidebar) only while hovered; any keypress no keymap layer
   consumed (composer typing) drops the hover (`releaseHoverOnTyping`), and
@@ -304,6 +317,9 @@ when opencode exits, the picker reopens with the query preserved.
   and Python 3).
 - `bun run test:tui-home` — real OpenTUI render regressions for the home list
   (also run by `bun run test`).
+- `bun run test:tui-dialogs` — drives the real `tui()` with a mock host API
+  (`tests/dialog-harness.mjs`) and asserts frames of the picker and the slash
+  dialogs at small terminal sizes (also run by `bun run test`).
 - `bun run test:tui-worker` — starts the real blob Worker against a bun:sqlite
   fixture; asserts results round-trip and the main thread keeps ticking during
   a slow query and during transcript indexing of large tool payloads (also run
