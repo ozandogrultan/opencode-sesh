@@ -2051,7 +2051,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
 }
 
 const HOME_SESSION_LIMIT = 6
-// Layout baseline: OpenCode 2.2.4. Re-check these assumptions and the matching
+// Layout baseline: OpenCode 2.2.4 (layout unchanged through 2.2.5). Re-check these assumptions and the matching
 // tests/tui-home.mjs fixture when upgrading OpenCode: the fixture mirrors the
 // host layout, so it cannot detect upstream layout changes on its own.
 // Sources pinned to that release:
