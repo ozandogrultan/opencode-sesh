@@ -220,6 +220,30 @@ try {
       assert.equal(new Set(dirCols).size, 1, "directory column must align\n" + frame())
     }
   }
+  // Titles that fill their column still leave two blank columns before the
+  // directory and before the age, and are cut with an ellipsis.
+  publish({ entries: entries.map((entry, index) => ({ ...entry, title: `Session ${index} ` + "very long title ".repeat(8), dir: "/work/data-science-DIAL-2764", updated: Date.now() - (index % 2 ? 3600_000 : 0) })), failed: false })
+  for (const width of [110, 80, 44]) {
+    await resize(width, 40)
+    setMessage("hi")
+    await setup.flush()
+    const rows = frame().split("\n").filter((line) => /Session \d/.test(line))
+    assert.ok(rows.length > 1, frame())
+    for (const row of rows) {
+      assert.match(row.trimEnd(), /…\s{2,}data-\S*\s+(now|\d+[mhd])$/, `title, directory and age need a two-column gap at ${width}\n` + frame())
+      assert.match(row.trimEnd(), /\S\s{2,}(now|\d+[mhd])$/, frame())
+    }
+  }
+  await resize(28, 40)
+  setMessage("hi")
+  await setup.flush()
+  for (const row of frame().split("\n").filter((line) => /Session \d/.test(line))) {
+    assert.match(row.trimEnd(), /…\s{2,}(now|\d+[mhd])$/, "title and age need a two-column gap without a directory\n" + frame())
+  }
+  publish({ entries: entries.map((entry, index) => ({ ...entry, dir: "/" + "long-directory-name/".repeat(12) + (index % 2 ? "data-science-DIAL-2764" : "x") })), failed: false })
+  await resize(28, 40)
+  setMessage("hi")
+  await setup.flush()
   const markerLines = frame().split("\n")
   const busy = markerLines.find((line) => line.includes("Session 1"))
   assert.match(busy, /^\s*●/, "running session gets a filled marker\n" + frame())

@@ -222,7 +222,7 @@ const HOME_DIR_MIN = 8
 const HOME_TITLE = "Recent sessions"
 const HOME_HINT = " (option+o all)"
 const HOME_SEARCH_LABEL = "search…"
-const HOME_DIR_MAX = 22
+const HOME_DIR_MAX = 23
 const HOME_AGE_WIDTH = 4
 
 // The sidebar lists every session (newest first, pins ahead) and fills
@@ -2245,7 +2245,9 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const columns = () => {
     const width = Math.max(1, listWidth())
     const age = HOME_AGE_WIDTH
-    const wanted = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
+    // +1: the directory text keeps a blank column before the age.
+    const longest = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
+    const wanted = longest > 0 ? longest + 1 : 0
     const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
     // A starved title is worse than no directory: drop the column instead.
     const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
@@ -2372,7 +2374,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 </text>
                 <box width={columns().title} flexShrink={0} overflow="hidden">
                   <Highlighted
-                    text={truncate(`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${entry.title}`, columns().title)}
+                    text={truncate(`${props.pins().sessions.includes(entry.id) ? "★ " : ""}${entry.title}`, columns().title - 1)}
                     query={query()}
                     color={theme().text}
                     matchColor={theme().warning}
@@ -2387,7 +2389,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                     attributes={pendingDelete() === entry.id ? undefined : TextAttributes.DIM}
                     style={{ fg: pendingDelete() === entry.id ? theme().error : theme().textMuted }}
                   >
-                    {truncate(pendingDelete() === entry.id ? "option+d again" : rowDir(entry), columns().dir)}
+                    {pendingDelete() === entry.id ? truncate("option+d again", columns().dir) : truncate(rowDir(entry), columns().dir - 1)}
                   </text>
                 </Show>
                 <text width={columns().age} flexShrink={0} wrapMode="none" attributes={TextAttributes.DIM} style={{ fg: theme().textMuted }}>
