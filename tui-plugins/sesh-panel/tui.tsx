@@ -2272,20 +2272,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const [top, setTop] = createSignal(dimensions().height)
   const [listWidth, setListWidth] = createSignal(Math.min(75, dimensions().width))
   let anchor: { y: number; width: number } | undefined
-  // Fixed columns: marker, title (flexes), directory (last segment), age.
-  const columns = () => {
-    const width = Math.max(1, listWidth())
-    const age = HOME_AGE_WIDTH
-    // +1: the directory text keeps a blank column before the age.
-    const longest = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
-    const wanted = longest > 0 ? longest + 1 : 0
-    const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
-    // A starved title is worse than no directory: drop the column instead.
-    const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
-    // The armed-delete prompt may not push the age out of a narrow list.
-    const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
-    return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
-  }
   const rowDir = (entry: Entry) => `${props.pins().directories.includes(entry.dir) ? "★ " : ""}${dirLabels().get(entry.dir) ?? shortDir(entry.dir, home)}`
   // Running state comes from the host's live session store: no polling here.
   const isRunning = (id: string): boolean => {
@@ -2315,6 +2301,20 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   const visible = createMemo(() => filtered().slice(0, layout().limit))
   const dirLabels = createMemo(() => homeDirLabels(visible().map((entry) => entry.dir), home))
   const spinFrame = createSpinner(() => visible().some((entry) => isRunning(entry.id)))
+  // Fixed columns: marker, title (flexes), directory (last segment), age.
+  const columns = createMemo(() => {
+    const width = Math.max(1, listWidth())
+    const age = HOME_AGE_WIDTH
+    // +1: the directory text keeps a blank column before the age.
+    const longest = Math.max(0, ...visible().map((entry) => rowDir(entry).length))
+    const wanted = longest > 0 ? longest + 1 : 0
+    const room = Math.min(HOME_DIR_MAX, wanted, width - 1 - age - 3 - HOME_TITLE_MIN)
+    // A starved title is worse than no directory: drop the column instead.
+    const dir = room >= HOME_DIR_MIN || room >= wanted ? Math.max(0, room) : 0
+    // The armed-delete prompt may not push the age out of a narrow list.
+    const pending = pendingDelete() ? Math.max(0, Math.min(Math.max(dir, 14), width - 1 - age - 3 - 1)) : dir
+    return { age, dir: pending, title: Math.max(1, width - 1 - age - pending - (pending > 0 ? 3 : 2)) }
+  })
   createEffect(() => {
     const ids = new Set(visible().map((entry) => entry.id))
     if (hovered() && !ids.has(hovered()!)) setHovered(undefined)
@@ -2338,7 +2338,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       maxHeight={layout().budget}
       overflow="hidden"
     >
-      <box visible={layout().limit > 0 && props.api.route.current.name === "home"} flexDirection="column" width="100%" paddingTop={layout().padding} gap={layout().gap}>
+      <box visible={layout().limit > 0} flexDirection="column" width="100%" paddingTop={layout().padding} gap={layout().gap}>
         <Show
           when={entries().length > 0}
           fallback={
