@@ -246,7 +246,7 @@ try {
   await setup.flush()
   const markerLines = frame().split("\n")
   const busy = markerLines.find((line) => line.includes("Session 1"))
-  assert.match(busy, /^\s*●/, "running session gets a filled marker\n" + frame())
+  assert.match(busy, /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, "running session gets the sidebar spinner marker\n" + frame())
   const idle = markerLines.find((line) => line.includes("Session 0"))
   assert.match(idle, /^\s*○/, "idle session gets a hollow marker\n" + frame())
   assert.doesNotMatch(idle, /●/)

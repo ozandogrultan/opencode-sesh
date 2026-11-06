@@ -465,6 +465,26 @@ type PortalContainer = {
 // Loading-spinner frames for the marker of a session whose agent is working.
 const SIDEBAR_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+// The spinner animates only while a listed session is actually running, so
+// an idle list costs no timer and only running rows re-render per frame.
+function createSpinner(spinning: () => boolean): () => number {
+  const [frame, setFrame] = createSignal(0)
+  let timer: ReturnType<typeof setInterval> | undefined
+  createEffect(() => {
+    if (spinning() && !timer) {
+      timer = setInterval(() => setFrame((value) => (value + 1) % SIDEBAR_SPINNER.length), 120)
+    } else if (!spinning() && timer) {
+      clearInterval(timer)
+      timer = undefined
+      setFrame(0)
+    }
+  })
+  onCleanup(() => {
+    if (timer) clearInterval(timer)
+  })
+  return frame
+}
+
 function newestFirst(entries: Entry[]): Entry[] {
   return [...entries].sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id))
 }
@@ -1487,23 +1507,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     return sidebarMarker(id === currentID(), live)
   }
 
-  // The spinner animates only while a listed session is actually running, so
-  // an idle list costs no timer and only running rows re-render per frame.
-  const [spinFrame, setSpinFrame] = createSignal(0)
-  let spinTimer: ReturnType<typeof setInterval> | undefined
-  createEffect(() => {
-    const spinning = itemRows().some((entry) => markerOf(entry.id) === "running")
-    if (spinning && !spinTimer) {
-      spinTimer = setInterval(() => setSpinFrame((value) => (value + 1) % SIDEBAR_SPINNER.length), 120)
-    } else if (!spinning && spinTimer) {
-      clearInterval(spinTimer)
-      spinTimer = undefined
-      setSpinFrame(0)
-    }
-  })
-  onCleanup(() => {
-    if (spinTimer) clearInterval(spinTimer)
-  })
+  const spinFrame = createSpinner(() => itemRows().some((entry) => markerOf(entry.id) === "running"))
 
   const cancelDelete = () => {
     if (confirmTimer) clearTimeout(confirmTimer)
@@ -2310,6 +2314,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
   const visible = createMemo(() => filtered().slice(0, layout().limit))
   const dirLabels = createMemo(() => homeDirLabels(visible().map((entry) => entry.dir), home))
+  const spinFrame = createSpinner(() => visible().some((entry) => isRunning(entry.id)))
   createEffect(() => {
     const ids = new Set(visible().map((entry) => entry.id))
     if (hovered() && !ids.has(hovered()!)) setHovered(undefined)
@@ -2398,7 +2403,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 }
               >
                 <text width={1} flexShrink={0} style={{ fg: isRunning(entry.id) ? theme().success : theme().textMuted }}>
-                  {isRunning(entry.id) ? "●" : "○"}
+                  {isRunning(entry.id) ? SIDEBAR_SPINNER[spinFrame()] : "○"}
                 </text>
                 <box width={columns().title} flexShrink={0} overflow="hidden">
                   <Highlighted
