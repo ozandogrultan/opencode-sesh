@@ -46,12 +46,18 @@ export function SidebarHost(props) {
 export function HomeHost(props) {
   return <box width={props.width} height={props.height} flexDirection="column"><box height={3} /><HomeBottom {...props.panelProps} /></box>
 }
-// Host layout pinned to OpenCode v2.2.5, packages/tui/src/ui/dialog.tsx:
-// quarter-height anchor, one-row content padding, terminal-minus-two width cap.
+// Host layout pinned to OpenCode v2.2.6, packages/tui/src/ui/dialog.tsx: a
+// full-screen absolute layer at zIndex 3000 (above anything lower), a backdrop
+// that closes on mouse-up, a content box that stops mouse-up, a quarter-height
+// anchor, one-row content padding and a terminal-minus-two width cap.
 export function DialogHost(props) {
   return (
-    <box width="100%" height="100%" alignItems="center" paddingTop={props.height() / 4}>
-      <box width={props.width()} paddingTop={1}>{props.content()}</box>
+    <box
+      position="absolute" zIndex={3000} left={0} top={0} width="100%" height="100%"
+      alignItems="center" paddingTop={props.height() / 4}
+      onMouseUp={() => props.onBackdrop?.()}
+    >
+      <box width={props.width()} paddingTop={1} onMouseUp={(event) => event.stopPropagation()}>{props.content()}</box>
     </box>
   )
 }
@@ -98,6 +104,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const toasts = []
   const navigations = []
   let cleared = 0
+  let backdropPresses = 0
   let listedSessions = [...sessions]
   let hostWidth, setHostWidth, hostHeight, setHostHeight
   const dir = mkdtempSync(join(tmpdir(), "sesh-dialogs-"))
@@ -168,7 +175,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
     // Host geometry follows the terminal like the real dialog host does.
     ;[hostWidth, setHostWidth] = createSignal(dialogWidth)
     ;[hostHeight, setHostHeight] = createSignal(setup.renderer.height)
-    await render(() => panel.DialogHost({ content: dialog.content, width: hostWidth, height: hostHeight }), setup.renderer)
+    await render(() => panel.DialogHost({ content: dialog.content, width: hostWidth, height: hostHeight, onBackdrop: () => { backdropPresses += 1 } }), setup.renderer)
     await setup.flush()
     await setup.flush()
     await setup.flush()
@@ -187,6 +194,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
     },
     run(slash) { commands.find((entry) => entry.slash?.name === slash).onSelect() },
     get cleared() { return cleared },
+    get backdropPresses() { return backdropPresses },
     get spawns() { return globalThis.__seshSpawns },
     setCmux(inside) {
       if (inside) process.env.CMUX_WORKSPACE_ID = "workspace:test"

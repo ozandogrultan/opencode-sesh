@@ -241,6 +241,23 @@ await check("without cmux the workspace action is absent and nothing is spawned"
   } finally { harness.close() }
 })
 
+await check("picker menu items sit above the dialog layer and never reach its backdrop", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const lines = harness.setup.captureCharFrame().split("\n")
+    const y = lines.findIndex((line) => line.includes("Preview transcript"))
+    assert.ok(y >= 0, "menu renders above the dialog")
+    await harness.setup.mockMouse.click(lines[y].indexOf("Preview"), y)
+    await harness.setup.flush()
+    assert.equal(harness.backdropPresses, 0, "a menu click must not close the dialog through its backdrop")
+    assert.ok(harness.setup.captureCharFrame().includes("esc close"), "picker still open with its preview shown")
+  } finally { harness.close() }
+})
+
 await check("picker menu: Esc closes the menu first, Enter chooses its item without opening a row", async () => {
   const harness = await createHarness({ width: 80, height: 24, sessions, source })
   try {

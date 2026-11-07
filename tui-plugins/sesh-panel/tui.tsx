@@ -401,6 +401,10 @@ type ContextMenuHost = {
 }
 
 const CONTEXT_MENU_LAYER_PRIORITY = 30
+// OpenCode 2.2.6 stacks its dialog layer at zIndex 3000 and its own context
+// menus at 2500/2600. The menu must clear the dialog (the picker's menu opens
+// over it) while staying under the 5000 layer used for transient banners.
+const CONTEXT_MENU_Z_INDEX = 3500
 
 function contextMenuItems(pinned: boolean, cmux: boolean): MenuItem[] {
   return [
@@ -1588,7 +1592,7 @@ function ContextMenuOverlay(props: {
         container.position = "absolute"
         container.left = 0
         container.top = 0
-        container.zIndex = 1000
+        container.zIndex = CONTEXT_MENU_Z_INDEX
       }}
     >
       <Show when={props.view()} keyed>
