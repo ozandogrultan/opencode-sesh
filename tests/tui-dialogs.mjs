@@ -144,4 +144,169 @@ await check("picker preserves scope, needs-input filters and two-step delete", a
   } finally { harness.close() }
 })
 
+const sessionRows = (frame) => frame.split("\n").filter((line) => /[├└]/.test(line)).length
+
+for (const [width, height, minRows] of [[44, 14, 4], [80, 24, 6]]) {
+  await check(`picker ${width}x${height} shows at least ${minRows} session rows`, async () => {
+    const harness = await createHarness({ width, height, sessions, source })
+    try {
+      const frame = await harness.show(await harness.command("sesh"), Math.min(116, width - 2))
+      assert.ok(sessionRows(frame) >= minRows, frame)
+      assert.ok(!/transcripts/.test(frame), "a complete index takes no status line\n" + frame)
+      assert.equal(frame.split("\n").filter((line) => /esc close/.test(line)).length, 1, "one-line footer\n" + frame)
+    } finally { harness.close() }
+  })
+}
+
+await check("picker keeps indexing progress visible, then gives its row back", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source, indexDelay: 400 })
+  try {
+    const dialog = await harness.command("sesh")
+    const busy = await harness.show(dialog, 78)
+    assert.match(busy, /indexing transcripts \d+\/12/, busy)
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await harness.setup.flush()
+    await harness.setup.flush()
+    const done = harness.setup.captureCharFrame()
+    assert.ok(!/transcripts/.test(done), done)
+    assert.ok(sessionRows(done) > sessionRows(busy), "the freed status row goes to the list")
+  } finally { harness.close() }
+})
+
+const rowAt = (frame, title) => {
+  const lines = frame.split("\n")
+  const y = lines.findIndex((line) => line.includes(title))
+  assert.ok(y >= 0, `no row ${title}\n${frame}`)
+  return { x: lines[y].indexOf(title), y }
+}
+
+for (const [width, height] of [[44, 14], [80, 24]]) {
+  for (const cmux of [false, true]) {
+    await check(`picker right-click opens the action menu at ${width}x${height} ${cmux ? "inside" : "outside"} cmux`, async () => {
+      const harness = await createHarness({ width, height, sessions, source })
+      harness.setCmux(cmux)
+      try {
+        const dialog = await harness.command("sesh")
+        const before = await harness.show(dialog, Math.min(116, width - 2))
+        const at = rowAt(before, "Session number 1")
+        await harness.setup.mockMouse.click(at.x, at.y, 2)
+        await harness.setup.flush()
+        await harness.setup.flush()
+        const frame = harness.setup.captureCharFrame()
+        for (const label of ["Open", "Preview transcript", "Fork", "Pin", "Delete"]) assert.ok(frame.includes(label), `missing ${label}\n${frame}`)
+        assert.equal(frame.includes("Open in new cmux workspace"), cmux, frame)
+        for (const kept of ["Sessions (12)", "Search title", "Project: all"]) {
+          assert.ok(frame.includes(kept), `the menu must not cover ${kept}\n${frame}`)
+        }
+        assert.equal(harness.cleared, 0, "right-click must not close the picker")
+        assert.equal(harness.navigations.length, 0)
+        assert.equal(harness.spawns.length, 0, "opening the menu never runs cmux")
+      } finally { harness.close() }
+    })
+  }
+}
+
+await check("picker menu workspace item runs cmux only inside cmux, through the stubbed spawn", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  harness.setCmux(true)
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("down")
+    harness.press("down")
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.spawns.length, 1)
+    assert.equal(harness.spawns[0][0], "cmux")
+    assert.ok(harness.spawns[0][1].includes("opencode --session ses_dlg2"))
+    assert.ok(harness.cleared >= 1, "the picker closes before the workspace opens")
+  } finally { harness.close() }
+})
+
+await check("without cmux the workspace action is absent and nothing is spawned", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  harness.setCmux(false)
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("down")
+    harness.press("down")
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("picker menu: Esc closes the menu first, Enter chooses its item without opening a row", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const before = await harness.show(dialog, 78)
+    const at = rowAt(before, "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("Preview transcript"))
+    harness.press("escape")
+    await harness.setup.flush()
+    assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "Esc closes the menu")
+    assert.equal(harness.cleared, 0, "the first Esc must not close the picker")
+
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.navigations.length, 1, "Enter chooses the menu's first item (Open) exactly once")
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("picker menu Open opens the right-clicked row", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const before = await harness.show(dialog, 78)
+    const at = rowAt(before, "Session number 3")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: "ses_dlg3" }])
+  } finally { harness.close() }
+})
+
+await check("home right-click opens the same action menu", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const frame = await harness.home()
+    const at = rowAt(frame, "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    await harness.setup.flush()
+    const menu = harness.setup.captureCharFrame()
+    for (const label of ["Open", "Preview transcript", "Fork", "Pin", "Delete"]) assert.ok(menu.includes(label), `missing ${label}\n${menu}`)
+    harness.press("escape")
+    await harness.setup.flush()
+    assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"))
+  } finally { harness.close() }
+})
+
+for (const [width, height] of [[44, 14], [80, 24]]) {
+  await check(`needs ${width}x${height} truncates with ellipses and keeps its heading`, async () => {
+    const harness = await createHarness({ width, height, sessions, waiting: sessions.map((entry) => entry.id), source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-needs"), Math.min(88, width - 2))
+      const heading = frame.split("\n").find((line) => line.includes("Needs input"))
+      assert.match(heading, width < 80 ? /Needs input \(12\)\s*$/ : /\(12 · longest waiting first\)\s*$/, frame)
+      const row = frame.split("\n").find((line) => line.includes("Session number 11"))
+      assert.match(row, /…/, "long titles end in an ellipsis\n" + frame)
+      assert.ok(!frame.includes("time unknown"), frame)
+      if (width >= 80) assert.match(frame, /waiting \(start/, "the time stays whole while the directory shortens\n" + frame)
+    } finally { harness.close() }
+  })
+}
+
 process.exit(failures.length ? 1 : 0)

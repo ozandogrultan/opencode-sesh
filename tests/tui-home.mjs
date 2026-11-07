@@ -8,6 +8,9 @@ import { createSignal } from "solid-js"
 import { RGBA } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
+import { resolvePanelImport, stripCmuxEnv } from "./dialog-harness.mjs"
+
+stripCmuxEnv()
 
 const source = readFileSync(new URL("../tui-plugins/sesh-panel/tui.tsx", import.meta.url), "utf8")
 // Compile exactly as the published panel, but expose a test-only fixture. No
@@ -72,7 +75,7 @@ const { code } = transformSync(source + fixture, {
   ],
   plugins: [() => ({ visitor: {
     ImportDeclaration(path) {
-      path.node.source.value = import.meta.resolve(path.node.source.value)
+      path.node.source.value = resolvePanelImport(path.node.source.value)
     },
   } })],
 })

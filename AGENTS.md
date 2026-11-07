@@ -189,9 +189,13 @@ when opencode exits, the picker reopens with the query preserved.
   touches only in-flight sessions), the open session shows its own ●, and every other idle row
   stays neutral (polled periodically); Option-P previews
   a row and option+d deletes one (armed, then confirmed). Right-clicking a
-  sidebar row opens an action context menu (open, preview, cmux workspace when
-  inside cmux, fork, pin/unpin, delete); right-clicking a home or picker row
-  opens the session in a new cmux workspace. The sidebar section lists every
+  sidebar, home or picker row opens one shared action context menu
+  (`createContextMenu` + `ContextMenuOverlay`: open, preview, cmux workspace
+  only when `inCmux()` — `CMUX_WORKSPACE_ID` — fork, pin/unpin, delete). The
+  picker's menu registers its key layer in `modal` mode, stays inside the list
+  area (`createMenuView` bounds; borderless when squeezed) and hides the
+  footer while open; Esc closes the menu before the picker and Enter in the
+  search input must not submit while it is open. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
@@ -204,6 +208,12 @@ when opencode exits, the picker reopens with the query preserved.
   off the TUI thread but still costing worker CPU every poll, so the shared
   poll runs it only while the sidebar is subscribed
   (`poll(listener, { waiting: true })`); the home list never triggers it.
+- **Picker chrome:** `chromeRows()` is reactive: the status line ("indexing
+  transcripts i/n", "k of n transcripts indexed" on partial coverage, "showing
+  newest N" when truncated, active scope/filters) takes a row only while it has
+  text. Below `PICKER_TALL` (28) rows the footer is one line and directory
+  headings lose their blank line (`groupLines`); below 20 rows the decorative
+  gaps collapse too, and the dialog takes 85% of the terminal.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `option+o` and the command palette open it;
@@ -253,11 +263,13 @@ when opencode exits, the picker reopens with the query preserved.
   budget (`chromeRows`) is exact and the list absorbs any shortfall.
   Below 20 rows, decorative gaps collapse before functional chrome. Preview
   metadata and its back hint never shrink or wrap. `/sesh-costs` scrolls its
-  bounded rows with right-aligned money columns; `/sesh-needs` keeps titles
-  readable by dropping directory metadata and shortening reasons below 80
-  columns, and scrolls keyboard selection into view.
+  bounded rows with right-aligned money columns; `/sesh-needs` uses fixed
+  columns that truncate with an ellipsis (title, reason, then directory · wait
+  time, where the wait time stays whole and "waiting (start unknown)" covers a
+  missing start), drops the directory metadata and shortens reasons and the
+  heading below 80 columns, and scrolls keyboard selection into view.
 - The picker windows by visible terminal lines: directory headings take two
-  lines, transcript excerpts can take a second line, and a sticky directory
+  lines (one on terminals under 28 rows), transcript excerpts can take a second line, and a sticky directory
   heading keeps a scrolled group identifiable. Wheel scroll follows every
   OpenTUI delta and changes only the viewport; real mouse movement changes
   selection without recentering it.
