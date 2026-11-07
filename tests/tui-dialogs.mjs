@@ -340,4 +340,32 @@ await check("picker pins with option+s/r and ctrl+s/d; option+k filters pinned",
   } finally { harness.close() }
 })
 
+await check("failure toasts include the error reason and fall back to plain text", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    await harness.show(dialog, 78)
+    harness.api.client.session.delete = async () => { throw new Error("database is locked") }
+    harness.press("alt+d")
+    harness.press("alt+d")
+    for (let i = 0; i < 20 && !harness.toasts.some((toast) => /delete/.test(toast.message)); i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not delete session: database is locked")
+
+    harness.api.client.session.fork = async () => { throw new Error("") }
+    harness.press("ctrl+f")
+    for (let i = 0; i < 20 && !harness.toasts.some((toast) => /fork/.test(toast.message)); i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not fork session", "no message: the plain text")
+  } finally { harness.close() }
+})
+
+await check("loading sessions failure names its cause", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    harness.api.client.project.list = async () => { throw new Error("server offline") }
+    harness.run("sesh")
+    for (let i = 0; i < 20 && !harness.toasts.length; i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not load sessions: server offline")
+  } finally { harness.close() }
+})
+
 process.exit(failures.length ? 1 : 0)

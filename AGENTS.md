@@ -252,6 +252,10 @@ when opencode exits, the picker reopens with the query preserved.
   no-op when absent, and `sesh --check` reports when the installed copy differs
   from the bundled one.
 
+Failure toasts (delete, fork, pins, session load, needs-input and cost data)
+go through `withReason(message, error)`, which appends the error's message
+when it has one and keeps the plain text otherwise.
+
 ### Hard-won rules — do not regress
 
 - **No `DialogSelect`.** Call `api.ui.dialog.setSize("xlarge")` **after**

@@ -172,6 +172,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   }
   return {
     api, setup, panel, layers, toasts, navigations, command, show,
+    run(slash) { commands.find((entry) => entry.slash?.name === slash).onSelect() },
     get cleared() { return cleared },
     get spawns() { return globalThis.__seshSpawns },
     setCmux(inside) {

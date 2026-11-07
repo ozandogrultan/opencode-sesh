@@ -322,6 +322,20 @@ function releaseHoverOnTyping(renderer: TuiPluginApi["renderer"], release: () =>
   onCleanup(() => renderer.keyInput.off("keypress", listener))
 }
 
+// The message carried by a thrown value or an API error body, as one short line.
+function errorReason(error: unknown, depth = 0): string | undefined {
+  if (typeof error === "string") return truncate(error.replace(/\s+/g, " ").trim(), 80) || undefined
+  if (!error || typeof error !== "object" || depth > 3) return undefined
+  const body = error as { message?: unknown; data?: unknown; error?: unknown }
+  return errorReason(body.message, depth + 1) ?? errorReason(body.data, depth + 1) ?? errorReason(body.error, depth + 1)
+}
+
+// A failure toast with the cause appended when there is one.
+function withReason(message: string, error: unknown): string {
+  const reason = errorReason(error)
+  return reason ? `${message}: ${reason}` : message
+}
+
 // cmux exports CMUX_WORKSPACE_ID to every process in its terminals, so the TUI
 // only sees it when opencode was started inside one; read at use, never cached.
 function inCmux(): boolean {
@@ -340,9 +354,9 @@ function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
   const args = ["new-workspace", "--name", entry.title || entry.id, "--command", `opencode --session ${entry.id}`, "--focus", "true"]
   if (entry.dir) args.push("--cwd", entry.dir)
   const child = spawn("cmux", args, { stdio: "ignore" })
-  child.on("error", () => api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" }))
+  child.on("error", (error: unknown) => api.ui.toast({ message: withReason("Could not open a cmux workspace", error), variant: "error" }))
   child.on("exit", (code) => {
-    if (code) api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" })
+    if (code) api.ui.toast({ message: `Could not open a cmux workspace: cmux exited with code ${code}`, variant: "error" })
   })
 }
 
@@ -1488,8 +1502,8 @@ async function forkSession(api: TuiPluginApi, entry: Entry, beforeOpen?: () => v
     beforeOpen?.()
     api.route.navigate("session", { sessionID: created.id })
     api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
-  } catch {
-    api.ui.toast({ message: "Could not fork session", variant: "error" })
+  } catch (error) {
+    api.ui.toast({ message: withReason("Could not fork session", error), variant: "error" })
   }
 }
 
@@ -1811,8 +1825,8 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       setTimeout(restore, 0)
       props.api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
       if (currentID() === entry.id) props.api.route.navigate("home")
-    } catch {
-      props.api.ui.toast({ message: "Could not delete session", variant: "error" })
+    } catch (error) {
+      props.api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
     } finally {
       setDeleting(undefined)
     }
@@ -2296,8 +2310,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       if ("params" in props.api.route.current && (props.api.route.current.params as any)?.sessionID === entry.id) {
         props.api.route.navigate("home")
       }
-    } catch {
-      props.api.ui.toast({ message: "Could not delete session", variant: "error" })
+    } catch (error) {
+      props.api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
     } finally {
       setDeleting(undefined)
     }
@@ -2653,7 +2667,7 @@ const tui: TuiPlugin = async (api) => {
         setPins(updated)
         api.ui.toast({ message: `${updated[kind].includes(value) ? "Pinned" : "Unpinned"} ${kind === "sessions" ? "session" : "directory"}`, variant: "info" })
       },
-      () => api.ui.toast({ message: "Could not update pins", variant: "error" }),
+      (error) => api.ui.toast({ message: withReason("Could not update pins", error), variant: "error" }),
     )
   }
   api.slots.register({
@@ -2676,8 +2690,8 @@ const tui: TuiPlugin = async (api) => {
     let entriesResult: EntryResult
     try {
       entriesResult = await fetchEntries(api)
-    } catch {
-      api.ui.toast({ message: "Could not load sessions", variant: "error" })
+    } catch (error) {
+      api.ui.toast({ message: withReason("Could not load sessions", error), variant: "error" })
       return
     }
     const entries = entriesResult.entries
@@ -2985,8 +2999,8 @@ const tui: TuiPlugin = async (api) => {
         setAllEntries(remaining)
         api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
         if (currentSessionID() === entry.id) api.route.navigate("home")
-      } catch {
-        api.ui.toast({ message: "Could not delete session", variant: "error" })
+      } catch (error) {
+        api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
       }
     }
 
@@ -3506,6 +3520,7 @@ const tui: TuiPlugin = async (api) => {
     type CostRow = { directory: string; window: number; lifetime: number; sessions: number }
     let rows: CostRow[] = []
     let failed = false
+    let failure: unknown
     try {
       const db = await openTranscriptDb()
       if (!db) failed = true
@@ -3545,8 +3560,9 @@ const tui: TuiPlugin = async (api) => {
           db.close()
         }
       }
-    } catch {
+    } catch (error) {
       failed = true
+      failure = error
     }
     const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
     const windowWidth = Math.max(1, ...rows.map((row) => money(row.window).length))
@@ -3569,7 +3585,7 @@ const tui: TuiPlugin = async (api) => {
             when={!failed && rows.length > 0}
             fallback={
               <text style={{ fg: api.theme.current.textMuted }}>
-                {failed ? "Cost data unavailable." : "No assistant cost recorded."}
+                {failed ? `${withReason("Cost data unavailable", failure)}.` : "No assistant cost recorded."}
               </text>
             }
           >
@@ -3618,8 +3634,8 @@ const tui: TuiPlugin = async (api) => {
       let waiting: Map<string, WaitingDetail>
       try {
         waiting = await queryWaitingDetails(dbClient.run)
-      } catch {
-        api.ui.toast({ message: "Needs-input data unavailable", variant: "error" })
+      } catch (error) {
+        api.ui.toast({ message: withReason("Needs-input data unavailable", error), variant: "error" })
         return
       }
       items = entries
@@ -3630,8 +3646,8 @@ const tui: TuiPlugin = async (api) => {
           since: waiting.get(entry.id)?.since,
         }))
         .sort((a, b) => (a.since ?? a.entry.updated) - (b.since ?? b.entry.updated))
-    } catch {
-      api.ui.toast({ message: "Could not load sessions", variant: "error" })
+    } catch (error) {
+      api.ui.toast({ message: withReason("Could not load sessions", error), variant: "error" })
       return
     }
     if (items.length === 0) {

@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
   return factory(
     readExtraction,
@@ -1136,6 +1136,22 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const toasts = []
   data.openInCmuxWorkspace({ ui: { toast: (value) => toasts.push(value) } }, { ...entry, id: "ses_bad;touch injected" })
   assert.equal(toasts[0].message, "Invalid session ID")
+}
+
+// Failure toasts carry the cause when there is one and keep the plain text otherwise.
+{
+  const { withReason, errorReason } = loadDataLayer()
+  assert.equal(withReason("Could not delete session", new Error("database is locked")), "Could not delete session: database is locked")
+  assert.equal(withReason("Could not delete session", { data: { message: "not found" } }), "Could not delete session: not found")
+  assert.equal(withReason("Could not delete session", { error: { message: "nested" } }), "Could not delete session: nested")
+  assert.equal(withReason("Could not delete session", "plain\nmulti   line"), "Could not delete session: plain multi line")
+  for (const empty of [undefined, null, {}, new Error(""), 42, { message: 7 }]) {
+    assert.equal(withReason("Could not fork session", empty), "Could not fork session", String(empty))
+  }
+  const cycle = { }
+  cycle.data = cycle
+  assert.equal(errorReason(cycle), undefined, "cyclic error bodies terminate")
+  assert.ok(errorReason("x".repeat(500)).length <= 80)
 }
 
 // cmux is detected from CMUX_WORKSPACE_ID at use time: without it, the
