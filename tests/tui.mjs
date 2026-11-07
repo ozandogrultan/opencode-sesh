@@ -821,6 +821,9 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const labels = (items) => items.map((item) => item.label)
   // A menu taller than its bounds scrolls so the selection is always shown.
   assert.deepEqual(contextMenuWindow(6, 0, 10), { start: 0, size: 6 })
+  assert.deepEqual(contextMenuWindow(6, 3, 5, 0), { start: 0, size: 5 })
+  assert.deepEqual(contextMenuWindow(6, 5, 5, 0), { start: 1, size: 5 })
+  assert.deepEqual(contextMenuWindow(6, 0, 5, 1), { start: 0, size: 5 })
   for (const rows of [1, 2, 3, 5]) {
     for (let index = 0; index < 6; index++) {
       const { start, size } = contextMenuWindow(6, index, rows)

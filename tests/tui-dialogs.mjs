@@ -578,6 +578,71 @@ await check("picker 44x14 menu with the status line visible keeps the selected i
   } finally { harness.close() }
 })
 
+await check("picker clipped menu keeps a visible action under the pointer until release", async () => {
+  const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.slice(0, 6).map((entry) => entry.id), source })
+  harness.setCmux(true)
+  let forks = 0
+  harness.api.client.session.fork = async () => { forks++; return { data: { id: "ses_menuFork" } } }
+  try {
+    await harness.show(await harness.command("sesh"), 42)
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const at = rowAt(harness.setup.captureCharFrame(), "Session number")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const item = rowAt(harness.setup.captureCharFrame(), "Fork")
+    await harness.setup.mockMouse.pressDown(item.x, item.y)
+    harness.setup.renderer.recheckHoverState()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.equal(rowAt(frame, "Fork").y, item.y, "hover must not move Fork away from the pointer\n" + frame)
+    await harness.setup.mockMouse.release(item.x, item.y)
+    await settle()
+    assert.equal(forks, 1)
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: "ses_menuFork" }])
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+for (const excerpts of [false, true]) {
+  await check(`picker resize reveals its retained selection${excerpts ? " with transcript excerpts" : ""}`, async () => {
+    const entries = sessions.map((entry, index) => ({ ...entry, title: `Pick${index}` }))
+    const harness = await createHarness({ width: 120, height: 40, sessions: entries, source, transcript: excerpts ? "needle in the transcript" : undefined })
+    try {
+      await harness.show(await harness.command("sesh"), 116)
+      if (excerpts) {
+        await harness.setup.mockInput.typeText("needle")
+        await settle(150)
+        await harness.setup.flush()
+      }
+      for (let i = 0; i < 5; i++) harness.press("down")
+      await harness.setup.flush()
+      const frame = await harness.resize(44, 14, 42)
+      assert.match(frame, /Pick5\b/, "retained selection stays visible\n" + frame)
+      if (excerpts) assert.match(frame, /↳/, "transcript excerpts remain visible\n" + frame)
+      harness.press("enter")
+      assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: sessions[5].id }])
+    } finally { harness.close() }
+  })
+}
+
+await check("picker wheel scrolling stays independent of selection until resize", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const frame = await harness.show(await harness.command("sesh"), 78)
+    const at = rowAt(frame, "Session number 0")
+    for (let i = 0; i < 12; i++) await harness.setup.mockMouse.scroll(at.x, at.y, "down")
+    await harness.setup.flush()
+    const scrolled = harness.setup.captureCharFrame()
+    assert.ok(!scrolled.includes("Session number 0 "), "wheel scroll may hide the retained selection\n" + scrolled)
+    await harness.setup.flush()
+    assert.equal(harness.setup.captureCharFrame(), scrolled, "an ordinary frame must not re-center selection")
+    const resized = await harness.resize(60, 24, 58)
+    assert.match(resized, /Session number 0\b/, "resize reveals the retained selection\n" + resized)
+  } finally { harness.close() }
+})
+
 await check("picker resize re-derives its layout", async () => {
   const harness = await createHarness({ width: 120, height: 40, sessions, source })
   try {

@@ -450,9 +450,11 @@ function trackSize(api: TuiPluginApi) {
 
 // The slice of `count` items that fits `rows` lines while keeping `index` in
 // view; the whole list when it fits.
-function contextMenuWindow(count: number, index: number, rows: number): { start: number; size: number } {
+function contextMenuWindow(count: number, index: number, rows: number, previousStart = 0): { start: number; size: number } {
   const size = Math.max(1, Math.min(count, rows))
-  const start = Math.max(0, Math.min(count - size, index - Math.floor(size / 2)))
+  let start = Math.max(0, Math.min(count - size, previousStart))
+  if (index < start) start = index
+  else if (index >= start + size) start = index - size + 1
   return { start, size }
 }
 
@@ -463,9 +465,17 @@ function createMenuView(
   state: Accessor<MenuState | undefined>,
   bounds?: () => { top: number; bottom: number } | undefined,
 ) {
+  let previousItems: MenuItem[] | undefined
+  let windowStart = 0
   return createMemo(() => {
     const current = state()
-    if (!current) return undefined
+    if (!current) {
+      previousItems = undefined
+      windowStart = 0
+      return undefined
+    }
+    if (current.items !== previousItems) windowStart = 0
+    previousItems = current.items
     const { width: cols, height: rows } = api.renderer
     const limit = bounds?.()
     const box = contextMenuBox(
@@ -476,7 +486,8 @@ function createMenuView(
     )
     const bordered = box.height >= current.items.length + 2
     // A menu taller than its bounds scrolls its items so the selection stays visible.
-    const { start, size } = contextMenuWindow(current.items.length, current.index, bordered ? box.height - 2 : box.height)
+    const { start, size } = contextMenuWindow(current.items.length, current.index, bordered ? box.height - 2 : box.height, windowStart)
+    windowStart = start
     const hidden = size < current.items.length
     // Scrolled menus widen by two columns for the ▲/▼ hint on their edge rows.
     const wide = hidden ? { ...box, width: Math.min(cols, box.width + 2) } : box
@@ -2971,12 +2982,9 @@ const tui: TuiPlugin = async (api) => {
 
     const togglePreview = () => setShowPreview((value) => !value)
 
-    const selectCursor = (index: number) => {
-      const count = selectableEntries().length
-      if (count === 0) return
-      cancelDelete()
-      const next = Math.max(0, Math.min(count - 1, index))
-      const id = selectableEntries()[next].id
+    const revealCursor = (index = cursor()) => {
+      const id = selectableEntries()[index]?.id
+      if (!id) return
       const flat = pickerRows()
       const target = flat.findIndex((row) => row.kind === "item" && row.entry.id === id)
       let start = Math.min(viewportStart(), maxViewportStart())
@@ -2985,6 +2993,13 @@ const tui: TuiPlugin = async (api) => {
         (row) => row.kind === "item" && row.entry.id === id,
       )) start++
       setViewportStart(Math.max(0, Math.min(start, maxViewportStart())))
+    }
+    const selectCursor = (index: number) => {
+      const count = selectableEntries().length
+      if (count === 0) return
+      cancelDelete()
+      const next = Math.max(0, Math.min(count - 1, index))
+      revealCursor(next)
       setCursor(next)
     }
     const moveCursor = (delta: number) => selectCursor(cursor() + delta)
@@ -3168,7 +3183,10 @@ const tui: TuiPlugin = async (api) => {
       if (state && !selectableEntries().some((entry) => entry.id === state.entry.id)) menu.close()
     })
     // The menu's anchor and bounds are screen positions: a resize invalidates them.
-    createEffect(on(tracked.size, () => menu.close(), { defer: true }))
+    createEffect(on(tracked.size, () => {
+      menu.close()
+      revealCursor()
+    }, { defer: true }))
 
     // Option-S/R match the sidebar and home list; Ctrl-S/D match the fzf picker.
     const pinSelectedSession = () => {
