@@ -454,9 +454,11 @@ await check("picker 44x14 menu with the status line visible keeps the selected i
       assert.ok(border < 0 || at < border, `${label} sits outside the menu box\n${frame()}`)
     }
     inside("Open")
+    assert.ok(frame().includes("▼") && !frame().includes("▲"), "items hide below the first window\n" + frame())
     for (let i = 0; i < 5; i++) harness.press("down")
     await harness.setup.flush()
     inside("Delete")
+    assert.ok(frame().includes("▲") && !frame().includes("▼"), "only earlier items are hidden at the end\n" + frame())
     assert.ok(frame().includes("Sessions (") && frame().includes("Search title"), "header intact\n" + frame())
     harness.press("enter")
     await harness.setup.flush()
@@ -482,6 +484,20 @@ await check("picker resize re-derives its layout", async () => {
     assert.ok(!small.includes("option+k pinned"), small)
     assert.ok(small.includes("esc close"), small)
     assert.ok(sessionRows(small) >= 3, small)
+  } finally { harness.close() }
+})
+
+await check("picker closes its action menu on resize and brings the footer back", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("Preview transcript"))
+    const resized = await harness.resize(60, 24, 58)
+    assert.ok(!resized.includes("Preview transcript"), "the menu closes on resize\n" + resized)
+    assert.ok(resized.includes("esc close"), "footer is back\n" + resized)
   } finally { harness.close() }
 })
 

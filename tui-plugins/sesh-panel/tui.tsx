@@ -470,7 +470,19 @@ function createMenuView(
     const bordered = box.height >= current.items.length + 2
     // A menu taller than its bounds scrolls its items so the selection stays visible.
     const { start, size } = contextMenuWindow(current.items.length, current.index, bordered ? box.height - 2 : box.height)
-    return { state: current, box, bordered, start, items: current.items.slice(start, start + size) }
+    const hidden = size < current.items.length
+    // Scrolled menus widen by two columns for the ▲/▼ hint on their edge rows.
+    const wide = hidden ? { ...box, width: Math.min(cols, box.width + 2) } : box
+    const placed = { ...wide, left: Math.max(0, Math.min(wide.left, cols - wide.width)) }
+    const labelWidth = Math.max(...current.items.map((item) => item.label.length))
+    const hint = (shown: number) => {
+      const more = (shown === 0 && start > 0 ? 1 : 0) + (shown === size - 1 && start + size < current.items.length ? 2 : 0)
+      return more === 3 ? " ↕" : more === 1 ? " ▲" : more === 2 ? " ▼" : hidden ? "  " : ""
+    }
+    return {
+      state: current, box: placed, bordered, start, items: current.items.slice(start, start + size),
+      label: (item: MenuItem, shown: number) => (hidden ? item.label.padEnd(labelWidth) : item.label) + hint(shown),
+    }
   })
 }
 
@@ -1623,7 +1635,7 @@ function ContextMenuOverlay(props: {
                             : theme().textMuted,
                     }}
                   >
-                    {item.label}
+                    {view.label(item, shown())}
                   </text>
                 </box>
               )}
@@ -2493,7 +2505,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     setPolledRunning(snapshot.running ?? new Set())
   })))
 
-
   const filtered = createMemo(() => {
     const q = query().trim().toLowerCase()
     const list = q
@@ -3151,6 +3162,8 @@ const tui: TuiPlugin = async (api) => {
       const state = menuState()
       if (state && !selectableEntries().some((entry) => entry.id === state.entry.id)) menu.close()
     })
+    // The menu's anchor and bounds are screen positions: a resize invalidates them.
+    createEffect(on(tracked.size, () => menu.close(), { defer: true }))
 
     // Option-S/R match the sidebar and home list; Ctrl-S/D match the fzf picker.
     const pinSelectedSession = () => {

@@ -196,7 +196,8 @@ when opencode exits, the picker reopens with the query preserved.
   picker's menu registers its key layer in `modal` mode, stays inside the list
   area (`createMenuView` bounds; borderless when squeezed, and windowed by
   `contextMenuWindow` so the selected item is always visible when the items
-  outnumber the rows) and hides the footer while open; Esc closes the menu before the picker and Enter in the
+  outnumber the rows, with ▲/▼ hints on its edge rows; closed on resize) and
+  hides the footer while open; Esc closes the menu before the picker and Enter in the
   search input must not submit while it is open. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
