@@ -199,6 +199,17 @@ function prettyDir(dir: string, home: string): string {
   return "…/" + parts.slice(-2).join("/")
 }
 
+function truncateCells(text: string, width: number): string {
+  if (width <= 0) return ""
+  if (stringWidth(text) <= width) return text
+  let fitted = ""
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)) {
+    if (stringWidth(fitted + segment + "…") > width) break
+    fitted += segment
+  }
+  return fitted + "…"
+}
+
 // A directory shortened to `width` columns without ever cutting its last
 // segment short while any room remains: leading segments go first ("…/a/b",
 // then "…/b"), and only a last segment wider than the column ends in "…".
@@ -213,13 +224,7 @@ function fitDir(dir: string, home: string, width: number): string {
     if (stringWidth(candidate) <= width) return candidate
   }
   if (stringWidth(last) + 2 <= width) return `…/${last}`
-  if (stringWidth(last) <= width) return last
-  let fitted = ""
-  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(last)) {
-    if (stringWidth(fitted + segment + "…") > width) break
-    fitted += segment
-  }
-  return fitted + "…"
+  return truncateCells(last, width)
 }
 
 // Home rows show a directory's last segment; distinct directories that share
@@ -3873,7 +3878,7 @@ const tui: TuiPlugin = async (api) => {
     const metas = items.map(metaText)
     const timeWidth = Math.max(0, ...metas.map((meta) => meta.time.length))
     const metaWidth = () => wide()
-      ? Math.min(Math.max(...metas.map((meta) => meta.dir.length + 3 + meta.time.length)), Math.max(timeWidth, Math.floor(inner() * 0.4)))
+      ? Math.min(Math.max(...metas.map((meta) => stringWidth(meta.dir) + 3 + meta.time.length)), Math.max(timeWidth, Math.floor(inner() * 0.4)))
       : 0
     const titleWidth = () => Math.max(8, inner() - reasonWidth() - 2 - (wide() ? metaWidth() + 2 : 0))
     // The wait time stays whole; the directory shortens, or drops when it
@@ -3881,7 +3886,7 @@ const tui: TuiPlugin = async (api) => {
     const metaLabel = (item: (typeof items)[number]) => {
       const { dir, time } = metaText(item)
       const room = metaWidth() - time.length - 3
-      return room >= 4 ? `${truncate(dir, room)} · ${time}` : truncate(time, metaWidth())
+      return room >= 4 ? `${fitDir(dir, home, room)} · ${time}` : truncateCells(time, metaWidth())
     }
     api.ui.dialog.replace(
       () => (
@@ -3927,7 +3932,7 @@ const tui: TuiPlugin = async (api) => {
                     wrapMode="none"
                     style={{ fg: api.theme.current.text }}
                   >
-                    {truncate(item.entry.title, titleWidth() - 1)}
+                    {truncateCells(item.entry.title, titleWidth() - 1)}
                   </text>
                   <text
                     width={reasonWidth()}

@@ -4,6 +4,7 @@
 // the data-layer tests. An optional argument points at another tui.tsx.
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import stringWidth from "string-width"
 import { createHarness, session, sourcePath } from "./dialog-harness.mjs"
 
 const source = readFileSync(process.argv[2] ?? sourcePath, "utf8")
@@ -338,6 +339,35 @@ for (const [width, height] of [[44, 14], [80, 24]]) {
       assert.match(row, /…/, "long titles end in an ellipsis\n" + frame)
       assert.ok(!frame.includes("time unknown"), frame)
       if (width >= 80) assert.match(frame, /waiting \(start/, "the time stays whole while the directory shortens\n" + frame)
+    } finally { harness.close() }
+  })
+}
+
+await check("needs wide directories preserve the complete wait time", async () => {
+  const entry = { ...session(0, "Wide directory"), directory: "/工作项目应用程序工作项目应用程序" }
+  const harness = await createHarness({ width: 80, height: 24, sessions: [entry], waiting: [entry.id], source })
+  harness.panel.__setDb(async () => [{ id: entry.id, reason: "question", question_since: Date.now() - 3600000 }])
+  try {
+    const frame = await harness.show(await harness.command("sesh-needs"), 78)
+    const row = frame.split("\n").find((line) => line.includes("Wide directory"))
+    assert.match(row, /….* · waiting 1h\s*$/, "wide directory text must not clip the wait time\n" + frame)
+  } finally { harness.close() }
+})
+
+for (const title of ["项目应用程序".repeat(4), "e\u0301".repeat(30), "👩‍💻".repeat(20)]) {
+  await check(`needs narrow titles truncate whole graphemes by cell width: ${title.slice(0, 6)}`, async () => {
+    const entry = session(0, title)
+    const harness = await createHarness({ width: 44, height: 24, sessions: [entry], waiting: [entry.id], source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-needs"), 42)
+      const row = frame.split("\n").find((line) => line.includes("answer"))
+      assert.ok(row, frame)
+      const label = row.split(/\s+answer/)[0].trim()
+      assert.ok(label.endsWith("…"), "the title has a visible ellipsis\n" + frame)
+      assert.equal(stringWidth(label), 23, "title fitting uses its terminal-cell budget")
+      const prefix = label.slice(0, -1)
+      const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)]
+      assert.ok(segments.some(({ index, segment }) => title.slice(0, index + segment.length) === prefix), "no grapheme is split")
     } finally { harness.close() }
   })
 }
