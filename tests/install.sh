@@ -34,7 +34,13 @@ install || { cat "$WORK/output"; fail 'fresh install failed'; }
 cmp -s "$ROOT/tui-plugins/sesh-panel/tui.tsx" "$CONFIG/tui-plugins/sesh-panel/tui.tsx" || fail 'panel copy'
 range=$(jq -r '.devDependencies["@opentui/solid"]' "$ROOT/package.json")
 jq -e --arg range "$range" '.dependencies["@opentui/solid"] == $range' "$CONFIG/package.json" >/dev/null || fail 'OpenTUI dependency drift'
+width_version=$(jq -r '.dependencies["string-width"]' "$ROOT/package.json")
+jq -e --arg version "$width_version" '.dependencies["string-width"] == $version' "$CONFIG/package.json" >/dev/null || fail 'terminal width dependency missing'
 install || fail 'repeat install failed'
+jq '.dependencies["string-width"] = "7.1.0"' "$CONFIG/package.json" > "$WORK/pinned-package.json"
+mv "$WORK/pinned-package.json" "$CONFIG/package.json"
+install || fail 'install with pinned width dependency failed'
+jq -e '.dependencies["string-width"] == "7.1.0"' "$CONFIG/package.json" >/dev/null || fail 'terminal width dependency pin overwritten'
 printf 'stale panel\n' > "$CONFIG/tui-plugins/sesh-panel/tui.tsx"
 install --sync-panel || fail 'panel sync failed'
 cmp -s "$ROOT/tui-plugins/sesh-panel/tui.tsx" "$CONFIG/tui-plugins/sesh-panel/tui.tsx" || fail 'panel sync did not refresh source'

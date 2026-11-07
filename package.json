@@ -68,6 +68,9 @@
     "postinstall": "bash install.sh --sync-panel || printf '%s\\n' 'sesh postinstall: panel sync failed; run bash install.sh --sync-panel after resolving the error above.' >&2",
     "prepublishOnly": "bun run test && bun run typecheck"
   },
+  "dependencies": {
+    "string-width": "7.2.0"
+  },
   "peerDependencies": {
     "@opencode/plugin": ">=2.2.0",
     "@opentui/core": ">=0.7.0",
@@ -79,9 +82,9 @@
     "@babel/preset-typescript": "7.29.7",
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
-    "@opencode/client": "2.2.5",
-    "@opencode/plugin": "2.2.5",
-    "@opencode/theme": "2.2.5",
+    "@opencode/client": "2.2.6",
+    "@opencode/plugin": "2.2.6",
+    "@opencode/theme": "2.2.6",
     "@opentui/core": "^0.8.0",
     "@opentui/keymap": "^0.8.0",
     "@opentui/solid": "^0.8.0",

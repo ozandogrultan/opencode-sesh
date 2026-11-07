@@ -12,6 +12,7 @@ import { dirname, join } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { Portal } from "@opentui/solid"
+import stringWidth from "string-width"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
 
@@ -198,6 +199,34 @@ function prettyDir(dir: string, home: string): string {
   return "…/" + parts.slice(-2).join("/")
 }
 
+function truncateCells(text: string, width: number): string {
+  if (width <= 0) return ""
+  if (stringWidth(text) <= width) return text
+  let fitted = ""
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)) {
+    if (stringWidth(fitted + segment + "…") > width) break
+    fitted += segment
+  }
+  return fitted + "…"
+}
+
+// A directory shortened to `width` columns without ever cutting its last
+// segment short while any room remains: leading segments go first ("…/a/b",
+// then "…/b"), and only a last segment wider than the column ends in "…".
+function fitDir(dir: string, home: string, width: number): string {
+  if (width <= 0) return ""
+  const pretty = prettyDir(dir, home)
+  if (stringWidth(pretty) <= width) return pretty
+  const parts = pretty.split("/").filter((part) => part && part !== "…")
+  const last = parts.at(-1) ?? pretty
+  for (let keep = parts.length - 1; keep >= 2; keep--) {
+    const candidate = `…/${parts.slice(-keep).join("/")}`
+    if (stringWidth(candidate) <= width) return candidate
+  }
+  if (stringWidth(last) + 2 <= width) return `…/${last}`
+  return truncateCells(last, width)
+}
+
 // Home rows show a directory's last segment; distinct directories that share
 // one also show their parent (`a/app`, `b/app`).
 function homeDirLabels(dirs: string[], home: string): Map<string, string> {
@@ -322,21 +351,46 @@ function releaseHoverOnTyping(renderer: TuiPluginApi["renderer"], release: () =>
   onCleanup(() => renderer.keyInput.off("keypress", listener))
 }
 
+// The message carried by a thrown value or an API error body, as one short line.
+function errorReason(error: unknown, depth = 0): string | undefined {
+  if (typeof error === "string") {
+    const text = error.replace(/\s+/g, " ").trim()
+    // A proxy or gateway error page is markup, not a reason.
+    if (!text || text.startsWith("<") || /<html|<!doctype/i.test(text)) return undefined
+    return truncate(text, 80)
+  }
+  if (!error || typeof error !== "object" || depth > 3) return undefined
+  const body = error as { message?: unknown; data?: unknown; error?: unknown }
+  return errorReason(body.message, depth + 1) ?? errorReason(body.data, depth + 1) ?? errorReason(body.error, depth + 1)
+}
+
+// A failure toast with the cause appended when there is one.
+function withReason(message: string, error: unknown): string {
+  const reason = errorReason(error)
+  return reason ? `${message}: ${reason}` : message
+}
+
+// cmux exports CMUX_WORKSPACE_ID to every process in its terminals, so the TUI
+// only sees it when opencode was started inside one; read at use, never cached.
+function inCmux(): boolean {
+  return Boolean(process.env.CMUX_WORKSPACE_ID)
+}
+
 function openInCmuxWorkspace(api: TuiPluginApi, entry: Entry) {
   if (!SESSION_ID_PATTERN.test(entry.id)) {
     api.ui.toast({ message: "Invalid session ID", variant: "error" })
     return
   }
-  if (!process.env.CMUX_WORKSPACE_ID) {
-    api.ui.toast({ message: "Right-click opens a new workspace only inside cmux", variant: "info" })
+  if (!inCmux()) {
+    api.ui.toast({ message: "Opening a workspace needs cmux", variant: "info" })
     return
   }
   const args = ["new-workspace", "--name", entry.title || entry.id, "--command", `opencode --session ${entry.id}`, "--focus", "true"]
   if (entry.dir) args.push("--cwd", entry.dir)
   const child = spawn("cmux", args, { stdio: "ignore" })
-  child.on("error", () => api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" }))
+  child.on("error", (error: unknown) => api.ui.toast({ message: withReason("Could not open a cmux workspace", error), variant: "error" }))
   child.on("exit", (code) => {
-    if (code) api.ui.toast({ message: "Could not open a cmux workspace", variant: "error" })
+    if (code) api.ui.toast({ message: `Could not open a cmux workspace: cmux exited with code ${code}`, variant: "error" })
   })
 }
 
@@ -344,11 +398,13 @@ type MenuAction = "open" | "preview" | "workspace" | "fork" | "pin" | "delete" |
 type MenuItem = { id: MenuAction; label: string }
 type MenuState = { entry: Entry; x: number; y: number; items: MenuItem[]; index: number; confirming: boolean }
 type MenuLayer = {
-  mode: "base"
+  mode: "base" | "modal"
   priority: number
   bindings: { key: string; desc: string; preventDefault: boolean; cmd: () => void }[]
 }
 type ContextMenuHost = {
+  // Dialogs own input in modal mode, so the picker's menu registers there.
+  mode?: MenuLayer["mode"]
   registerLayer: (layer: MenuLayer) => () => void
   actions: Record<"open" | "preview" | "workspace" | "fork" | "pin" | "delete", (entry: Entry) => void>
   pinned: (entry: Entry) => boolean
@@ -358,6 +414,13 @@ type ContextMenuHost = {
 }
 
 const CONTEXT_MENU_LAYER_PRIORITY = 30
+// Verified against OpenCode v2.2.6: the dialog layer is zIndex={3000}
+// (packages/tui/src/ui/dialog.tsx#L66,
+// https://github.com/anomalyco/opencode/blob/v2.2.6/packages/tui/src/ui/dialog.tsx#L66)
+// and OpenCode's own context menus use 2500/2600. The menu must clear the
+// dialog (the picker's menu opens over it); toasts set no zIndex. Re-check on
+// every OpenCode bump, together with DialogHost in tests/dialog-harness.mjs.
+const CONTEXT_MENU_Z_INDEX = 3500
 
 function contextMenuItems(pinned: boolean, cmux: boolean): MenuItem[] {
   return [
@@ -378,13 +441,80 @@ function contextMenuBox(
   anchor: { x: number; y: number; width: number; height: number },
   cols: number,
   rows: number,
+  bounds: { top: number; bottom: number } = { top: 0, bottom: rows },
 ): { left: number; top: number; width: number; height: number } {
   const width = Math.max(1, Math.min(anchor.width, cols))
-  const height = Math.max(1, Math.min(anchor.height, rows))
+  const height = Math.max(1, Math.min(anchor.height, bounds.bottom - bounds.top))
   const left = Math.max(0, Math.min(anchor.x, cols - width))
   const below = anchor.y + 1
-  const top = below + height <= rows ? below : Math.max(0, anchor.y - height)
+  const top = below + height <= bounds.bottom ? below : Math.max(bounds.top, anchor.y - height)
   return { left, top, width, height }
+}
+
+// Renderer dimensions as a signal, so dialog layouts re-derive on resize.
+// The caller must run `dispose` when its dialog closes.
+function trackSize(api: TuiPluginApi) {
+  const read = () => ({ width: api.renderer.width, height: api.renderer.height })
+  const [size, setSize] = createSignal(read())
+  const onResize = () => setSize(read())
+  api.renderer.on("resize", onResize)
+  return { size, dispose: () => api.renderer.off("resize", onResize) }
+}
+
+// The slice of `count` items that fits `rows` lines while keeping `index` in
+// view; the whole list when it fits.
+function contextMenuWindow(count: number, index: number, rows: number, previousStart = 0): { start: number; size: number } {
+  const size = Math.max(1, Math.min(count, rows))
+  let start = Math.max(0, Math.min(count - size, previousStart))
+  if (index < start) start = index
+  else if (index >= start + size) start = index - size + 1
+  return { start, size }
+}
+
+// The menu's position, kept inside `bounds` (default: the whole terminal). A
+// menu squeezed below its bordered height renders borderless.
+function createMenuView(
+  api: TuiPluginApi,
+  state: Accessor<MenuState | undefined>,
+  bounds?: () => { top: number; bottom: number } | undefined,
+) {
+  let previousItems: MenuItem[] | undefined
+  let windowStart = 0
+  return createMemo(() => {
+    const current = state()
+    if (!current) {
+      previousItems = undefined
+      windowStart = 0
+      return undefined
+    }
+    if (current.items !== previousItems) windowStart = 0
+    previousItems = current.items
+    const { width: cols, height: rows } = api.renderer
+    const limit = bounds?.()
+    const box = contextMenuBox(
+      { x: current.x, y: current.y, ...contextMenuSize(current.items) },
+      cols,
+      rows,
+      limit && { top: Math.max(0, limit.top), bottom: Math.min(rows, limit.bottom) },
+    )
+    const bordered = box.height >= current.items.length + 2
+    // A menu taller than its bounds scrolls its items so the selection stays visible.
+    const { start, size } = contextMenuWindow(current.items.length, current.index, bordered ? box.height - 2 : box.height, windowStart)
+    windowStart = start
+    const hidden = size < current.items.length
+    // Scrolled menus widen by two columns for the ▲/▼ hint on their edge rows.
+    const wide = hidden ? { ...box, width: Math.min(cols, box.width + 2) } : box
+    const placed = { ...wide, left: Math.max(0, Math.min(wide.left, cols - wide.width)) }
+    const labelWidth = Math.max(...current.items.map((item) => item.label.length))
+    const hint = (shown: number) => {
+      const more = (shown === 0 && start > 0 ? 1 : 0) + (shown === size - 1 && start + size < current.items.length ? 2 : 0)
+      return more === 3 ? " ↕" : more === 1 ? " ▲" : more === 2 ? " ▼" : hidden ? "  " : ""
+    }
+    return {
+      state: current, box: placed, bordered, start, items: current.items.slice(start, start + size),
+      label: (item: MenuItem, shown: number) => (hidden ? item.label.padEnd(labelWidth) : item.label) + hint(shown),
+    }
+  })
 }
 
 function createContextMenu(host: ContextMenuHost) {
@@ -405,9 +535,7 @@ function createContextMenu(host: ContextMenuHost) {
   const select = (index: number) => {
     if (!state) return
     const next = Math.max(0, Math.min(state.items.length - 1, index))
-    // A still pointer re-fires over events; republishing an identical state
-    // would rebuild the keyed menu on every frame, churning renderables until
-    // clicks fall through to whatever is beneath.
+    // A still pointer re-fires over events; avoid publishing unchanged selection.
     if (next === state.index) return
     publish({ ...state, index: next })
   }
@@ -456,7 +584,7 @@ function createContextMenu(host: ContextMenuHost) {
     publish({ entry, x, y, items: contextMenuItems(host.pinned(entry), host.cmux()), index: 0, confirming: false })
     if (dispose) return
     dispose = host.registerLayer({
-      mode: "base",
+      mode: host.mode ?? "base",
       priority: CONTEXT_MENU_LAYER_PRIORITY,
       bindings: [
         { key: "up", desc: "Previous menu item", preventDefault: true, cmd: guarded(() => move(-1)) },
@@ -1378,7 +1506,13 @@ type PickerRow =
 // Window by terminal lines, not session count: group spacing and transcript
 // excerpts each consume an extra line. Carry the directory heading forward
 // when a long group starts above the viewport.
-function pickerWindow(rows: PickerRow[], start: number, height: number, excerpt: (entry: Entry) => boolean): PickerRow[] {
+function pickerWindow(
+  rows: PickerRow[],
+  start: number,
+  height: number,
+  excerpt: (entry: Entry) => boolean,
+  groupLines = 2,
+): PickerRow[] {
   if (!rows.length) return []
   const first = Math.max(0, Math.min(start, rows.length - 1))
   const shown: PickerRow[] = []
@@ -1394,7 +1528,7 @@ function pickerWindow(rows: PickerRow[], start: number, height: number, excerpt:
   }
   for (let i = first; i < rows.length; i++) {
     const row = rows[i]
-    const lines = row.kind === "group" ? 2 : excerpt(row.entry) ? 2 : 1
+    const lines = row.kind === "group" ? groupLines : excerpt(row.entry) ? 2 : 1
     if (lines > remaining && shown.length) break
     shown.push(row)
     remaining -= lines
@@ -1402,24 +1536,35 @@ function pickerWindow(rows: PickerRow[], start: number, height: number, excerpt:
   return shown
 }
 
-function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Entry) => boolean): number {
+function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Entry) => boolean, groupLines = 2): number {
   if (!rows.length) return 0
   let start = rows.length - 1
-  while (start > 0 && pickerWindow(rows, start - 1, height, excerpt).at(-1) === rows.at(-1)) start--
+  while (start > 0 && pickerWindow(rows, start - 1, height, excerpt, groupLines).at(-1) === rows.at(-1)) start--
   return start
 }
 
 const PICKER_HINT_SEGMENTS = [
-  "↑↓ move", "enter open", "ctrl+g project", "option+w input", "option+s pinned", "option+p preview",
-  "ctrl+s/d pin", "option+d delete", "ctrl+f fork", "esc close",
+  "↑↓ move", "enter open", "ctrl+g project", "option+w input", "option+k pinned", "option+p preview",
+  "option+s/r pin", "option+d delete", "ctrl+f fork", "esc close",
 ]
 const PICKER_HINT_COMPACT = ["↑↓ move · enter open · esc close", "ctrl+g project · ctrl+f fork"]
+// The first form that fits wins; at 44 columns only the shortest does.
+const PICKER_HINT_ONE_LINE = [
+  "↑↓ move · enter open · option+p preview · right-click menu · esc close",
+  "↑↓ move · enter open · right-click menu · esc close",
+  "↑↓ move · enter open · esc close",
+]
+const PICKER_TALL = 28
 
 // The footer hint as non-wrapping lines: the two-line form when it fits, else
 // the segments packed into at most three lines, else a two-line compact form.
+// Terminals under PICKER_TALL rows get one line, so the list keeps the rows.
 // A fixed line count lets the picker budget its chrome exactly.
-function pickerHintLines(width: number): string[] {
+function pickerHintLines(width: number, height = PICKER_TALL): string[] {
   const join = (parts: string[]) => parts.join(" · ")
+  if (height < PICKER_TALL) {
+    return [truncate(PICKER_HINT_ONE_LINE.find((line) => line.length <= width) ?? PICKER_HINT_ONE_LINE.at(-1)!, width)]
+  }
   const wide = [join(PICKER_HINT_SEGMENTS.slice(0, 6)), join(PICKER_HINT_SEGMENTS.slice(6))]
   if (wide.every((line) => line.length <= width)) return wide
   const packed: string[] = []
@@ -1433,6 +1578,104 @@ function pickerHintLines(width: number): string[] {
     : PICKER_HINT_COMPACT.map((line) => truncate(line, width))
 }
 
+// Forks `entry` and opens the fork; `beforeOpen` lets a dialog close first.
+async function forkSession(api: TuiPluginApi, entry: Entry, beforeOpen?: () => void) {
+  try {
+    const result = await api.client.session.fork({
+      sessionID: entry.id,
+      directory: entry.dir || undefined,
+    })
+    const created = (result?.data ?? result) as Session | undefined
+    if (!created?.id) throw new Error("fork returned no session")
+    beforeOpen?.()
+    api.route.navigate("session", { sessionID: created.id })
+    api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
+  } catch (error) {
+    api.ui.toast({ message: withReason("Could not fork session", error), variant: "error" })
+  }
+}
+
+// The action menu shared by the sidebar, the home list and the picker. It is
+// portaled to the renderer root so it can overlap whatever hosts it.
+function ContextMenuOverlay(props: {
+  api: TuiPluginApi
+  menu: ReturnType<typeof createContextMenu>
+  view: Accessor<ReturnType<ReturnType<typeof createMenuView>> | undefined>
+}) {
+  const theme = () => props.api.theme.current
+  let portalContainer: PortalContainer | undefined
+  onCleanup(() => {
+    const container = portalContainer
+    portalContainer = undefined
+    process.nextTick(() => container?.destroyRecursively?.())
+  })
+  return (
+    <Portal
+      mount={props.api.renderer.root as never}
+      ref={(container: PortalContainer) => {
+        portalContainer = container
+        container.position = "absolute"
+        container.left = 0
+        container.top = 0
+        container.zIndex = CONTEXT_MENU_Z_INDEX
+      }}
+    >
+      <Show when={props.view()}>
+        {(view) => (
+          <box
+            position="absolute"
+            left={view().box.left}
+            top={view().box.top}
+            width={view().box.width}
+            height={view().box.height}
+            flexDirection="column"
+            border={view().bordered}
+            borderStyle={view().bordered ? "rounded" : undefined}
+            borderColor={view().bordered ? theme().borderActive : undefined}
+            backgroundColor={theme().backgroundPanel}
+            paddingLeft={1}
+            paddingRight={1}
+            onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+            onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+          >
+            <For each={view().items}>
+              {(item, shown) => (
+                <box
+                  height={1}
+                  backgroundColor={view().state.index === view().start + shown() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                  onMouseOver={() => props.menu.select(view().start + shown())}
+                  // Release activates so the press that opens a dialog cannot
+                  // straddle it: the release is consumed here before any dialog
+                  // opened by the action exists.
+                  onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
+                  onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
+                    event.stopPropagation()
+                    props.menu.click(view().start + shown(), event.button)
+                  }}
+                >
+                  <text
+                    wrapMode="none"
+                    style={{
+                      fg:
+                        item.id === "delete" || item.id === "confirm"
+                          ? theme().error
+                          : view().state.index === view().start + shown()
+                            ? theme().text
+                            : theme().textMuted,
+                    }}
+                  >
+                    {view().label(item, shown())}
+                  </text>
+                </box>
+              )}
+            </For>
+          </box>
+        )}
+      </Show>
+    </Portal>
+  )
+}
+
 type PinProps = { pins: () => Pins; onTogglePin: (kind: keyof Pins, value: string) => void; poll: ReturnType<typeof createSessionPoll> }
 
 function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
@@ -1444,7 +1687,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
   const [hovered, setHovered] = createSignal<string>()
   const preview = createTranscriptPreview(props.api)
   const [menuState, setMenuState] = createSignal<MenuState>()
-  let portalContainer: PortalContainer | undefined
   const [query, setQuery] = createSignal("")
   const [deleting, setDeleting] = createSignal<string>()
   const [searching, setSearching] = createSignal(false)
@@ -1577,10 +1819,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     if (state && !itemRows().some((entry) => entry.id === state.entry.id)) menu.close()
   })
   createEffect(() => {
-    if (props.api.ui.dialog.open) menu.close()
     // A modal dialog owns input while open: yield the sidebar's keyboard
     // captures too, so its layers cannot double-fire with the dialog's own.
-    if (props.api.ui.dialog.open) {
+    if (props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE) {
+      menu.close()
       cancelDelete()
       setNavActive(false)
       setSearching(false)
@@ -1671,25 +1913,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       setTimeout(restore, 0)
       props.api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
       if (currentID() === entry.id) props.api.route.navigate("home")
-    } catch {
-      props.api.ui.toast({ message: "Could not delete session", variant: "error" })
+    } catch (error) {
+      props.api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
     } finally {
       setDeleting(undefined)
-    }
-  }
-
-  const forkEntry = async (entry: Entry) => {
-    try {
-      const result = await props.api.client.session.fork({
-        sessionID: entry.id,
-        directory: entry.dir || undefined,
-      })
-      const created = (result?.data ?? result) as Session | undefined
-      if (!created?.id) throw new Error("fork returned no session")
-      props.api.route.navigate("session", { sessionID: created.id })
-      props.api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
-    } catch {
-      props.api.ui.toast({ message: "Could not fork session", variant: "error" })
     }
   }
 
@@ -1699,26 +1926,17 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
       open: (entry) => void openSession(entry),
       preview: (entry) => preview.open(entry),
       workspace: (entry) => openInCmuxWorkspace(props.api, entry),
-      fork: (entry) => void forkEntry(entry),
+      fork: (entry) => void forkSession(props.api, entry),
       pin: (entry) => props.onTogglePin("sessions", entry.id),
       delete: (entry) => void deleteEntry(entry),
     },
     pinned: (entry) => props.pins().sessions.includes(entry.id),
-    cmux: () => Boolean(process.env.CMUX_WORKSPACE_ID),
-    blocked: () => props.api.ui.dialog.open,
+    cmux: inCmux,
+    blocked: () => props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE,
     onChange: setMenuState,
   })
 
-  const menuView = createMemo(() => {
-    const state = menuState()
-    if (!state) return undefined
-    const box = contextMenuBox(
-      { x: state.x, y: state.y, ...contextMenuSize(state.items) },
-      props.api.renderer.width,
-      props.api.renderer.height,
-    )
-    return { state, box }
-  })
+  const menuView = createMenuView(props.api, menuState)
 
   let disposeHoverSpace: (() => void) | undefined
   let disposeSearch: (() => void) | undefined
@@ -1922,9 +2140,6 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     disposeNav?.()
     disposeConfirm?.()
     menu.close()
-    const container = portalContainer
-    portalContainer = undefined
-    process.nextTick(() => container?.destroyRecursively?.())
     if (confirmTimer) clearTimeout(confirmTimer)
   })
 
@@ -1943,7 +2158,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
           </span>
           <span style={{ fg: theme().accent }}>{navActive() ? " · nav" : ""}</span>
           <Show when={waitingEntries().length > 0}>
-            <span style={{ fg: theme().warning }}> · {waitingEntries().length} need input</span>
+            <span style={{ fg: theme().warning }}> · {waitingEntries().length} {waitingEntries().length === 1 ? "needs" : "need"} input</span>
           </Show>
         </text>
         <text flexShrink={0} style={{ fg: theme().textMuted }} onMouseDown={(event: { stopPropagation: () => void }) => {
@@ -2045,6 +2260,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
                   if (event.button === RIGHT_BUTTON) {
                     event.stopPropagation()
+                    cancelDelete()
                     menu.open(row.entry, event.x, event.y)
                   } else {
                     // Sidebar-internal: openSession releases the sidebar's own
@@ -2096,69 +2312,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
         </Show>
       </Show>
       </Show>
-      <Portal
-        mount={props.api.renderer.root as never}
-        ref={(container: PortalContainer) => {
-          portalContainer = container
-          container.position = "absolute"
-          container.left = 0
-          container.top = 0
-          container.zIndex = 1000
-        }}
-      >
-        <Show when={menuView()} keyed>
-          {(view) => (
-          <box
-            position="absolute"
-            left={view.box.left}
-            top={view.box.top}
-            width={view.box.width}
-            height={view.box.height}
-            flexDirection="column"
-            border
-            borderStyle="rounded"
-            borderColor={theme().borderActive}
-            backgroundColor={theme().backgroundPanel}
-            paddingLeft={1}
-            paddingRight={1}
-            onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
-            onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
-          >
-            <For each={view.state.items}>
-              {(item, index) => (
-                <box
-                  height={1}
-                  backgroundColor={view.state.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-                  onMouseOver={() => menu.select(index())}
-                  // Release activates so the press that opens a dialog cannot
-                  // straddle it: the release is consumed here before any dialog
-                  // opened by the action exists.
-                  onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
-                  onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
-                    event.stopPropagation()
-                    menu.click(index(), event.button)
-                  }}
-                >
-                  <text
-                    wrapMode="none"
-                    style={{
-                      fg:
-                        item.id === "delete" || item.id === "confirm"
-                          ? theme().error
-                          : view.state.index === index()
-                            ? theme().text
-                            : theme().textMuted,
-                    }}
-                  >
-                    {item.label}
-                  </text>
-                </box>
-              )}
-            </For>
-          </box>
-          )}
-        </Show>
-      </Portal>
+      <ContextMenuOverlay api={props.api} menu={menu} view={menuView} />
     </box>
   )
 }
@@ -2245,12 +2399,30 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
       if ("params" in props.api.route.current && (props.api.route.current.params as any)?.sessionID === entry.id) {
         props.api.route.navigate("home")
       }
-    } catch {
-      props.api.ui.toast({ message: "Could not delete session", variant: "error" })
+    } catch (error) {
+      props.api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
     } finally {
       setDeleting(undefined)
     }
   }
+
+  const [menuState, setMenuState] = createSignal<MenuState>()
+  const menu = createContextMenu({
+    registerLayer: (layer) => props.api.keymap.registerLayer(layer),
+    actions: {
+      open: (entry) => props.api.route.navigate("session", { sessionID: entry.id }),
+      preview: (entry) => preview.open(entry),
+      workspace: (entry) => openInCmuxWorkspace(props.api, entry),
+      fork: (entry) => void forkSession(props.api, entry),
+      pin: (entry) => props.onTogglePin("sessions", entry.id),
+      delete: (entry) => void deleteEntry(entry),
+    },
+    pinned: (entry) => props.pins().sessions.includes(entry.id),
+    cmux: inCmux,
+    blocked: () => props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE,
+    onChange: setMenuState,
+  })
+  const menuView = createMenuView(props.api, menuState)
 
   createEffect(() => {
     disposeConfirm?.()
@@ -2270,6 +2442,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   })
 
   const onRootMouseDown = () => {
+    menu.close()
     preview.closeIfOpen()
     if (searching()) setSearching(false)
     cancelDelete()
@@ -2279,7 +2452,8 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   // A modal dialog owns input while open: yield this list's keyboard captures
   // too, so its layers cannot double-fire with the dialog's own.
   createEffect(() => {
-    if (props.api.ui.dialog.open) {
+    if (props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE) {
+      menu.close()
       cancelDelete()
       setSearching(false)
       setHovered(undefined)
@@ -2290,7 +2464,10 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     ensureRootMouse(props.api.renderer)
     rootMouseHandlers.add(onRootMouseDown)
     releaseHoverOnTyping(props.api.renderer, () => setHovered(undefined))
-    const resize = () => setDimensions({ width: props.api.renderer.width, height: props.api.renderer.height })
+    const resize = () => {
+      menu.close()
+      setDimensions({ width: props.api.renderer.width, height: props.api.renderer.height })
+    }
     props.api.renderer.on("resize", resize)
     onCleanup(() => {
       rootMouseHandlers.delete(onRootMouseDown)
@@ -2348,6 +2525,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     disposeSearch?.()
     disposeHoverSpace?.()
     disposeConfirm?.()
+    menu.close()
     if (confirmTimer) clearTimeout(confirmTimer)
   })
 
@@ -2365,6 +2543,11 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         )
       : entries()
     return pinnedFirst(list, props.pins())
+  })
+
+  createEffect(() => {
+    const state = menuState()
+    if (state && !filtered().some((entry) => entry.id === state.entry.id)) menu.close()
   })
   // Unmeasured (before the first frame) reads as no room.
   const [top, setTop] = createSignal(dimensions().height)
@@ -2492,11 +2675,15 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseOver={() => setHovered(entry.id)}
                 onMouseMove={() => setHovered(entry.id)}
                 onMouseOut={() => setHovered(undefined)}
-                onMouseDown={(event: { button?: number }) =>
-                  event.button === RIGHT_BUTTON
-                    ? openInCmuxWorkspace(props.api, entry)
-                    : props.api.route.navigate("session", { sessionID: entry.id })
-                }
+                onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
+                  if (event.button === RIGHT_BUTTON) {
+                    event.stopPropagation()
+                    cancelDelete()
+                    menu.open(entry, event.x, event.y)
+                  } else {
+                    props.api.route.navigate("session", { sessionID: entry.id })
+                  }
+                }}
               >
                 <text width={1} flexShrink={0} style={{ fg: isRunning(entry.id) ? theme().success : theme().textMuted }}>
                   {isRunning(entry.id) ? SIDEBAR_SPINNER[spinFrame()] : "○"}
@@ -2532,6 +2719,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
           </Show>
         </Show>
       </box>
+      <ContextMenuOverlay api={props.api} menu={menu} view={menuView} />
     </box>
   )
 }
@@ -2569,7 +2757,7 @@ const tui: TuiPlugin = async (api) => {
         setPins(updated)
         api.ui.toast({ message: `${updated[kind].includes(value) ? "Pinned" : "Unpinned"} ${kind === "sessions" ? "session" : "directory"}`, variant: "info" })
       },
-      () => api.ui.toast({ message: "Could not update pins", variant: "error" }),
+      (error) => api.ui.toast({ message: withReason("Could not update pins", error), variant: "error" }),
     )
   }
   api.slots.register({
@@ -2592,8 +2780,8 @@ const tui: TuiPlugin = async (api) => {
     let entriesResult: EntryResult
     try {
       entriesResult = await fetchEntries(api)
-    } catch {
-      api.ui.toast({ message: "Could not load sessions", variant: "error" })
+    } catch (error) {
+      api.ui.toast({ message: withReason("Could not load sessions", error), variant: "error" })
       return
     }
     const entries = entriesResult.entries
@@ -2629,6 +2817,8 @@ const tui: TuiPlugin = async (api) => {
       }
     })()
     const [pendingDelete, setPendingDelete] = createSignal<Entry>()
+    const [menuState, setMenuState] = createSignal<MenuState>()
+    let listBox: { y: number; height: number } | undefined
     const [searchIndex, setSearchIndex] = createSignal<Map<string, string>>(new Map())
     const [indexProgress, setIndexProgress] = createSignal<IndexProgress>({
       indexed: 0,
@@ -2683,12 +2873,12 @@ const tui: TuiPlugin = async (api) => {
       if (scope()) bits.push(`scope ${scope()}`)
       if (waitingOnly()) bits.push(waitingCoverage() === "loading" ? "checking needs input" : waitingCoverage() === "unavailable" ? "needs-input unavailable" : "needs input")
       if (pinnedOnly()) bits.push("pinned sessions")
+      // A fully indexed, untruncated list is silent: the line costs a row
+      // only while indexing runs or when coverage falls short.
       if (progress.total > 0) {
-        bits.push(
-          progress.complete
-            ? `transcripts ${progress.total}`
-            : `indexing transcripts ${progress.indexed}/${progress.total}`,
-        )
+        if (!progress.complete) bits.push(`indexing transcripts ${progress.indexed}/${progress.total}`)
+        else if (progress.indexed < progress.total) bits.push(`${progress.indexed} of ${progress.total} transcripts indexed`)
+        else if (entriesResult.truncated) bits.push(`${progress.total} transcripts indexed`)
       }
       if (entriesResult.truncated) bits.push(`showing newest ${allEntries().length}`)
       return bits.join(" · ")
@@ -2707,24 +2897,32 @@ const tui: TuiPlugin = async (api) => {
       return flat
     })
 
-    const termHeight = api.renderer.height
+    const tracked = trackSize(api)
+    const termHeight = () => tracked.size().height
     // The dialog host anchors content a quarter of the way down the screen and
     // lets it size to content, so a taller picker drifts downward. Pin the
     // content height and offset it up by the same amount to keep it centred.
-    const dialogWidth = Math.min(116, api.renderer.width - 2)
-    const hintLines = pickerHintLines(dialogWidth - 8)
-    const compactFilters = dialogWidth - 8 < 40
-    const chromeGap = termHeight < 20 ? 0 : 1
-    // Padding and gaps (4), title (1), search (2), coverage (2), filters (2), footer hint.
-    const chromeRows = 6 + chromeGap * 5 + hintLines.length
-    const dialogHeight = () => Math.min(Math.max(Math.floor(termHeight * 0.75), chromeRows + 4), Math.max(termHeight - 2, 1))
-    const listHeight = () => Math.max(1, dialogHeight() - chromeRows)
+    const dialogWidth = () => Math.min(116, tracked.size().width - 2)
+    const hintLines = createMemo(() => pickerHintLines(dialogWidth() - 8, termHeight()))
+    const compactFilters = () => dialogWidth() - 8 < 40
+    const chromeGap = () => (termHeight() < 20 ? 0 : 1)
+    // Short terminals drop the blank line above each directory heading.
+    const groupLines = () => (termHeight() < PICKER_TALL ? 1 : 2)
+    // Padding (2), title (1), search (1 + gap), filters (1 + gap), the status
+    // line when shown (1 + gap), gaps around the list (2 × gap), footer hint.
+    const chromeRows = () => {
+      const status = coverageLabel() ? 1 : 0
+      return 5 + status + chromeGap() * (4 + status) + hintLines().length
+    }
+    const dialogShare = () => (termHeight() < 20 ? 0.85 : 0.75)
+    const dialogHeight = () => Math.min(Math.max(Math.floor(termHeight() * dialogShare()), chromeRows() + 4), Math.max(termHeight() - 2, 1))
+    const listHeight = () => Math.max(1, dialogHeight() - chromeRows())
     // Never lift the dialog above the first terminal row.
-    const dialogOffset = () => Math.max(-Math.floor(termHeight / 4), Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1)))
+    const dialogOffset = () => Math.max(-Math.floor(termHeight() / 4), Math.min(0, Math.floor(termHeight() / 4 - dialogHeight() / 2 - 1)))
     const hasExcerpt = (entry: Entry) => !!transcriptMatchExcerpt(searchIndex().get(entry.id), entry, query())
-    const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt))
+    const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt, groupLines()))
     const visiblePickerRows = createMemo(() => pickerWindow(
-      pickerRows(), Math.min(viewportStart(), maxViewportStart()), listHeight(), hasExcerpt,
+      pickerRows(), Math.min(viewportStart(), maxViewportStart()), listHeight(), hasExcerpt, groupLines(),
     ))
 
     let previousSelection: Entry[] = []
@@ -2799,20 +2997,24 @@ const tui: TuiPlugin = async (api) => {
 
     const togglePreview = () => setShowPreview((value) => !value)
 
+    const revealCursor = (index = cursor()) => {
+      const id = selectableEntries()[index]?.id
+      if (!id) return
+      const flat = pickerRows()
+      const target = flat.findIndex((row) => row.kind === "item" && row.entry.id === id)
+      let start = Math.min(viewportStart(), maxViewportStart())
+      if (target < start) start = target
+      else while (start < target && !pickerWindow(flat, start, listHeight(), hasExcerpt, groupLines()).some(
+        (row) => row.kind === "item" && row.entry.id === id,
+      )) start++
+      setViewportStart(Math.max(0, Math.min(start, maxViewportStart())))
+    }
     const selectCursor = (index: number) => {
       const count = selectableEntries().length
       if (count === 0) return
       cancelDelete()
       const next = Math.max(0, Math.min(count - 1, index))
-      const id = selectableEntries()[next].id
-      const flat = pickerRows()
-      const target = flat.findIndex((row) => row.kind === "item" && row.entry.id === id)
-      let start = Math.min(viewportStart(), maxViewportStart())
-      if (target < start) start = target
-      else while (start < target && !pickerWindow(flat, start, listHeight(), hasExcerpt).some(
-        (row) => row.kind === "item" && row.entry.id === id,
-      )) start++
-      setViewportStart(Math.max(0, Math.min(start, maxViewportStart())))
+      revealCursor(next)
       setCursor(next)
     }
     const moveCursor = (delta: number) => selectCursor(cursor() + delta)
@@ -2859,6 +3061,11 @@ const tui: TuiPlugin = async (api) => {
         escapeHandledAt = now + 150
         return
       }
+      if (menu.current()) {
+        menu.close()
+        escapeHandledAt = now + 150
+        return
+      }
       if (pendingDelete()) {
         cancelDelete()
         escapeHandledAt = now + 150
@@ -2887,8 +3094,8 @@ const tui: TuiPlugin = async (api) => {
         setAllEntries(remaining)
         api.ui.toast({ message: `Deleted "${truncate(entry.title, 40)}"`, variant: "info" })
         if (currentSessionID() === entry.id) api.route.navigate("home")
-      } catch {
-        api.ui.toast({ message: "Could not delete session", variant: "error" })
+      } catch (error) {
+        api.ui.toast({ message: withReason("Could not delete session", error), variant: "error" })
       }
     }
 
@@ -2931,22 +3138,12 @@ const tui: TuiPlugin = async (api) => {
       })
     }
 
-    const forkEntry = async (entry: Entry) => {
-      try {
-        const result = await api.client.session.fork({
-          sessionID: entry.id,
-          directory: entry.dir || undefined,
-        })
-        const created = (result?.data ?? result) as Session | undefined
-        if (!created?.id) throw new Error("fork returned no session")
-        cleanup()
-        api.ui.dialog.clear()
-        api.route.navigate("session", { sessionID: created.id })
-        api.ui.toast({ message: `Forked "${truncate(entry.title, 40)}"`, variant: "info" })
-      } catch {
-        api.ui.toast({ message: "Could not fork session", variant: "error" })
-      }
-    }
+    // A fork that finishes after the picker closed must not clear whatever dialog is open now.
+    const forkEntry = (entry: Entry) => forkSession(api, entry, () => {
+      if (!alive) return
+      cleanup()
+      api.ui.dialog.clear()
+    })
 
     const choose = (entry?: Entry) => {
       const target = entry ?? selectableEntries()[cursor()]
@@ -2954,6 +3151,67 @@ const tui: TuiPlugin = async (api) => {
       cleanup()
       api.ui.dialog.clear()
       api.route.navigate("session", { sessionID: target.id })
+    }
+
+    const selectEntry = (entry: Entry) => {
+      const index = selectableEntries().findIndex((item) => item.id === entry.id)
+      if (index >= 0) setCursor(index)
+    }
+
+    // Dialog keys live in modal mode. An Escape handled here must also absorb
+    // the duplicate the focused search input raises for the same keypress.
+    const menu = createContextMenu({
+      mode: "modal",
+      registerLayer: (layer) => api.keymap.registerLayer({
+        ...layer,
+        bindings: layer.bindings.map((binding) => binding.key === "escape"
+          ? { ...binding, cmd: () => { escapeHandledAt = Date.now() + 150; binding.cmd() } }
+          : binding),
+      }),
+      actions: {
+        open: (entry) => choose(entry),
+        preview: (entry) => {
+          selectEntry(entry)
+          setShowPreview(true)
+        },
+        workspace: (entry) => {
+          close()
+          openInCmuxWorkspace(api, entry)
+        },
+        fork: (entry) => void forkEntry(entry),
+        pin: (entry) => onTogglePin("sessions", entry.id),
+        delete: (entry) => void deleteEntry(entry),
+      },
+      pinned: (entry) => pins().sessions.includes(entry.id),
+      cmux: inCmux,
+      blocked: () => false,
+      onChange: setMenuState,
+    })
+    // The menu stays inside the dialog's list area and may cover the footer
+    // (hidden while it is open), never the header or the search box.
+    const menuView = createMenuView(api, menuState, () => listBox && {
+      top: listBox.y,
+      bottom: listBox.y + listBox.height + chromeGap() + hintLines().length,
+    })
+    createEffect(() => {
+      const state = menuState()
+      if (state && !selectableEntries().some((entry) => entry.id === state.entry.id)) menu.close()
+    })
+    // Terminal dimensions and chrome rows determine the list's screen bounds.
+    const layoutKey = createMemo(() => `${tracked.size().width}:${termHeight()}:${chromeRows()}`)
+    createEffect(on(layoutKey, () => {
+      menu.close()
+      revealCursor()
+    }, { defer: true }))
+
+    // Option-S/R match the sidebar and home list; Ctrl-S/D match the fzf picker.
+    const pinSelectedSession = () => {
+      const entry = selectableEntries()[cursor()]
+      if (entry) onTogglePin("sessions", entry.id)
+    }
+    const pinSelectedDirectory = () => {
+      const entry = selectableEntries()[cursor()]
+      if (entry) onTogglePin("directories", entry.dir)
     }
 
     const disposeNav = api.keymap.registerLayer({
@@ -2983,14 +3241,8 @@ const tui: TuiPlugin = async (api) => {
           },
         },
         { key: "alt+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
-        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
-          const entry = selectableEntries()[cursor()]
-          if (entry) onTogglePin("sessions", entry.id)
-        } },
-        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => {
-          const entry = selectableEntries()[cursor()]
-          if (entry) onTogglePin("directories", entry.dir)
-        } },
+        ...["alt+s", "ctrl+s"].map((key) => ({ key, desc: "Pin session", preventDefault: true, cmd: pinSelectedSession })),
+        ...["alt+r", "ctrl+d"].map((key) => ({ key, desc: "Pin directory", preventDefault: true, cmd: pinSelectedDirectory })),
         {
           key: "alt+d",
           desc: "Delete session",
@@ -3021,7 +3273,7 @@ const tui: TuiPlugin = async (api) => {
           },
         },
         { key: "alt+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
-        { key: "alt+s", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
+        { key: "alt+k", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
         {
           key: "escape",
           desc: "Close",
@@ -3034,6 +3286,8 @@ const tui: TuiPlugin = async (api) => {
     const cleanup = () => {
       if (!alive) return
       alive = false
+      tracked.dispose()
+      menu.close()
       if (confirmTimer) clearTimeout(confirmTimer)
       pickerState = { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() }
       disposeNav()
@@ -3050,7 +3304,7 @@ const tui: TuiPlugin = async (api) => {
           marginTop={dialogOffset()}
           paddingTop={1}
           paddingBottom={1}
-          gap={chromeGap}
+          gap={chromeGap()}
           backgroundColor={api.theme.current.backgroundPanel}
         >
           <box paddingLeft={4} paddingRight={4} flexShrink={0}>
@@ -3062,7 +3316,7 @@ const tui: TuiPlugin = async (api) => {
                 esc
               </text>
             </box>
-            <box paddingTop={chromeGap}>
+            <box paddingTop={chromeGap()}>
               <input
                 focused
                 placeholder="Search title, directory, transcript…"
@@ -3072,12 +3326,15 @@ const tui: TuiPlugin = async (api) => {
                 focusedTextColor={api.theme.current.text}
                 cursorColor={api.theme.current.primary}
                 cursorStyle={{ style: "line", blinking: false }}
+                onMouseDown={() => menu.close()}
                 onInput={(value) => {
                   if (pendingDelete()) return
+                  menu.close()
                   setQuery(value)
                 }}
                 onSubmit={() => {
-                  if (confirmArmed()) return
+                  // The open menu's Enter chooses its item; never also open a row.
+                  if (menuState() || confirmArmed()) return
                   choose()
                 }}
                 onKeyDown={(event) => {
@@ -3115,39 +3372,45 @@ const tui: TuiPlugin = async (api) => {
               />
             </box>
             <Show when={coverageLabel()}>
-              <box paddingTop={chromeGap}>
-                <text style={{ fg: api.theme.current.textMuted }}>{coverageLabel()}</text>
+              <box paddingTop={chromeGap()}>
+                <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{truncate(coverageLabel(), dialogWidth() - 8)}</text>
               </box>
             </Show>
-            <box flexDirection="row" gap={compactFilters ? 1 : 2} paddingTop={chromeGap}>
+            <box flexDirection="row" gap={compactFilters() ? 1 : 2} paddingTop={chromeGap()}>
               <text flexShrink={0} wrapMode="none" style={{ fg: scope() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => {
                 const group = currentProject()
                 if (group) setScope(scope() === group ? undefined : group)
                 else api.ui.toast({ message: "No current project to filter", variant: "info" })
               }}>
-                {scope() ? `Project: ${truncate(scope()!, compactFilters ? 10 : 22)}` : "Project: all"}
+                {scope() ? `Project: ${truncate(scope()!, compactFilters() ? 10 : 22)}` : "Project: all"}
               </text>
               <text flexShrink={0} wrapMode="none" style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
-                {waitingOnly() ? (compactFilters ? "● Input" : "● Needs input") : (compactFilters ? "○ Input" : "○ Needs input")}
+                {waitingOnly() ? (compactFilters() ? "● Input" : "● Needs input") : (compactFilters() ? "○ Input" : "○ Needs input")}
               </text>
               <text flexShrink={0} wrapMode="none" style={{ fg: pinnedOnly() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => setPinnedOnly((value) => !value)}>
-                {pinnedOnly() ? (compactFilters ? "★ Pin" : "★ Pinned") : (compactFilters ? "☆ Pin" : "☆ Pinned")}
+                {pinnedOnly() ? (compactFilters() ? "★ Pin" : "★ Pinned") : (compactFilters() ? "☆ Pin" : "☆ Pinned")}
               </text>
             </box>
+            <ContextMenuOverlay api={api} menu={menu} view={menuView} />
           </box>
           <box
+            ref={(box: { y: number; height: number }) => { listBox = box }}
             flexDirection="column"
             flexGrow={1}
             overflow="hidden"
             onMouseScroll={(event: { scroll?: { direction: string; delta: number } }) => {
+              menu.close()
               scrollPicker(event.scroll)
             }}
           >
             <For each={visiblePickerRows()}>
                 {(row) => {
                   if (row.kind === "group") return (
-                    <box flexDirection="row" paddingTop={row.continued ? 0 : 1} paddingLeft={4} paddingRight={4}
-                      onMouseDown={() => setCollapsed((state) => ({ ...state, [row.dir]: !state[row.dir] }))}>
+                    <box flexDirection="row" paddingTop={row.continued || groupLines() === 1 ? 0 : 1} paddingLeft={4} paddingRight={4}
+                      onMouseDown={() => {
+                        menu.close()
+                        setCollapsed((state) => ({ ...state, [row.dir]: !state[row.dir] }))
+                      }}>
                       <text flexGrow={1} flexShrink={1} wrapMode="none" style={{ fg: api.theme.current.accent }} attributes={TextAttributes.BOLD}>
                         {collapsed()[row.dir] && !query().trim() ? "▸ " : "▾ "}{row.pinned ? "★ " : ""}{row.label}
                       </text>
@@ -3171,9 +3434,17 @@ const tui: TuiPlugin = async (api) => {
                         const index = selectableEntries().findIndex((entry) => entry.id === row.entry.id)
                         if (index >= 0) setCursor(index)
                       }}
-                      onMouseDown={(event: { button?: number }) =>
-                        event.button === RIGHT_BUTTON ? (cleanup(), api.ui.dialog.clear(), openInCmuxWorkspace(api, row.entry)) : choose(row.entry)
-                      }
+                      onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
+                        if (event.button === RIGHT_BUTTON) {
+                          event.stopPropagation()
+                          cancelDelete()
+                          selectEntry(row.entry)
+                          menu.open(row.entry, event.x, event.y)
+                        } else {
+                          menu.close()
+                          choose(row.entry)
+                        }
+                      }}
                     >
                       <box flexDirection="row" gap={1}>
                       <text flexShrink={0} style={{ fg: row.entry.id === selectableEntries()[cursor()]?.id
@@ -3256,7 +3527,7 @@ const tui: TuiPlugin = async (api) => {
                       : waitingOnly() && waitingCoverage() === "unavailable"
                         ? "Needs-input data unavailable · turn off the filter"
                       : pinnedOnly() && pins().sessions.length === 0
-                        ? "No pinned sessions yet · ctrl+s pins a session"
+                        ? "No pinned sessions yet · option+s pins a session"
                       : !indexProgress().complete && query().trim()
                         ? "No matches yet · still searching transcripts…"
                       : scope()
@@ -3268,19 +3539,21 @@ const tui: TuiPlugin = async (api) => {
                 </box>
               </Show>
             </box>
-          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column" height={hintLines.length}>
+          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column" height={hintLines().length}>
             <Show
               when={pendingDelete()}
               fallback={
-                <For each={hintLines}>
-                  {(line) => <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{line}</text>}
-                </For>
+                <Show when={!menuState()}>
+                  <For each={hintLines()}>
+                    {(line) => <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{line}</text>}
+                  </For>
+                </Show>
               }
             >
               <text wrapMode="none" style={{ fg: api.theme.current.warning }}>
-                {dialogWidth < 70
+                {dialogWidth() < 70
                   ? "y delete · n cancel"
-                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth - 40)}"? y confirm · n cancel`}
+                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth() - 40)}"? y confirm · n cancel`}
               </text>
             </Show>
           </box>
@@ -3289,7 +3562,7 @@ const tui: TuiPlugin = async (api) => {
               position="absolute"
               left={0}
               top={0}
-              width={dialogWidth}
+              width={dialogWidth()}
               height={dialogHeight()}
               flexDirection="column"
               backgroundColor={api.theme.current.backgroundPanel}
@@ -3301,7 +3574,7 @@ const tui: TuiPlugin = async (api) => {
             >
               <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
                 <text attributes={TextAttributes.BOLD}>
-                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth - 18) : "Preview"}
+                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth() - 18) : "Preview"}
                 </text>
                 <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
               </box>
@@ -3333,7 +3606,7 @@ const tui: TuiPlugin = async (api) => {
                 </Show>
               </scrollbox>
               <text flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-                {dialogWidth < 48 ? "↑↓ session · esc back" : "↑↓ switch session · esc back to picker"}
+                {dialogWidth() < 48 ? "↑↓ session · esc back" : "↑↓ switch session · esc back to picker"}
               </text>
             </box>
           </Show>
@@ -3354,6 +3627,7 @@ const tui: TuiPlugin = async (api) => {
     type CostRow = { directory: string; window: number; lifetime: number; sessions: number }
     let rows: CostRow[] = []
     let failed = false
+    let failure: unknown
     try {
       const db = await openTranscriptDb()
       if (!db) failed = true
@@ -3393,61 +3667,122 @@ const tui: TuiPlugin = async (api) => {
           db.close()
         }
       }
-    } catch {
+    } catch (error) {
       failed = true
+      failure = error
     }
     const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
-    const windowWidth = Math.max(1, ...rows.map((row) => money(row.window).length))
-    const lifetimeWidth = Math.max(1, ...rows.map((row) => money(row.lifetime).length))
+    const totals = {
+      window: Math.round(rows.reduce((sum, row) => sum + row.window, 0) * 10000) / 10000,
+      lifetime: Math.round(rows.reduce((sum, row) => sum + row.lifetime, 0) * 10000) / 10000,
+      sessions: rows.reduce((sum, row) => sum + row.sessions, 0),
+    }
     const home = process.env.HOME ?? ""
+    // Columns: project, then 24h and total spend and the number of sessions
+    // that recorded cost. The dialog is at most 88 wide minus 8 of padding.
+    const tracked = trackSize(api)
+    const inner = () => Math.max(20, Math.min(88, tracked.size().width - 2) - 8)
+    // Project rows show "—" for no spend; the total line always shows an amount.
+    const totalMoney = (n: number) => `$${n.toFixed(2)}`
+    const cell = (label: string, pick: (row: CostRow) => string, total: string) =>
+      Math.max(label.length, total.length, ...rows.map((row) => pick(row).length))
+    const dayWidth = cell("24h", (row) => money(row.window), totalMoney(totals.window))
+    const totalWidth = cell("Total", (row) => money(row.lifetime), totalMoney(totals.lifetime))
+    const sessionsWidth = cell("Sess", (row) => String(row.sessions), String(totals.sessions))
+    // Secondary columns go first when the project name would starve: sessions, then 24h.
+    const PROJECT_MIN = 16
+    const showSessions = () => inner() - (dayWidth + totalWidth + sessionsWidth + 6) >= PROJECT_MIN
+    const showDay = () => inner() - (dayWidth + totalWidth + 4 + (showSessions() ? sessionsWidth + 2 : 0)) >= PROJECT_MIN
+    const projectWidth = () => Math.max(
+      8,
+      inner() - totalWidth - 2 - (showDay() ? dayWidth + 2 : 0) - (showSessions() ? sessionsWidth + 2 : 0),
+    )
+    const gap = () => (tracked.size().height < 20 ? 0 : 1)
+    // The heading and total stay put; only the project rows scroll.
+    const listHeight = () => {
+      const rows = tracked.size().height
+      return Math.max(1, (rows < 20 ? rows - 6 : Math.floor(rows * 0.6)) - 5 - 2 * gap())
+    }
+    let costScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
+    const scrollBy = (delta: number) => costScroll?.scrollTo(Math.max(0, costScroll.scrollTop + delta))
     const disposeKeys = api.keymap.registerLayer({
       mode: "modal",
       bindings: [
+        { key: "up", desc: "Scroll up", preventDefault: true, cmd: () => scrollBy(-1) },
+        { key: "ctrl+p", desc: "Scroll up", preventDefault: true, cmd: () => scrollBy(-1) },
+        { key: "down", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
+        { key: "ctrl+n", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
+        { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => scrollBy(-Math.max(1, listHeight() - 1)) },
+        { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => scrollBy(Math.max(1, listHeight() - 1)) },
+        { key: "home", desc: "First project", preventDefault: true, cmd: () => costScroll?.scrollTo(0) },
+        { key: "end", desc: "Last project", preventDefault: true, cmd: () => costScroll?.scrollTo(Number.MAX_SAFE_INTEGER) },
         { key: "escape", desc: "Close", preventDefault: true, cmd: () => api.ui.dialog.clear() },
       ],
     })
+    const columns = (project: () => string, day: string, total: string, sessionCount: string, tone: "head" | "body" | "total") => {
+      const color = tone === "total" ? api.theme.current.text : api.theme.current.textMuted
+      const bold = tone === "total" ? TextAttributes.BOLD : undefined
+      return (
+        <box flexDirection="row" gap={2} height={1} flexShrink={0}>
+          <text width={projectWidth()} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "head" ? color : api.theme.current.text }}>
+            {project()}
+          </text>
+          <Show when={showDay()}>
+            <text width={dayWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "body" || tone === "total" ? api.theme.current.success : color }}>
+              {day.padStart(dayWidth)}
+            </text>
+          </Show>
+          <text width={totalWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
+            {total.padStart(totalWidth)}
+          </text>
+          <Show when={showSessions()}>
+            <text width={sessionsWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
+              {sessionCount.padStart(sessionsWidth)}
+            </text>
+          </Show>
+        </box>
+      )
+    }
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
-          <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
-            Cost digest{" "}
-            <span style={{ fg: api.theme.current.textMuted }}>(24h · lifetime)</span>
-          </text>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={gap()} backgroundColor={api.theme.current.backgroundPanel}>
+          <box flexDirection="column" flexShrink={0}>
+            <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
+              Cost digest{" "}
+              <span style={{ fg: api.theme.current.textMuted }}>(per project)</span>
+            </text>
+            <Show when={!failed && rows.length > 0}>
+              {columns(() => "Project", "24h", "Total", "Sess", "head")}
+              {columns(() => "All projects", totalMoney(totals.window), totalMoney(totals.lifetime), String(totals.sessions), "total")}
+            </Show>
+          </box>
           <Show
             when={!failed && rows.length > 0}
             fallback={
               <text style={{ fg: api.theme.current.textMuted }}>
-                {failed ? "Cost data unavailable." : "No assistant cost recorded."}
+                {failed ? `${withReason("Cost data unavailable", failure)}.` : "No assistant cost recorded."}
               </text>
             }
           >
-            <scrollbox height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)} scrollbarOptions={{ visible: false }}>
-            <For each={rows}>
-              {(row) => (
-                <box flexDirection="row" gap={2} height={1} flexShrink={0}>
-                  <text width={windowWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.success }}>
-                    {money(row.window).padStart(windowWidth)}
-                  </text>
-                  <text width={lifetimeWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-                    {money(row.lifetime).padStart(lifetimeWidth)}
-                  </text>
-                  <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
-                    ({row.sessions})
-                  </text>
-                  <text flexGrow={1} flexShrink={1} wrapMode="none">
-                    {prettyDir(row.directory, home)}
-                  </text>
-                </box>
-              )}
-            </For>
+            <scrollbox
+              ref={(box: typeof costScroll) => { costScroll = box }}
+              height={listHeight()}
+              scrollbarOptions={{ visible: false }}
+            >
+              <For each={rows}>
+                {(row) => columns(() => fitDir(row.directory, home, projectWidth()), money(row.window), money(row.lifetime), String(row.sessions), "body")}
+              </For>
             </scrollbox>
           </Show>
           <box flexShrink={0}>
-            <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
+            <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+              {tracked.size().width < 60 ? "↑↓ scroll · esc close" : "↑↓/PgUp/PgDn scroll · esc close"}
+            </text>
           </box>
         </box>
       ),
       () => {
+        tracked.dispose()
         disposeKeys()
       },
     )
@@ -3466,8 +3801,8 @@ const tui: TuiPlugin = async (api) => {
       let waiting: Map<string, WaitingDetail>
       try {
         waiting = await queryWaitingDetails(dbClient.run)
-      } catch {
-        api.ui.toast({ message: "Needs-input data unavailable", variant: "error" })
+      } catch (error) {
+        api.ui.toast({ message: withReason("Needs-input data unavailable", error), variant: "error" })
         return
       }
       items = entries
@@ -3478,8 +3813,8 @@ const tui: TuiPlugin = async (api) => {
           since: waiting.get(entry.id)?.since,
         }))
         .sort((a, b) => (a.since ?? a.entry.updated) - (b.since ?? b.entry.updated))
-    } catch {
-      api.ui.toast({ message: "Could not load sessions", variant: "error" })
+    } catch (error) {
+      api.ui.toast({ message: withReason("Could not load sessions", error), variant: "error" })
       return
     }
     if (items.length === 0) {
@@ -3490,7 +3825,8 @@ const tui: TuiPlugin = async (api) => {
     const currentID = route.name === "session" ? route.params?.sessionID : undefined
     const previous = items.findIndex((item) => item.entry.id === (currentID ?? lastNeedsID))
     const [cursor, setCursor] = createSignal(previous < 0 ? 0 : (previous + 1) % items.length)
-    let needsScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
+    let needsScroll: { scrollTop: number; width: number; height: number; scrollTo: (top: number) => void } | undefined
+    let needsViewport = { width: 0, height: 0 }
     const revealCursor = () => {
       const row = cursor()
       if (!needsScroll || needsScroll.height <= 0) return
@@ -3528,16 +3864,49 @@ const tui: TuiPlugin = async (api) => {
       ],
     })
     const home = process.env.HOME ?? ""
+    // Fixed column widths so every cell truncates with an ellipsis instead of
+    // being clipped by its neighbour: the dialog is at most 88 wide, minus its
+    // padding (8) and the row padding (2).
+    const tracked = trackSize(api)
+    const wide = () => tracked.size().width >= 80
+    const inner = () => Math.max(20, Math.min(88, tracked.size().width - 2) - 10)
+    const metaText = (item: (typeof items)[number]) => {
+      const time = item.since === undefined ? "waiting (start unknown)" : `waiting ${ago(item.since)}`
+      return { dir: prettyDir(item.entry.dir, home), time }
+    }
+    const reasonWidth = () => (wide() ? 15 : 6)
+    const metas = items.map(metaText)
+    const timeWidth = Math.max(0, ...metas.map((meta) => meta.time.length))
+    const metaWidth = () => wide()
+      ? Math.min(Math.max(...metas.map((meta) => stringWidth(meta.dir) + 3 + meta.time.length)), Math.max(timeWidth, Math.floor(inner() * 0.4)))
+      : 0
+    const titleWidth = () => Math.max(8, inner() - reasonWidth() - 2 - (wide() ? metaWidth() + 2 : 0))
+    // The wait time stays whole; the directory shortens, or drops when it
+    // would keep fewer than four columns.
+    const metaLabel = (item: (typeof items)[number]) => {
+      const { dir, time } = metaText(item)
+      const room = metaWidth() - time.length - 3
+      return room >= 4 ? `${fitDir(dir, home, room)} · ${time}` : truncateCells(time, metaWidth())
+    }
     api.ui.dialog.replace(
       () => (
         <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
           <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
             Needs input{" "}
-            <span style={{ fg: api.theme.current.textMuted }}>({items.length} · longest waiting first)</span>
+            <span style={{ fg: api.theme.current.textMuted }}>
+              ({wide() ? `${items.length} · longest waiting first` : items.length})
+            </span>
           </text>
           <scrollbox
             ref={(box) => { needsScroll = box; queueMicrotask(revealCursor) }}
-            height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)}
+            renderAfter={() => {
+              if (!needsScroll) return
+              const { width, height } = needsScroll
+              if (width === needsViewport.width && height === needsViewport.height) return
+              needsViewport = { width, height }
+              revealCursor()
+            }}
+            height={Math.max(1, Math.floor(tracked.size().height * 0.6) - 6)}
             scrollbarOptions={{ visible: false }}
           >
             <For each={items}>
@@ -3558,20 +3927,15 @@ const tui: TuiPlugin = async (api) => {
                   }}
                 >
                   <text
-                    flexGrow={1}
-                    flexShrink={1}
-                    minWidth={12}
+                    width={titleWidth()}
+                    flexShrink={0}
                     wrapMode="none"
-                    style={{
-                      fg:
-                        index() === cursor()
-                          ? api.theme.current.text
-                          : api.theme.current.text,
-                    }}
+                    style={{ fg: api.theme.current.text }}
                   >
-                    {truncate(item.entry.title, api.renderer.width < 80 ? 18 : 48)}
+                    {truncateCells(item.entry.title, titleWidth() - 1)}
                   </text>
                   <text
+                    width={reasonWidth()}
                     flexShrink={0}
                     wrapMode="none"
                     style={{
@@ -3581,11 +3945,12 @@ const tui: TuiPlugin = async (api) => {
                           : api.theme.current.warning,
                     }}
                   >
-                    {api.renderer.width < 80 ? (item.reason === "awaiting answer" ? "answer" : "stuck") : item.reason}
+                    {!wide() ? (item.reason === "awaiting answer" ? "answer" : "stuck") : item.reason}
                   </text>
-                  <Show when={api.renderer.width >= 80}>
+                  <Show when={wide()}>
                   <text
-                    flexShrink={1}
+                    width={metaWidth()}
+                    flexShrink={0}
                     wrapMode="none"
                     style={{
                       fg:
@@ -3594,7 +3959,7 @@ const tui: TuiPlugin = async (api) => {
                           : api.theme.current.textMuted,
                     }}
                   >
-                    {prettyDir(item.entry.dir, home)} · {item.since === undefined ? "time unknown" : `waiting ${ago(item.since)}`}
+                    {metaLabel(item)}
                   </text>
                   </Show>
                 </box>
@@ -3603,12 +3968,13 @@ const tui: TuiPlugin = async (api) => {
           </scrollbox>
           <box flexShrink={0}>
             <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-              {api.renderer.width < 80 ? "↑↓ move · enter open · esc close" : "↑↓ navigate · enter open · n open next waiting · esc close"}
+              {!wide() ? "↑↓ move · enter open · esc close" : "↑↓ navigate · enter open · n open next waiting · esc close"}
             </text>
           </box>
         </box>
       ),
       () => {
+        tracked.dispose()
         disposeNav()
       },
     )

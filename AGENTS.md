@@ -99,9 +99,10 @@ the schema below. Keystrokes never touch the database:
   (`SESH_PINS_FILE` overrides it for tests), shared by fzf and the TUI. Writes
   use a sibling lock directory and atomic rename. Ctrl-S toggles a selected
   session; Ctrl-D toggles its directory (terminal picker and option+o picker).
-  The sidebar and home lists use Option-S / Option-R instead: opencode binds
-  `ctrl+d` itself (composer delete-char, session delete), so ctrl pins would
-  shadow the composer. Pinned directories sort before groups
+  The option+o picker also pins with Option-S / Option-R (its pinned filter is
+  Option-K). The sidebar and home lists use only Option-S / Option-R: opencode
+  binds `ctrl+d` itself (composer delete-char, session delete), so ctrl pins
+  would shadow the composer. Pinned directories sort before groups
   containing pinned sessions. The terminal picker puts pinned sessions first
   inside each group; the TUI picker ranks pinned sessions first before filtering
   and keeps sessions within each directory ordered by recency; the sidebar keeps
@@ -189,9 +190,17 @@ when opencode exits, the picker reopens with the query preserved.
   touches only in-flight sessions), the open session shows its own ●, and every other idle row
   stays neutral (polled periodically); Option-P previews
   a row and option+d deletes one (armed, then confirmed). Right-clicking a
-  sidebar row opens an action context menu (open, preview, cmux workspace when
-  inside cmux, fork, pin/unpin, delete); right-clicking a home or picker row
-  opens the session in a new cmux workspace. The sidebar section lists every
+  sidebar, home or picker row opens one shared action context menu
+  (`createContextMenu` + `ContextMenuOverlay`: open, preview, cmux workspace
+  only when `inCmux()` — `CMUX_WORKSPACE_ID` — fork, pin/unpin, delete). The
+  picker's menu registers its key layer in `modal` mode, stays inside the list
+  area (`createMenuView` bounds; borderless when squeezed, and windowed by
+  `contextMenuWindow` so the selected item is always visible when the items
+  outnumber the rows, with ▲/▼ hints on its edge rows; closed on resize) and
+  hides the footer while open; the overlay portals to the renderer root at
+  `CONTEXT_MENU_Z_INDEX` (3500), above OpenCode's dialog layer (3000) — a lower
+  value renders the picker's menu behind the dialog; Esc closes the menu before the picker and Enter in the
+  search input must not submit while it is open. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
   Sessions waiting on the user (unanswered questions, stuck runs) pin a
@@ -204,6 +213,12 @@ when opencode exits, the picker reopens with the query preserved.
   off the TUI thread but still costing worker CPU every poll, so the shared
   poll runs it only while the sidebar is subscribed
   (`poll(listener, { waiting: true })`); the home list never triggers it.
+- **Picker chrome:** `chromeRows()` is reactive: the status line ("indexing
+  transcripts i/n", "k of n transcripts indexed" on partial coverage, "showing
+  newest N" when truncated, active scope/filters) takes a row only while it has
+  text. Below `PICKER_TALL` (28) rows the footer is one line and directory
+  headings lose their blank line (`groupLines`); below 20 rows the decorative
+  gaps collapse too, and the dialog takes 85% of the terminal.
 - **Picker:** a custom dialog (not `DialogSelect`) grouped by
   project/directory, recency-ordered, resume via
   `api.route.navigate("session", …)`. `option+o` and the command palette open it;
@@ -229,7 +244,7 @@ when opencode exits, the picker reopens with the query preserved.
   so tool payloads never reach the UI thread; if the worker rejects, sessions
   not yet indexed fall back to the remote path. The header shows indexing progress/coverage. Visible transcript hits get
   short excerpts from the text-only index (never tool or reasoning payloads).
-  Project, needs-input (Option-W), and pinned-session (Option-S) filters compose
+  Project, needs-input (Option-W), and pinned-session (Option-K) filters compose
   with the query; the picker remembers query/scope/filters until plugin restart.
   `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
   question or running-tool timestamp, lists longest-waiting first, and `n`
@@ -241,8 +256,25 @@ when opencode exits, the picker reopens with the query preserved.
   no-op when absent, and `sesh --check` reports when the installed copy differs
   from the bundled one.
 
+Failure toasts (delete, fork, pins, session load, needs-input and cost data)
+go through `withReason(message, error)`, which appends the error's message
+when it has one (preferring `.message` / `.data.message`) and keeps the plain
+text otherwise; markup-looking strings (proxy error pages) are ignored.
+
+Dialog layouts derive from `trackSize(api)` (renderer dimensions as a signal,
+released when the dialog closes): the picker's chrome, `/sesh-costs` columns
+and `/sesh-needs` columns re-flow on resize instead of keeping values captured
+when the dialog opened. A fork that finishes after the picker closed must not
+clear a dialog (`forkEntry` checks `alive`).
+
 ### Hard-won rules — do not regress
 
+- **Re-check the dialog z-index when bumping OpenCode.** `CONTEXT_MENU_Z_INDEX`
+  (3500) must stay above the dialog layer, `zIndex={3000}` in OpenCode's
+  `packages/tui/src/ui/dialog.tsx` (verified at v2.2.6, line 66). If the value
+  changes, update the constant and `DialogHost` in `tests/dialog-harness.mjs`
+  and the "OpenCode vX.Y.Z" notes next to them; `tests/tui.mjs` fails when the
+  pinned `@opencode/*` version is newer than the one recorded there.
 - **No `DialogSelect`.** Call `api.ui.dialog.setSize("xlarge")` **after**
   `dialog.replace(...)`; `replace` resets the size to medium.
 - Use the `backgroundColor` **prop** on boxes, never `style={{backgroundColor}}`.
@@ -252,12 +284,21 @@ when opencode exits, the picker reopens with the query preserved.
   lines (`pickerHintLines`, compact form on narrow widths), so the chrome
   budget (`chromeRows`) is exact and the list absorbs any shortfall.
   Below 20 rows, decorative gaps collapse before functional chrome. Preview
-  metadata and its back hint never shrink or wrap. `/sesh-costs` scrolls its
-  bounded rows with right-aligned money columns; `/sesh-needs` keeps titles
-  readable by dropping directory metadata and shortening reasons below 80
-  columns, and scrolls keyboard selection into view.
+  metadata and its back hint never shrink or wrap. `/sesh-costs` shows the
+  project first, then right-aligned money columns under a heading row (`24h`
+  and `Total` spend from assistant-message cost; `Sess` is the number of
+  sessions with recorded cost) and an "All projects" total line (always an amount, `$0.00` for no spend;
+  project rows show "—"). The heading
+  and total stay put while the project rows scroll (↑↓, Ctrl-P/N, PgUp/PgDn,
+  Home/End); `Sess`, then `24h`, drop when the project name would starve, and
+  `fitDir` shortens leading directory segments first, cutting the last segment
+  only when it alone is wider than the column; `/sesh-needs` uses fixed
+  columns that truncate with an ellipsis (title, reason, then directory · wait
+  time, where the wait time stays whole and "waiting (start unknown)" covers a
+  missing start), drops the directory metadata and shortens reasons and the
+  heading below 80 columns, and scrolls keyboard selection into view.
 - The picker windows by visible terminal lines: directory headings take two
-  lines, transcript excerpts can take a second line, and a sticky directory
+  lines (one on terminals under 28 rows), transcript excerpts can take a second line, and a sticky directory
   heading keeps a scrolled group identifiable. Wheel scroll follows every
   OpenTUI delta and changes only the viewport; real mouse movement changes
   selection without recentering it.

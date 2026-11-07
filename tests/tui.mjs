@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DatabaseSync } from "node:sqlite"
+import stringWidth from "string-width"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -45,16 +46,18 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "readFile",
     "process",
     "setTimeout",
-    "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync",
+    "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn", "stringWidth",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, fitDir, contextMenuWindow, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
   return factory(
     readExtraction,
-    { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache" } },
+    { env: { HOME: "/nonexistent", SESH_CACHE_DIR: "/nonexistent/cache", ...runtime.env } },
     setTimeout,
     runtime.setInterval ?? setInterval, runtime.clearInterval ?? clearInterval, 15_000,
     runtime.existsSync ?? (() => false), runtime.spawnSync ?? (() => ({ status: 1 })),
+    runtime.spawn ?? (() => { throw new Error("unexpected spawn") }),
+    stringWidth,
   )
 }
 
@@ -274,9 +277,11 @@ function loadAdapter(ctx) {
     assert.ok(marker >= 0 && start >= 0 && end > marker, `could not locate ${name} navigation bindings`)
     let layer
     const moves = []
-    new Function("api", "moveCursor", "togglePreview", "handleEscape", source.slice(start, end))(
+    new Function("api", "moveCursor", "togglePreview", "handleEscape", "pinSelectedSession", "pinSelectedDirectory", source.slice(start, end))(
       { keymap: { registerLayer(value) { layer = value; return () => {} } } },
       (delta) => moves.push(delta),
+      () => {},
+      () => {},
       () => {},
       () => {},
     )
@@ -352,15 +357,21 @@ function loadAdapter(ctx) {
 function loadPickerWindow() {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const start = source.indexOf("type PickerRow =")
-  const end = source.indexOf("type PinProps =", start)
+  const end = source.indexOf("// Forks `entry` and opens the fork", start)
   assert.ok(start >= 0 && end > start, "could not locate picker viewport logic")
-  return new Function(`${stripTypeScriptTypes(source.slice(start, end))}; return { pickerWindow, pickerLastStart }`)()
+  const truncate = (text, width) => (text.length <= width ? text : text.slice(0, width - 1) + "…")
+  return new Function("truncate", `${stripTypeScriptTypes(source.slice(start, end))}; return { pickerWindow, pickerLastStart, pickerHintLines }`)(truncate)
 }
 
 // A wheel step moves a stable window through a directory tree; sticky headings,
 // group spacing and excerpts must fit the line budget without dropping rows.
 {
-  const { pickerWindow, pickerLastStart } = loadPickerWindow()
+  const { pickerWindow, pickerLastStart, pickerHintLines } = loadPickerWindow()
+  // Short terminals: one hint line, and a heading costs one line, not two.
+  assert.equal(pickerHintLines(34, 14).length, 1)
+  assert.equal(pickerHintLines(72, 24).length, 1)
+  assert.ok(pickerHintLines(34, 14)[0].length <= 34)
+  assert.ok(pickerHintLines(100, 40).length >= 2, "tall terminals keep the full hint")
   const a = { kind: "group", dir: "/a", label: "a", count: 3, pinned: false }
   const b = { kind: "group", dir: "/b", label: "b", count: 1, pinned: false }
   const item = (id, last = false) => ({ kind: "item", entry: { id }, last })
@@ -371,9 +382,11 @@ function loadPickerWindow() {
   assert.deepEqual(names(pickerWindow(rows, 2, 5, (entry) => entry.id === "a2")), ["/a+", "a2", "a3"])
   assert.equal(pickerLastStart(rows, 5, () => false), 3)
   assert.deepEqual(names(pickerWindow(rows, 3, 5, () => false)), ["/a+", "a3", "/b", "b1"])
+  assert.deepEqual(names(pickerWindow(rows, 0, 5, () => false, 1)), ["/a", "a1", "a2", "a3", "/b"])
+  assert.equal(pickerLastStart(rows, 5, () => false, 1), 2)
 }
 
-const { homeDirLabels, queryRunningIds, createRunningState, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
+const { homeDirLabels, queryRunningIds, createRunningState, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, contextMenuWindow, createContextMenu } =
   loadDataLayer()
 
 // Fake worker that runs DB_WORKER_SOURCE against node:sqlite, with the same
@@ -417,7 +430,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.doesNotMatch(source, /pending !== hovered\(\)/)
   assert.match(source, /const confirmArmed = /)
-  assert.match(source, /if \(pendingDelete\(\)\) return\s+setQuery\(value\)/)
+  assert.match(source, /if \(pendingDelete\(\)\) return\s+menu\.close\(\)\s+setQuery\(value\)/)
 }
 
 // Slash subcommands exist as separate registrations (the command API never
@@ -429,6 +442,13 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   assert.match(source, /slash: \{ name: "sesh-needs" \}/)
   assert.match(source, /const openCosts = /)
   assert.match(source, /const openNeeds = /)
+  assert.match(source, /=== 1 \? "needs" : "need"\} input/, "the sidebar count pluralises: 1 needs input, N need input")
+  assert.match(source, /if \(menuState\(\) \|\| confirmArmed\(\)\) return\s+choose\(\)/, "the search input must not submit while the menu is open")
+  assert.match(source, /transcripts indexed/)
+  assert.doesNotMatch(source, /`transcripts \$\{/, "the status line reads N transcripts indexed")
+  assert.doesNotMatch(source, /time unknown/)
+  assert.match(source, /waiting \(start unknown\)/)
+  assert.match(source, /right-click menu/)
 }
 
 // The sidebar surfaces needs-input triage: a virtual group above the
@@ -801,6 +821,19 @@ function makeApi(sessions, { latency = 0 } = {}) {
 
 {
   const labels = (items) => items.map((item) => item.label)
+  // A menu taller than its bounds scrolls so the selection is always shown.
+  assert.deepEqual(contextMenuWindow(6, 0, 10), { start: 0, size: 6 })
+  assert.deepEqual(contextMenuWindow(6, 3, 5, 0), { start: 0, size: 5 })
+  assert.deepEqual(contextMenuWindow(6, 5, 5, 0), { start: 1, size: 5 })
+  assert.deepEqual(contextMenuWindow(6, 0, 5, 1), { start: 0, size: 5 })
+  for (const rows of [1, 2, 3, 5]) {
+    for (let index = 0; index < 6; index++) {
+      const { start, size } = contextMenuWindow(6, index, rows)
+      assert.equal(size, Math.min(6, rows))
+      assert.ok(index >= start && index < start + size, `index ${index} in ${rows} rows: ${start}+${size}`)
+      assert.ok(start >= 0 && start + size <= 6)
+    }
+  }
   assert.deepEqual(labels(contextMenuItems(false, false)), ["Open", "Preview transcript", "Fork", "Pin", "Delete"])
   assert.deepEqual(labels(contextMenuItems(true, true)), [
     "Open", "Preview transcript", "Open in new cmux workspace", "Fork", "Unpin", "Delete",
@@ -812,6 +845,12 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.deepEqual(box(10, 22, 20, 7), { left: 10, top: 15, width: 20, height: 7 })
   assert.deepEqual(box(0, 0, 200, 7), { left: 0, top: 1, width: 80, height: 7 })
   assert.deepEqual(box(3, 2, 20, 40), { left: 3, top: 0, width: 20, height: 24 })
+  // Dialog bounds: the menu never leaves them, flipping above or shrinking to fit.
+  const bounded = (x, y, width, height, bounds) => contextMenuBox({ x, y, width, height }, 80, 24, bounds)
+  assert.deepEqual(bounded(10, 8, 20, 7, { top: 6, bottom: 14 }), { left: 10, top: 6, width: 20, height: 7 })
+  assert.deepEqual(bounded(10, 6, 20, 7, { top: 6, bottom: 14 }), { left: 10, top: 7, width: 20, height: 7 })
+  assert.deepEqual(bounded(10, 12, 20, 5, { top: 6, bottom: 14 }), { left: 10, top: 7, width: 20, height: 5 })
+  assert.deepEqual(bounded(10, 7, 20, 9, { top: 6, bottom: 12 }), { left: 10, top: 6, width: 20, height: 6 })
 
   const entry = { id: "ses_menu", title: "Menu", dir: "/p", group: "p", updated: 1 }
   const harness = ({ pinned = false, cmux = false } = {}) => {
@@ -916,7 +955,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
 
   {
     // A still pointer re-fires hover; republishing an identical selection
-    // would rebuild the keyed menu every frame until clicks fall through it.
+    // would needlessly republish menu state on every frame.
     const h = harness()
     h.menu.open(entry, 1, 1)
     const published = h.states.length
@@ -986,7 +1025,11 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   const sidebar = source.slice(source.indexOf("function SidebarSessions"), source.indexOf("function HomeSessions"))
   assert.ok(sidebar.length > 1000, "could not locate the sidebar component")
-  assert.match(sidebar, /const menuView = createMemo\(\(\) => \{/)
+  const overlay = source.slice(source.indexOf("function ContextMenuOverlay"), source.indexOf("type PinProps ="))
+  assert.ok(overlay.length > 500, "could not locate the shared context menu overlay")
+  assert.match(sidebar, /const menuView = createMenuView\(props\.api, menuState\)/)
+  assert.match(sidebar, /<ContextMenuOverlay api=\{props\.api\} menu=\{menu\} view=\{menuView\} \/>/)
+  assert.match(sidebar, /fork: \(entry\) => void forkSession\(props\.api, entry\)/)
   assert.match(sidebar, /event\.button === RIGHT_BUTTON[\s\S]{0,120}menu\.open\(row\.entry, event\.x, event\.y\)/)
   assert.match(
     sidebar,
@@ -996,24 +1039,24 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.doesNotMatch(sidebar, /openInCmuxWorkspace\(props\.api, row\.entry\)/)
   assert.match(sidebar, /const onRootMouseDown = \(\) => \{\s+menu\.close\(\)/)
   assert.match(sidebar, /preview\.closeIfOpen\(\)/, "one outside press must close an open preview")
-  assert.match(sidebar, /<Portal\s+mount=/)
-  assert.match(sidebar, /<Portal[\s\S]*?<Show when=\{menuView\(\)\} keyed>[\s\S]*?<\/Show>\s*<\/Portal>/)
-  assert.doesNotMatch(sidebar, /<Show when=\{menuView\(\)\} keyed>\s*<Portal/)
-  assert.doesNotMatch(sidebar, /<Show when=\{menuState\(\)\}/)
-  assert.match(sidebar, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
+  assert.match(overlay, /<Portal\s+mount=/)
+  assert.match(overlay, /<Portal[\s\S]*?<Show when=\{props\.view\(\)\}>[\s\S]*?<\/Show>\s*<\/Portal>/)
+  assert.doesNotMatch(overlay, /<Show when=\{props\.view\(\)\} keyed>/, "hover must retain mouse targets")
+  assert.doesNotMatch(overlay, /<Show when=\{props\.view\(\)\}>\s*<Portal/)
+  assert.match(overlay, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
   assert.match(sidebar, /on\(routeKey, \(\) => menu\.close\(\), \{ defer: true \}\)/)
   assert.match(sidebar, /itemRows\(\)\.some\(\(entry\) => entry\.id === state\.entry\.id\)\) menu\.close\(\)/)
-  assert.match(sidebar, /if \(props\.api\.ui\.dialog\.open\) menu\.close\(\)/)
-  assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open/)
+  assert.match(sidebar, /if \(props\.api\.ui\.dialog\.open \|\| props\.api\.mode\.current\(\) !== BASE_MODE\) \{\s*menu\.close\(\)/)
+  assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open \|\| props\.api\.mode\.current\(\) !== BASE_MODE/)
   assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
   assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
-  assert.match(sidebar, /menu\.click\(index\(\), event\.button\)/)
+  assert.match(overlay, /props\.menu\.click\(view\(\)\.start \+ shown\(\), event\.button\)/)
   assert.match(
-    sidebar,
-    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*menu\.click\(index\(\), event\.button\)/,
+    overlay,
+    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*props\.menu\.click\(view\(\)\.start \+ shown\(\), event\.button\)/,
     "context menu items must activate on mouseUp so the trailing mouse release does not hit the dialog backdrop",
   )
-  assert.doesNotMatch(sidebar, /menu\.activate\(index\(\)\)/)
+  assert.doesNotMatch(overlay, /menu\.activate\(index\(\)\)/)
   assert.match(sidebar, /onCleanup\(\(\) => \{[\s\S]{0,120}menu\.close\(\)/)
   assert.match(
     sidebar,
@@ -1109,6 +1152,97 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const toasts = []
   data.openInCmuxWorkspace({ ui: { toast: (value) => toasts.push(value) } }, { ...entry, id: "ses_bad;touch injected" })
   assert.equal(toasts[0].message, "Invalid session ID")
+}
+
+// Cost rows shorten leading segments first and never cut the last segment
+// while room remains; an overlong last segment ends in an ellipsis.
+{
+  const { fitDir } = loadDataLayer()
+  const home = "/Users/me"
+  assert.equal(fitDir("/Users/me/work/app", home, 40), "~/work/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 40), "…/work/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 9), "…/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 4), "app")
+  assert.equal(fitDir("/srv/team/work/application", home, 8), "applica…")
+  assert.equal(fitDir("/srv/team/work/application", home, 13), "…/application")
+  assert.equal(fitDir("/srv/team/work/application", home, 12), "application")
+  assert.equal(fitDir("/Users/me", home, 20), "~")
+  assert.equal(fitDir("", home, 20), "other")
+  assert.equal(fitDir("/work/项目应用程序项目应用程序", home, 16), "项目应用程序项…")
+  for (const last of ["项目应用程序项目应用程序", "e\u0301".repeat(12), "👩‍💻".repeat(8), "🇹🇷".repeat(8)]) {
+    const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(last)].map(({ segment }) => segment)
+    const prefixes = new Set(segments.map((_, index) => segments.slice(0, index + 1).join("")))
+    prefixes.add("")
+    for (const width of [0, 1, 2, 3, 8, 16, 24]) {
+      const fitted = fitDir(`/work/${last}`, home, width)
+      assert.ok(stringWidth(fitted) <= width, `${JSON.stringify(fitted)} exceeds ${width} cells`)
+      const tail = fitted.replace(/^.*\//, "").replace(/…$/, "")
+      assert.ok(prefixes.has(tail), `${JSON.stringify(fitted)} splits a grapheme`)
+    }
+  }
+  for (const width of [3, 6, 10, 17, 25]) {
+    const fitted = fitDir("/srv/a-very-long-team-name/another-long-segment/final-segment-name", home, width)
+    assert.ok(fitted.length <= width, `${width}: ${fitted}`)
+  }
+}
+
+// The dialog z-index and host layout were verified against a specific OpenCode
+// release. A newer pinned @opencode/* means they must be re-checked.
+{
+  const version = (text) => text.split(".").map(Number)
+  const newer = (a, b) => version(a).some((part, i) => part !== version(b)[i] && part > version(b)[i] && version(a).slice(0, i).every((p, j) => p === version(b)[j]))
+  const pinned = manifest.devDependencies["@opencode/plugin"]
+  for (const file of ["tui-plugins/sesh-panel/tui.tsx", "tests/dialog-harness.mjs"]) {
+    const recorded = readFileSync(join(root, file), "utf8").match(/OpenCode v(\d+\.\d+\.\d+)/)?.[1]
+    assert.ok(recorded, `${file}: record the OpenCode version the dialog z-index was verified against ("OpenCode vX.Y.Z")`)
+    assert.ok(
+      !newer(pinned, recorded),
+      `@opencode/plugin is pinned to ${pinned} but ${file} was verified against v${recorded}: re-check the dialog zIndex in packages/tui/src/ui/dialog.tsx, then update CONTEXT_MENU_Z_INDEX, DialogHost and the recorded version`,
+    )
+  }
+}
+
+// Failure toasts carry the cause when there is one and keep the plain text otherwise.
+{
+  const { withReason, errorReason } = loadDataLayer()
+  assert.equal(withReason("Could not delete session", new Error("database is locked")), "Could not delete session: database is locked")
+  assert.equal(withReason("Could not delete session", { data: { message: "not found" } }), "Could not delete session: not found")
+  assert.equal(withReason("Could not delete session", { error: { message: "nested" } }), "Could not delete session: nested")
+  assert.equal(withReason("Could not delete session", "plain\nmulti   line"), "Could not delete session: plain multi line")
+  for (const empty of [undefined, null, {}, new Error(""), 42, { message: 7 }]) {
+    assert.equal(withReason("Could not fork session", empty), "Could not fork session", String(empty))
+  }
+  assert.equal(withReason("Could not load sessions", "<html><body>502 Bad Gateway</body></html>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", "<!DOCTYPE html><title>x</title>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", "  <p>oops</p>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", { data: "<html>proxy</html>" }), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", { message: "readable", data: "<html>x</html>" }), "Could not load sessions: readable")
+  assert.equal(withReason("Could not load sessions", { data: { message: "typed" }, error: "ignored" }), "Could not load sessions: typed")
+  const cycle = { }
+  cycle.data = cycle
+  assert.equal(errorReason(cycle), undefined, "cyclic error bodies terminate")
+  assert.ok(errorReason("x".repeat(500)).length <= 80)
+}
+
+// cmux is detected from CMUX_WORKSPACE_ID at use time: without it, the
+// workspace action explains itself instead of failing silently.
+{
+  const api = (toasts) => ({ ui: { toast: (value) => toasts.push(value) } })
+  const entry = { id: "ses_ok123", title: "T", dir: "/p" }
+  const without = loadDataLayer(undefined, { env: { CMUX_WORKSPACE_ID: undefined } })
+  assert.equal(without.inCmux(), false)
+  const toasts = []
+  without.openInCmuxWorkspace(api(toasts), entry)
+  assert.deepEqual(toasts.map((toast) => toast.message), ["Opening a workspace needs cmux"])
+
+  const spawned = []
+  const child = { on() {} }
+  const within = loadDataLayer(undefined, { env: { CMUX_WORKSPACE_ID: "workspace:1" }, spawn: (...args) => { spawned.push(args); return child } })
+  assert.equal(within.inCmux(), true)
+  within.openInCmuxWorkspace(api(toasts), entry)
+  assert.equal(spawned.length, 1)
+  assert.equal(spawned[0][0], "cmux")
+  assert.ok(spawned[0][1].includes("opencode --session ses_ok123"))
 }
 
 // Local extraction returns text only, equals the old JSON.parse extraction, and

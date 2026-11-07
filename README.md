@@ -32,7 +32,7 @@ picker, or add `"opencode-sesh"` to `plugins` for the TUI panel
   shown across *all* your projects, not just the current one. Archived and
   subagent child sessions are hidden by default.
 - **Pin what matters.** Ctrl-S pins a session and Ctrl-D pins its directory in
-  either picker; the TUI sidebar and home list use Option-S and Option-R.
+  either picker; the TUI picker, sidebar and home list also use Option-S and Option-R.
   Pins are shared and persist across restarts. Pinned directories rise first
   (followed by directories containing pinned sessions in the TUI picker);
   pinned sessions sort first in the terminal picker and home list, while the
@@ -191,7 +191,7 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Key | Action |
 | --- | --- |
 | `/sesh` | Open the full picker |
-| `/sesh-costs` | Per-project cost digest (24h beside lifetime) |
+| `/sesh-costs` | Per-project cost digest: 24h and total spend, sessions with cost, and an all-projects total (↑/↓, PgUp/PgDn scroll) |
 | `/sesh-needs` | Sessions waiting on you (Enter opens) |
 | `option+o` | Open the full picker (also in the command palette) |
 | Type | Search titles, directories and transcript text |
@@ -202,8 +202,8 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Option-D | Arm deletion; press Option-D again, `y`, or Enter to confirm |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
-| Option-W / Option-S | Show only sessions needing input / pinned sessions |
-| Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
+| Option-W / Option-K | Show only sessions needing input / pinned sessions |
+| Option-S / Option-R (or Ctrl-S / Ctrl-D) | Pin or unpin the selected session / directory |
 | Esc | Close the preview first, then the picker |
 
 While deletion is armed, `n` or Esc cancels; it also cancels after five seconds.
@@ -214,12 +214,11 @@ Mouse-wheel scrolling moves through the tree without changing the selection
 under a stationary pointer. Option-P opens a full-size transcript preview over
 the picker; use ↑/↓ or Ctrl-P/Ctrl-N to preview other sessions, then Esc to
 return to the list.
-Right-click a sidebar session to open its action menu: open, preview, fork,
-pin/unpin, or delete with confirmation. Inside cmux, the menu also offers opening
-the session in a new workspace at its directory. Use ↑/↓ and Enter to choose an
-action, or Esc to dismiss the menu.
-Right-click a session in the home list or picker to open it in a new cmux
-workspace at its directory; outside cmux it shows a toast instead.
+Right-click a session in the sidebar, home list or picker to open its action
+menu: open, preview, fork, pin/unpin, or delete with confirmation. Inside cmux
+(detected from `CMUX_WORKSPACE_ID`), the menu also offers opening the session in
+a new workspace at its directory. Use ↑/↓ and Enter to choose an action, or Esc
+to dismiss the menu (in the picker, Esc closes the menu before the picker).
 
 ### TUI sidebar and home list
 
@@ -266,8 +265,8 @@ shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
 keystroke away.
 
 The home list also supports search and the Option-P, Option-S, Option-R, and
-Option-D actions on the hovered session. These Option pin shortcuts do not
-replace the picker's Ctrl-S/Ctrl-D bindings; Option-S in the picker filters pins.
+Option-D actions on the hovered session. The picker accepts the same
+Option-S / Option-R pins alongside its Ctrl-S/Ctrl-D bindings; its pinned filter is Option-K.
 It shows up to six sessions, reducing spacing and then the row count on shorter
 terminals to leave room for multiline prompts. On very short terminals it hides;
 Option-O and `/sesh` still open the full picker. Long titles and paths stay on a
@@ -282,7 +281,10 @@ no lists are mounted and nothing polls in the background, while `option+o`,
 
 The full picker pages through your global session list
 and indexes transcript text for every session in the background, showing
-indexing progress under the search box (and noting if the safety cap is reached).
+indexing progress under the search box while it runs (and noting partial
+coverage or a reached safety cap; a complete index takes no row). Terminals
+under 28 rows get a one-line footer and tighter directory headings; dialogs
+re-flow when the terminal is resized.
 Transcript matches show a short excerpt
 under the result; the Project, Needs input, and Pinned filters combine with
 search. The picker remembers your query and filters until you restart opencode.
@@ -307,7 +309,7 @@ All variables are optional.
 
 ## Integrations
 
-sesh is terminal-agnostic apart from the TUI's right-click action. The
+sesh is terminal-agnostic apart from the TUI's cmux workspace action. The
 [`contrib/cmux/`](contrib/cmux/README.md) directory shows how to drive it from
 cmux — command-palette entries, shortcuts, resuming a session in its own
 workspace, and a global "resume from anywhere" hotkey — all caller-side.

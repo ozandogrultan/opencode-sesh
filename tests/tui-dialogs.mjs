@@ -4,6 +4,7 @@
 // the data-layer tests. An optional argument points at another tui.tsx.
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import stringWidth from "string-width"
 import { createHarness, session, sourcePath } from "./dialog-harness.mjs"
 
 const source = readFileSync(process.argv[2] ?? sourcePath, "utf8")
@@ -141,6 +142,723 @@ await check("picker preserves scope, needs-input filters and two-step delete", a
     assert.ok(!harness.setup.captureCharFrame().includes("y confirm"))
     harness.press("enter")
     assert.ok(harness.navigations.some(([route]) => route === "session"), "Enter opens a session")
+  } finally { harness.close() }
+})
+
+const sessionRows = (frame) => frame.split("\n").filter((line) => /[├└]/.test(line)).length
+
+for (const [width, height, minRows] of [[44, 14, 4], [80, 24, 6]]) {
+  await check(`picker ${width}x${height} shows at least ${minRows} session rows`, async () => {
+    const harness = await createHarness({ width, height, sessions, source })
+    try {
+      const frame = await harness.show(await harness.command("sesh"), Math.min(116, width - 2))
+      assert.ok(sessionRows(frame) >= minRows, frame)
+      assert.ok(!/transcripts/.test(frame), "a complete index takes no status line\n" + frame)
+      assert.equal(frame.split("\n").filter((line) => /esc close/.test(line)).length, 1, "one-line footer\n" + frame)
+    } finally { harness.close() }
+  })
+}
+
+await check("picker keeps indexing progress visible, then gives its row back", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source, indexDelay: 400 })
+  try {
+    const dialog = await harness.command("sesh")
+    const busy = await harness.show(dialog, 78)
+    assert.match(busy, /indexing transcripts \d+\/12/, busy)
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    await harness.setup.flush()
+    await harness.setup.flush()
+    const done = harness.setup.captureCharFrame()
+    assert.ok(!/transcripts/.test(done), done)
+    assert.ok(sessionRows(done) > sessionRows(busy), "the freed status row goes to the list")
+  } finally { harness.close() }
+})
+
+const rowAt = (frame, title) => {
+  const lines = frame.split("\n")
+  const y = lines.findIndex((line) => line.includes(title))
+  assert.ok(y >= 0, `no row ${title}\n${frame}`)
+  return { x: lines[y].indexOf(title), y }
+}
+
+for (const [width, height] of [[44, 14], [80, 24]]) {
+  for (const cmux of [false, true]) {
+    await check(`picker right-click opens the action menu at ${width}x${height} ${cmux ? "inside" : "outside"} cmux`, async () => {
+      const harness = await createHarness({ width, height, sessions, source })
+      harness.setCmux(cmux)
+      try {
+        const dialog = await harness.command("sesh")
+        const before = await harness.show(dialog, Math.min(116, width - 2))
+        const at = rowAt(before, "Session number 1")
+        await harness.setup.mockMouse.click(at.x, at.y, 2)
+        await harness.setup.flush()
+        await harness.setup.flush()
+        const frame = harness.setup.captureCharFrame()
+        for (const label of ["Open", "Preview transcript", "Fork", "Pin", "Delete"]) assert.ok(frame.includes(label), `missing ${label}\n${frame}`)
+        assert.equal(frame.includes("Open in new cmux workspace"), cmux, frame)
+        for (const kept of ["Sessions (12)", "Search title", "Project: all"]) {
+          assert.ok(frame.includes(kept), `the menu must not cover ${kept}\n${frame}`)
+        }
+        assert.equal(harness.cleared, 0, "right-click must not close the picker")
+        assert.equal(harness.navigations.length, 0)
+        assert.equal(harness.spawns.length, 0, "opening the menu never runs cmux")
+      } finally { harness.close() }
+    })
+  }
+}
+
+await check("picker menu workspace item runs cmux only inside cmux, through the stubbed spawn", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  harness.setCmux(true)
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("down")
+    harness.press("down")
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.spawns.length, 1)
+    assert.equal(harness.spawns[0][0], "cmux")
+    assert.ok(harness.spawns[0][1].includes("opencode --session ses_dlg2"))
+    assert.ok(harness.cleared >= 1, "the picker closes before the workspace opens")
+  } finally { harness.close() }
+})
+
+await check("without cmux the workspace action is absent and nothing is spawned", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  harness.setCmux(false)
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("down")
+    harness.press("down")
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("picker menu items sit above the dialog layer and never reach its backdrop", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    let frame = ""
+    let clicked = false
+    let previousPosition
+    for (const deadline = Date.now() + 3000; Date.now() < deadline;) {
+      await harness.setup.flush()
+      frame = harness.setup.captureCharFrame()
+      if (/esc back/.test(frame)) break
+      if (!clicked) {
+        const lines = frame.split("\n")
+        const y = lines.findIndex((line) => line.includes("Preview transcript"))
+        const x = y >= 0 ? lines[y].indexOf("Preview") : -1
+        const position = y >= 0 ? `${x},${y}` : undefined
+        if (position && position === previousPosition) {
+          clicked = true
+          await harness.setup.mockMouse.click(x, y)
+        }
+        previousPosition = position
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.ok(clicked, "menu renders above the dialog\n" + frame)
+    assert.equal(harness.backdropPresses, 0, "a menu click must not close the dialog through its backdrop")
+    assert.match(frame, /esc back/, "picker still open with its preview shown\n" + frame)
+    assert.equal(harness.cleared, 0, "the picker stays open")
+  } finally { harness.close() }
+})
+
+await check("picker menu: Esc closes the menu first, Enter chooses its item without opening a row", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const before = await harness.show(dialog, 78)
+    const at = rowAt(before, "Session number 2")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("Preview transcript"))
+    harness.press("escape")
+    await harness.setup.flush()
+    assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "Esc closes the menu")
+    assert.equal(harness.cleared, 0, "the first Esc must not close the picker")
+
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.equal(harness.navigations.length, 1, "Enter chooses the menu's first item (Open) exactly once")
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("picker menu Open opens the right-clicked row", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const before = await harness.show(dialog, 78)
+    const at = rowAt(before, "Session number 3")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: "ses_dlg3" }])
+  } finally { harness.close() }
+})
+
+await check("home right-click opens the same action menu", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const frame = await harness.home()
+    const at = rowAt(frame, "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    await harness.setup.flush()
+    const menu = harness.setup.captureCharFrame()
+    for (const label of ["Open", "Preview transcript", "Fork", "Pin", "Delete"]) assert.ok(menu.includes(label), `missing ${label}\n${menu}`)
+    harness.press("escape")
+    await harness.setup.flush()
+    assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"))
+  } finally { harness.close() }
+})
+
+for (const [width, height] of [[44, 14], [80, 24]]) {
+  await check(`needs ${width}x${height} truncates with ellipses and keeps its heading`, async () => {
+    const harness = await createHarness({ width, height, sessions, waiting: sessions.map((entry) => entry.id), source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-needs"), Math.min(88, width - 2))
+      const heading = frame.split("\n").find((line) => line.includes("Needs input"))
+      assert.match(heading, width < 80 ? /Needs input \(12\)\s*$/ : /\(12 · longest waiting first\)\s*$/, frame)
+      const row = frame.split("\n").find((line) => line.includes("Session number 11"))
+      assert.match(row, /…/, "long titles end in an ellipsis\n" + frame)
+      assert.ok(!frame.includes("time unknown"), frame)
+      if (width >= 80) assert.match(frame, /waiting \(start/, "the time stays whole while the directory shortens\n" + frame)
+    } finally { harness.close() }
+  })
+}
+
+await check("needs wide directories preserve the complete wait time", async () => {
+  const entry = { ...session(0, "Wide directory"), directory: "/工作项目应用程序工作项目应用程序" }
+  const harness = await createHarness({ width: 80, height: 24, sessions: [entry], waiting: [entry.id], source })
+  harness.panel.__setDb(async () => [{ id: entry.id, reason: "question", question_since: Date.now() - 3600000 }])
+  try {
+    const frame = await harness.show(await harness.command("sesh-needs"), 78)
+    const row = frame.split("\n").find((line) => line.includes("Wide directory"))
+    assert.match(row, /….* · waiting 1h\s*$/, "wide directory text must not clip the wait time\n" + frame)
+  } finally { harness.close() }
+})
+
+for (const title of ["项目应用程序".repeat(4), "e\u0301".repeat(30), "👩‍💻".repeat(20)]) {
+  await check(`needs narrow titles truncate whole graphemes by cell width: ${title.slice(0, 6)}`, async () => {
+    const entry = session(0, title)
+    const harness = await createHarness({ width: 44, height: 24, sessions: [entry], waiting: [entry.id], source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-needs"), 42)
+      const row = frame.split("\n").find((line) => line.includes("answer"))
+      assert.ok(row, frame)
+      const label = row.split(/\s+answer/)[0].trim()
+      assert.ok(label.endsWith("…"), "the title has a visible ellipsis\n" + frame)
+      assert.equal(stringWidth(label), 23, "title fitting uses its terminal-cell budget")
+      const prefix = label.slice(0, -1)
+      const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(title)]
+      assert.ok(segments.some(({ index, segment }) => title.slice(0, index + segment.length) === prefix), "no grapheme is split")
+    } finally { harness.close() }
+  })
+}
+
+await check("picker pins with option+s/r and ctrl+s/d; option+k filters pinned", async () => {
+  const harness = await createHarness({ width: 120, height: 40, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const frame = await harness.show(dialog, 116)
+    assert.ok(frame.includes("option+k pinned") && frame.includes("option+s/r pin"), frame)
+    assert.ok(!frame.includes("ctrl+s/d"), frame)
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150))
+    const last = () => harness.toasts.at(-1)?.message
+    harness.press("alt+s")
+    await settle()
+    assert.equal(last(), "Pinned session")
+    harness.press("ctrl+s")
+    await settle()
+    assert.equal(last(), "Unpinned session")
+    harness.press("alt+r")
+    await settle()
+    assert.equal(last(), "Pinned directory")
+    harness.press("ctrl+d")
+    await settle()
+    assert.equal(last(), "Unpinned directory")
+    harness.press("alt+s")
+    await settle()
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("☆ Pinned"), "option+s must not toggle the pinned filter")
+    harness.press("alt+k")
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("★ Pinned"), "option+k toggles the pinned filter")
+  } finally { harness.close() }
+})
+
+await check("failure toasts include the error reason and fall back to plain text", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    await harness.show(dialog, 78)
+    harness.api.client.session.delete = async () => { throw new Error("database is locked") }
+    harness.press("alt+d")
+    harness.press("alt+d")
+    for (let i = 0; i < 20 && !harness.toasts.some((toast) => /delete/.test(toast.message)); i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not delete session: database is locked")
+
+    harness.api.client.session.fork = async () => { throw new Error("") }
+    harness.press("ctrl+f")
+    for (let i = 0; i < 20 && !harness.toasts.some((toast) => /fork/.test(toast.message)); i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not fork session", "no message: the plain text")
+  } finally { harness.close() }
+})
+
+await check("loading sessions failure names its cause", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    harness.api.client.project.list = async () => { throw new Error("server offline") }
+    harness.run("sesh")
+    for (let i = 0; i < 20 && !harness.toasts.length; i++) await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(harness.toasts.at(-1).message, "Could not load sessions: server offline")
+  } finally { harness.close() }
+})
+
+await check("costs 44x14 and 80x24 label their columns, show a total and drop secondary columns", async () => {
+  const costRows = Array.from({ length: 30 }, (_, index) => ({ directory: `/work/deep/path/project${index}${index === 3 ? "-with-an-extremely-long-final-segment-name" : ""}`, cost: index + 0.4 }))
+  for (const [width, height] of [[44, 14], [80, 24]]) {
+    const harness = await createHarness({ width, height, sessions, costRows, source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-costs"), Math.min(88, width - 2))
+      const lines = frame.split("\n")
+      const heading = lines.find((line) => line.includes("Project") && line.includes("Total"))
+      assert.ok(heading, frame)
+      assert.ok(heading.indexOf("Project") < heading.indexOf("24h") && heading.indexOf("24h") < heading.indexOf("Total"), frame)
+      assert.equal(heading.includes("Sess"), width >= 80, `Sess column only when wide\n${frame}`)
+      const total = lines.find((line) => line.includes("All projects"))
+      assert.match(total, /\$447\.00\s+\$447\.00/, frame)
+      const body = lines.filter((line) => /project\d+/.test(line))
+      assert.ok(body.length >= (width === 44 ? 3 : 6), `rows visible\n${frame}`)
+      const ends = body.map((line) => line.replace(/\s+$/, "").length)
+      assert.equal(new Set(ends).size, 1, `money columns right-align\n${frame}`)
+      assert.ok(frame.includes("scroll") && frame.includes("esc close"), frame)
+    } finally { harness.close() }
+  }
+})
+
+await check("costs scroll with arrows, page keys, home and end, and keep a long last segment intact", async () => {
+  const costRows = Array.from({ length: 30 }, (_, index) => ({ directory: `/work/p${index}`, cost: index + 0.4 }))
+  costRows[29].directory = "/work/an-extremely-long-final-directory-segment-that-cannot-fit"
+  const harness = await createHarness({ width: 60, height: 20, sessions, costRows, source })
+  try {
+    await harness.show(await harness.command("sesh-costs"), 58)
+    const scrollboxes = []
+    const walk = (node) => {
+      if (typeof node.scrollTo === "function") scrollboxes.push(node)
+      for (const child of node.getChildren?.() ?? []) walk(child)
+    }
+    walk(harness.setup.renderer.root)
+    const box = scrollboxes[0]
+    assert.ok(box, "costs have a scrollbox")
+    assert.equal(box.scrollTop, 0)
+    harness.press("down")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, 1)
+    harness.press("pagedown")
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 1, "page down scrolls further")
+    harness.press("end")
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 10)
+    harness.press("pageup")
+    await harness.setup.flush()
+    const afterPageUp = box.scrollTop
+    harness.press("up")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, afterPageUp - 1)
+    harness.press("home")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, 0)
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /an-extremely-long-final-d…/, "an overlong last segment ends in an ellipsis\n" + frame)
+  } finally { harness.close() }
+})
+
+const settle = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms))
+
+await check("picker menu retains its mouse target when hover changes selection during a click", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const item = rowAt(harness.setup.captureCharFrame(), "Preview transcript")
+    await harness.setup.mockMouse.pressDown(item.x, item.y)
+    harness.setup.renderer.recheckHoverState()
+    await new Promise((resolve) => process.nextTick(resolve))
+    await harness.setup.mockMouse.release(item.x, item.y)
+    await settle(150)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /esc back/)
+    assert.equal(harness.backdropPresses, 0)
+    assert.equal(harness.cleared, 0)
+  } finally { harness.close() }
+})
+
+await check("picker search closes an open menu and keeps the query and results in sync", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const input = rowAt(harness.setup.captureCharFrame(), "Search title")
+    await harness.setup.mockMouse.click(input.x, input.y)
+    await harness.setup.mockInput.typeText("ZZZZ")
+    await settle(150)
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /ZZZZ/)
+    assert.ok(!frame.includes("Preview transcript"), "search closes the menu\n" + frame)
+    assert.equal(sessionRows(frame), 0, "the visible query filters the sessions\n" + frame)
+    assert.equal(harness.cleared, 0)
+  } finally { harness.close() }
+})
+
+await check("needs resize keeps a noninitial selected session visible", async () => {
+  const entries = Array.from({ length: 30 }, (_, index) => session(index, `Unique title ${index}`))
+  const harness = await createHarness({ width: 100, height: 40, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh-needs"), 88)
+    for (let i = 0; i < 8; i++) harness.press("down")
+    await harness.setup.flush()
+    const frame = await harness.resize(100, 14, 88)
+    assert.match(frame, /Unique title 21\b/, "the selected row remains visible\n" + frame)
+    harness.press("enter")
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: entries[21].id }])
+  } finally { harness.close() }
+})
+
+await check("needs manual scrolling does not snap back to the selected session", async () => {
+  const entries = Array.from({ length: 30 }, (_, index) => session(index, `Unique title ${index}`))
+  const harness = await createHarness({ width: 100, height: 24, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh-needs"), 88)
+    const findScrollbox = (node) => typeof node.scrollTo === "function"
+      ? node
+      : (node.getChildren?.() ?? []).map(findScrollbox).find(Boolean)
+    const box = findScrollbox(harness.setup.renderer.root)
+    assert.ok(box, "needs have a scrollbox")
+    box.scrollTo(10000)
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 0, "manual scrolling stays away from the selected first row")
+    assert.match(harness.setup.captureCharFrame(), /Unique title 0\b/)
+  } finally { harness.close() }
+})
+
+await check("picker 44x14 menu with the status line visible keeps the selected item on screen", async () => {
+  const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.slice(0, 6).map((entry) => entry.id), source })
+  harness.setCmux(true)
+  try {
+    const dialog = await harness.command("sesh")
+    await harness.show(dialog, 42)
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const filtered = harness.setup.captureCharFrame()
+    assert.ok(filtered.includes("needs input") && sessionRows(filtered) >= 1, "the status line is visible\n" + filtered)
+    const at = rowAt(filtered, "Session number")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const frame = () => harness.setup.captureCharFrame()
+    // An item outside the menu box (past its bottom border) is clipped.
+    const inside = (label) => {
+      const lines = frame().split("\n")
+      const at = lines.findIndex((line) => line.includes(label))
+      const border = lines.findIndex((line) => line.includes("╰"))
+      assert.ok(at >= 0, `${label} missing\n${frame()}`)
+      assert.ok(border < 0 || at < border, `${label} sits outside the menu box\n${frame()}`)
+    }
+    inside("Open")
+    assert.ok(frame().includes("▼") && !frame().includes("▲"), "items hide below the first window\n" + frame())
+    for (let i = 0; i < 5; i++) harness.press("down")
+    await harness.setup.flush()
+    inside("Delete")
+    assert.ok(frame().includes("▲") && !frame().includes("▼"), "only earlier items are hidden at the end\n" + frame())
+    assert.ok(frame().includes("Sessions (") && frame().includes("Search title"), "header intact\n" + frame())
+    harness.press("enter")
+    await harness.setup.flush()
+    inside("Cancel")
+    harness.press("up")
+    await harness.setup.flush()
+    inside("Confirm delete")
+    harness.press("down")
+    harness.press("enter")
+    await harness.setup.flush()
+    assert.ok(!frame().includes("Confirm delete"), "Cancel closes the menu")
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("picker clipped menu keeps a visible action under the pointer until release", async () => {
+  const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.slice(0, 6).map((entry) => entry.id), source })
+  harness.setCmux(true)
+  let forks = 0
+  harness.api.client.session.fork = async () => { forks++; return { data: { id: "ses_menuFork" } } }
+  try {
+    await harness.show(await harness.command("sesh"), 42)
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const at = rowAt(harness.setup.captureCharFrame(), "Session number")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const item = rowAt(harness.setup.captureCharFrame(), "Fork")
+    await harness.setup.mockMouse.pressDown(item.x, item.y)
+    harness.setup.renderer.recheckHoverState()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.equal(rowAt(frame, "Fork").y, item.y, "hover must not move Fork away from the pointer\n" + frame)
+    await harness.setup.mockMouse.release(item.x, item.y)
+    await settle()
+    assert.equal(forks, 1)
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: "ses_menuFork" }])
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+for (const excerpts of [false, true]) {
+  await check(`picker resize reveals its retained selection${excerpts ? " with transcript excerpts" : ""}`, async () => {
+    const entries = sessions.map((entry, index) => ({ ...entry, title: `Pick${index}` }))
+    const harness = await createHarness({ width: 120, height: 40, sessions: entries, source, transcript: excerpts ? "needle in the transcript" : undefined })
+    try {
+      await harness.show(await harness.command("sesh"), 116)
+      if (excerpts) {
+        await harness.setup.mockInput.typeText("needle")
+        await settle(150)
+        await harness.setup.flush()
+      }
+      for (let i = 0; i < 5; i++) harness.press("down")
+      await harness.setup.flush()
+      const frame = await harness.resize(44, 14, 42)
+      assert.match(frame, /Pick5\b/, "retained selection stays visible\n" + frame)
+      if (excerpts) assert.match(frame, /↳/, "transcript excerpts remain visible\n" + frame)
+      harness.press("enter")
+      assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: sessions[5].id }])
+    } finally { harness.close() }
+  })
+}
+
+await check("picker wheel scrolling stays independent of selection until resize", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const frame = await harness.show(await harness.command("sesh"), 78)
+    const at = rowAt(frame, "Session number 0")
+    for (let i = 0; i < 12; i++) await harness.setup.mockMouse.scroll(at.x, at.y, "down")
+    await harness.setup.flush()
+    const scrolled = harness.setup.captureCharFrame()
+    assert.ok(!scrolled.includes("Session number 0 "), "wheel scroll may hide the retained selection\n" + scrolled)
+    await harness.setup.flush()
+    assert.equal(harness.setup.captureCharFrame(), scrolled, "an ordinary frame must not re-center selection")
+    const resized = await harness.resize(60, 24, 58)
+    assert.match(resized, /Session number 0\b/, "resize reveals the retained selection\n" + resized)
+  } finally { harness.close() }
+})
+
+await check("picker resize re-derives its layout", async () => {
+  const harness = await createHarness({ width: 120, height: 40, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    await harness.show(dialog, 116)
+    assert.ok(harness.setup.captureCharFrame().includes("option+k pinned"), "tall footer")
+    const small = await harness.resize(44, 14, 42)
+    assert.ok(!small.includes("option+k pinned"), small)
+    assert.ok(small.includes("esc close"), small)
+    assert.ok(sessionRows(small) >= 3, small)
+  } finally { harness.close() }
+})
+
+await check("picker closes its action menu on resize and brings the footer back", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("Preview transcript"))
+    const resized = await harness.resize(60, 24, 58)
+    assert.ok(!resized.includes("Preview transcript"), "the menu closes on resize\n" + resized)
+    assert.ok(resized.includes("esc close"), "footer is back\n" + resized)
+  } finally { harness.close() }
+})
+
+await check("picker status-row changes keep the retained selection visible", async () => {
+  const entries = sessions.map((entry, index) => ({ ...entry, title: `Pick${index}` }))
+  const harness = await createHarness({ width: 80, height: 24, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh"), 78)
+    for (let i = 0; i < 5; i++) harness.press("down")
+    await harness.setup.flush()
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /needs input/, "the filter adds a status row\n" + frame)
+    assert.match(frame, /Pick5\b/, "the retained selection stays visible\n" + frame)
+    harness.press("enter")
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: entries[5].id }])
+  } finally { harness.close() }
+})
+
+await check("picker closes its action menu when a status row changes the list bounds", async () => {
+  const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.map((entry) => entry.id), source })
+  harness.setCmux(true)
+  try {
+    const at = rowAt(await harness.show(await harness.command("sesh"), 42), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /needs input/, "the filter adds a status row\n" + frame)
+    assert.ok(!frame.includes("Preview transcript"), "the menu closes when its bounds change\n" + frame)
+    assert.match(frame, /Project: all/, "the controls remain unobscured\n" + frame)
+    assert.match(frame, /esc close/, "the footer returns\n" + frame)
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
+await check("costs and needs re-derive their columns on resize", async () => {
+  const costRows = Array.from({ length: 5 }, (_, index) => ({ directory: `/work/p${index}`, cost: index + 1 }))
+  const harness = await createHarness({ width: 80, height: 24, sessions, costRows, waiting: sessions.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh-costs"), 78)
+    assert.match(harness.setup.captureCharFrame(), /Sess/)
+    const narrow = await harness.resize(44, 14, 42)
+    assert.ok(!narrow.includes("Sess") && narrow.includes("Total"), narrow)
+  } finally { harness.close() }
+  const needs = await createHarness({ width: 80, height: 24, sessions, waiting: sessions.map((entry) => entry.id), source })
+  try {
+    await needs.show(await needs.command("sesh-needs"), 78)
+    assert.ok(needs.setup.captureCharFrame().includes("longest waiting first"))
+    const narrow = await needs.resize(44, 14, 42)
+    assert.ok(!narrow.includes("longest waiting first") && narrow.includes("Needs input (12)"), narrow)
+  } finally { needs.close() }
+})
+
+await check("a fork finishing after the picker closed does not clear another dialog", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    await harness.show(dialog, 78)
+    let finish
+    harness.api.client.session.fork = () => new Promise((resolve) => { finish = resolve })
+    harness.press("ctrl+f")
+    await settle()
+    dialog.onClose()
+    const before = harness.cleared
+    finish({ data: { id: "ses_forked" } })
+    await settle()
+    assert.equal(harness.cleared, before, "no dialog is cleared by a late fork")
+  } finally { harness.close() }
+})
+
+await check("costs total row shows $0.00 where project rows show a dash", async () => {
+  const costRows = [{ directory: "/work/old1", cost: 2, age: 3 * 86400000 }, { directory: "/work/old2", cost: 3, age: 4 * 86400000 }]
+  const harness = await createHarness({ width: 80, height: 24, sessions, costRows, source })
+  try {
+    const frame = await harness.show(await harness.command("sesh-costs"), 78)
+    assert.match(frame.split("\n").find((line) => line.includes("All projects")), /\$0\.00\s+\$5\.00/, frame)
+    assert.match(frame.split("\n").find((line) => line.includes("old1")), /—\s+\$2\.00/, frame)
+  } finally { harness.close() }
+})
+
+for (const view of ["home", "sidebar", "picker"]) {
+  for (const key of ["y", "alt+d"]) {
+    await check(`${view} right-click cancels another session's armed deletion before ${key}`, async () => {
+      const harness = await createHarness({ width: 80, height: 24, sessions, source })
+      const deleted = []
+      const deleteSession = harness.api.client.session.delete
+      harness.api.client.session.delete = async (args) => { deleted.push(args.sessionID); return deleteSession(args) }
+      try {
+        const frame = view === "picker"
+          ? await harness.show(await harness.command("sesh"), 78)
+          : await harness[view]()
+        const first = rowAt(frame, "Session number 0")
+        await harness.setup.mockMouse.moveTo(first.x, first.y)
+        await harness.setup.flush()
+        harness.press("alt+d")
+        await harness.setup.flush()
+        assert.ok([...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.key === "y")), "the first session is armed")
+        const second = rowAt(harness.setup.captureCharFrame(), "Session number 1")
+        await harness.setup.mockMouse.moveTo(second.x, second.y)
+        await harness.setup.mockMouse.click(second.x, second.y, 2)
+        await harness.setup.flush()
+        assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+        assert.ok(![...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.key === "y")), "opening another menu cancels the old confirmation")
+        if (key === "alt+d") harness.press(key)
+        await harness.setup.flush()
+        assert.deepEqual(deleted, [], "the old session must not be deleted")
+        for (let i = 0; i < 4; i++) harness.press("down")
+        harness.press("enter")
+        await harness.setup.flush()
+        assert.match(harness.setup.captureCharFrame(), /Confirm delete/)
+        harness.press("up")
+        harness.press("enter")
+        await settle()
+        await harness.setup.flush()
+        assert.deepEqual(deleted, [sessions[1].id], "only the menu's session is deleted")
+      } finally { harness.close() }
+    })
+  }
+}
+
+for (const view of ["home", "sidebar"]) {
+  await check(`${view} menu closes when the host enters native modal mode`, async () => {
+    const harness = await createHarness({ width: 80, height: 24, sessions, source })
+    try {
+      const at = rowAt(await harness[view](), "Session number 1")
+      await harness.setup.mockMouse.click(at.x, at.y, 2)
+      await harness.setup.flush()
+      assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+      assert.equal(harness.api.ui.dialog.open, false, "native dialogs are outside the adapter")
+      harness.setMode("modal")
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"))
+      assert.ok(![...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.desc === "Choose menu item")), "the menu's key layer is released")
+      await harness.setup.mockMouse.click(at.x, at.y, 2)
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "modal mode blocks reopening")
+      harness.setMode("base")
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "returning to base does not reopen the menu")
+    } finally { harness.close() }
+  })
+}
+
+await check("picker menu remains usable in host modal mode", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    harness.setMode("modal")
+    const at = rowAt(await harness.show(await harness.command("sesh"), 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+    harness.press("down")
+    harness.press("enter")
+    await settle(150)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /esc back/)
   } finally { harness.close() }
 })
 

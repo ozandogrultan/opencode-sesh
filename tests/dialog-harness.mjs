@@ -15,20 +15,51 @@ import { render } from "@opentui/solid"
 
 export const sourcePath = new URL("../tui-plugins/sesh-panel/tui.tsx", import.meta.url)
 
+// Tests must never exec the real cmux CLI, even when the suite itself runs
+// inside a cmux terminal. The panel's child_process import is replaced by a
+// recorder (globalThis.__seshSpawns), and every CMUX_* variable is dropped so
+// cmux detection starts false; tests opt in by setting CMUX_WORKSPACE_ID.
+const spawnStub = `data:text/javascript;base64,${Buffer.from(
+  `import { spawnSync } from "node:child_process"
+export { spawnSync }
+export const spawn = (...args) => { (globalThis.__seshSpawns ??= []).push(args); return { on() {} } }`,
+).toString("base64")}`
+export const resolvePanelImport = (specifier) => (specifier === "node:child_process" ? spawnStub : import.meta.resolve(specifier))
+export function stripCmuxEnv() {
+  const saved = Object.entries(process.env).filter(([name]) => name.startsWith("CMUX_"))
+  for (const [name] of saved) delete process.env[name]
+  globalThis.__seshSpawns = []
+  return () => {
+    for (const name of Object.keys(process.env)) if (name.startsWith("CMUX_")) delete process.env[name]
+    for (const [name, value] of saved) process.env[name] = value
+  }
+}
+
 // Compile a panel source exactly as the published one, plus a test-only fixture.
 export async function loadPanel(source = readFileSync(sourcePath, "utf8")) {
   const fixture = `
-export { tui as __tui, SidebarSessions as __Sidebar }
+export { tui as __tui, SidebarSessions as __Sidebar, HomeBottom as __Home }
 export function __setDb(run) { clearTranscriptCache(); dbClient = { run, close() {} } }
 export function SidebarHost(props) {
   return <box width={props.width} height={props.height}><SidebarSessions {...props.panelProps} /></box>
 }
-// Host layout pinned to OpenCode v2.2.5, packages/tui/src/ui/dialog.tsx:
-// quarter-height anchor, one-row content padding, terminal-minus-two width cap.
+export function HomeHost(props) {
+  return <box width={props.width} height={props.height} flexDirection="column"><box height={3} /><HomeBottom {...props.panelProps} /></box>
+}
+// Host layout verified against OpenCode v2.2.6, packages/tui/src/ui/dialog.tsx
+// (zIndex={3000} at line 66):
+// https://github.com/anomalyco/opencode/blob/v2.2.6/packages/tui/src/ui/dialog.tsx#L66
+// A full-screen absolute layer, a backdrop that closes on mouse-up, a content
+// box that stops mouse-up, a quarter-height anchor and one-row content padding.
+// When bumping OpenCode, re-check it and CONTEXT_MENU_Z_INDEX in tui.tsx.
 export function DialogHost(props) {
   return (
-    <box width="100%" height="100%" alignItems="center" paddingTop={props.height / 4}>
-      <box width={props.width} paddingTop={1}>{props.content()}</box>
+    <box
+      position="absolute" zIndex={3000} left={0} top={0} width="100%" height="100%"
+      alignItems="center" paddingTop={props.height() / 4}
+      onMouseUp={() => props.onBackdrop?.()}
+    >
+      <box width={props.width()} paddingTop={1} onMouseUp={(event) => event.stopPropagation()}>{props.content()}</box>
     </box>
   )
 }
@@ -43,7 +74,7 @@ export function DialogHost(props) {
     ],
     plugins: [() => ({ visitor: {
       ImportDeclaration(path) {
-        path.node.source.value = import.meta.resolve(path.node.source.value)
+        path.node.source.value = resolvePanelImport(path.node.source.value)
       },
     } })],
   })
@@ -65,7 +96,8 @@ export const session = (index, title, dir = "/work/project") => ({
   time: { created: Date.now() - index * 60000 - 5000, updated: Date.now() - index * 60000 },
 })
 
-export async function createHarness({ width, height, sessions, waiting = [], costRows = [], transcript = "", source }) {
+export async function createHarness({ width, height, sessions, waiting = [], costRows = [], transcript = "", source, indexDelay = 0 }) {
+  const restoreEnv = stripCmuxEnv()
   const panel = await loadPanel(source)
   const setup = await createTestRenderer({ width, height })
   const dialogs = []
@@ -73,7 +105,11 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const layers = new Set()
   const toasts = []
   const navigations = []
+  let cleared = 0
+  let backdropPresses = 0
   let listedSessions = [...sessions]
+  const [mode, setMode] = createSignal("base")
+  let hostWidth, setHostWidth, hostHeight, setHostHeight
   const dir = mkdtempSync(join(tmpdir(), "sesh-dialogs-"))
   const dbPath = join(dir, "opencode.db")
   const seed = new Database(dbPath)
@@ -82,15 +118,17 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const insert = seed.prepare("INSERT INTO session_message VALUES (?, 0, 'assistant', ?, ?)")
   costRows.forEach((row, index) => {
     seed.prepare("INSERT INTO session_v2 VALUES (?, ?)").run(`ses_cost${index}`, row.directory)
-    insert.run(`ses_cost${index}`, JSON.stringify({ cost: row.cost }), Date.now())
+    insert.run(`ses_cost${index}`, JSON.stringify({ cost: row.cost }), Date.now() - (row.age ?? 0))
   })
   seed.close()
   const previousDb = process.env.SESH_DB
   process.env.SESH_DB = dbPath
+  const previousPins = process.env.SESH_PINS_FILE
+  process.env.SESH_PINS_FILE = join(dir, "pins.json")
   const api = {
     renderer: setup.renderer,
     theme: { current: theme },
-    mode: { current: () => "base" },
+    mode: { current: mode },
     route: { current: { name: "home" }, navigate(...args) { navigations.push(args) } },
     state: { path: { directory: "/work/project" }, session: { status: () => "idle" } },
     keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
@@ -102,7 +140,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
         open: false,
         replace(content, onClose) { dialogs.push({ content, onClose }) },
         setSize() {},
-        clear() {},
+        clear() { cleared += 1 },
       },
     },
     client: {
@@ -118,7 +156,10 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   panel.__setDb(async (sql) => {
     if (/pragma_table_info/i.test(sql)) return []
     if (sql.includes("question_since")) return []
-    if (sql.startsWith("WITH msg AS")) return sessions.map((entry) => ({ sid: entry.id, text: transcript }))
+    if (sql.startsWith("WITH msg AS")) {
+      if (indexDelay) await new Promise((resolve) => setTimeout(resolve, indexDelay))
+      return sessions.map((entry) => ({ sid: entry.id, text: transcript }))
+    }
     return waiting.map((id) => ({ id, reason: "question" }))
   })
   let disposeRoot
@@ -134,14 +175,34 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
     return dialogs.at(-1)
   }
   const show = async (dialog, dialogWidth) => {
-    await render(() => panel.DialogHost({ content: dialog.content, width: dialogWidth, height: setup.renderer.height }), setup.renderer)
+    // Host geometry follows the terminal like the real dialog host does.
+    ;[hostWidth, setHostWidth] = createSignal(dialogWidth)
+    ;[hostHeight, setHostHeight] = createSignal(setup.renderer.height)
+    await render(() => panel.DialogHost({ content: dialog.content, width: hostWidth, height: hostHeight, onBackdrop: () => { backdropPresses += 1 } }), setup.renderer)
     await setup.flush()
     await setup.flush()
     await setup.flush()
     return setup.captureCharFrame()
   }
   return {
-    api, setup, panel, layers, toasts, navigations, command, show,
+    api, setup, panel, layers, toasts, navigations, command, show, setMode,
+    // Resize the terminal and the dialog host together, as the real host does.
+    async resize(columns, rows, dialogWidth) {
+      setup.resize(columns, rows)
+      setHostHeight(rows)
+      setHostWidth(dialogWidth)
+      await setup.flush()
+      await setup.flush()
+      return setup.captureCharFrame()
+    },
+    run(slash) { commands.find((entry) => entry.slash?.name === slash).onSelect() },
+    get cleared() { return cleared },
+    get backdropPresses() { return backdropPresses },
+    get spawns() { return globalThis.__seshSpawns },
+    setCmux(inside) {
+      if (inside) process.env.CMUX_WORKSPACE_ID = "workspace:test"
+      else delete process.env.CMUX_WORKSPACE_ID
+    },
     press(key) {
       const binding = [...layers].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))
         .flatMap((layer) => layer.bindings ?? []).find((entry) => entry.key === key)
@@ -159,11 +220,23 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
       await setup.flush()
       return setup.captureCharFrame()
     },
+    async home() {
+      const entries = sessions.map((entry) => ({ id: entry.id, title: entry.title, dir: entry.directory, group: entry.directory, updated: entry.time.updated }))
+      await render(() => panel.HomeHost({ width, height, panelProps: {
+        api, pins: () => ({ sessions: [], directories: [] }), onTogglePin() {},
+        poll(listener) { listener({ entries, waiting: new Map(), running: new Set(), failed: false }); return () => {} },
+      } }), setup.renderer)
+      for (let i = 0; i < 5; i++) await setup.flush()
+      return setup.captureCharFrame()
+    },
     close() {
       for (const dialog of dialogs) dialog.onClose?.()
       disposeRoot?.()
       setup.renderer.destroy?.()
       rmSync(dir, { recursive: true, force: true })
+      restoreEnv()
+      if (previousPins === undefined) delete process.env.SESH_PINS_FILE
+      else process.env.SESH_PINS_FILE = previousPins
       if (previousDb === undefined) delete process.env.SESH_DB
       else process.env.SESH_DB = previousDb
     },
