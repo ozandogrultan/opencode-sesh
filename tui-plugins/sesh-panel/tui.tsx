@@ -198,6 +198,22 @@ function prettyDir(dir: string, home: string): string {
   return "…/" + parts.slice(-2).join("/")
 }
 
+// A directory shortened to `width` columns without ever cutting its last
+// segment short while any room remains: leading segments go first ("…/a/b",
+// then "…/b"), and only a last segment wider than the column ends in "…".
+function fitDir(dir: string, home: string, width: number): string {
+  const pretty = prettyDir(dir, home)
+  if (pretty.length <= width) return pretty
+  const parts = pretty.split("/").filter((part) => part && part !== "…")
+  const last = parts.at(-1) ?? pretty
+  for (let keep = parts.length - 1; keep >= 2; keep--) {
+    const candidate = `…/${parts.slice(-keep).join("/")}`
+    if (candidate.length <= width) return candidate
+  }
+  if (last.length + 2 <= width) return `…/${last}`
+  return truncate(last, width)
+}
+
 // Home rows show a directory's last segment; distinct directories that share
 // one also show their parent (`a/app`, `b/app`).
 function homeDirLabels(dirs: string[], home: string): Map<string, string> {
@@ -3565,22 +3581,84 @@ const tui: TuiPlugin = async (api) => {
       failure = error
     }
     const money = (n: number) => (n === 0 ? "—" : `$${n.toFixed(2)}`)
-    const windowWidth = Math.max(1, ...rows.map((row) => money(row.window).length))
-    const lifetimeWidth = Math.max(1, ...rows.map((row) => money(row.lifetime).length))
+    const totals = {
+      window: Math.round(rows.reduce((sum, row) => sum + row.window, 0) * 10000) / 10000,
+      lifetime: Math.round(rows.reduce((sum, row) => sum + row.lifetime, 0) * 10000) / 10000,
+      sessions: rows.reduce((sum, row) => sum + row.sessions, 0),
+    }
     const home = process.env.HOME ?? ""
+    // Columns: project, then 24h and total spend and the number of sessions
+    // that recorded cost. The dialog is at most 88 wide minus 8 of padding.
+    const inner = Math.max(20, Math.min(88, api.renderer.width - 2) - 8)
+    const cell = (label: string, pick: (row: CostRow | typeof totals) => string) =>
+      Math.max(label.length, pick(totals).length, ...rows.map((row) => pick(row).length))
+    const dayWidth = cell("24h", (row) => money(row.window))
+    const totalWidth = cell("Total", (row) => money(row.lifetime))
+    const sessionsWidth = cell("Sess", (row) => String(row.sessions))
+    // Secondary columns go first when the project name would starve: sessions, then 24h.
+    const PROJECT_MIN = 16
+    const showSessions = inner - (dayWidth + totalWidth + sessionsWidth + 6) >= PROJECT_MIN
+    const showDay = inner - (dayWidth + totalWidth + 4 + (showSessions ? sessionsWidth + 2 : 0)) >= PROJECT_MIN
+    const projectWidth = Math.max(
+      8,
+      inner - totalWidth - 2 - (showDay ? dayWidth + 2 : 0) - (showSessions ? sessionsWidth + 2 : 0),
+    )
+    const gap = api.renderer.height < 20 ? 0 : 1
+    // The heading and total stay put; only the project rows scroll.
+    const listHeight = Math.max(1, (api.renderer.height < 20 ? api.renderer.height - 6 : Math.floor(api.renderer.height * 0.6)) - 5 - 2 * gap)
+    let costScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
+    const scrollBy = (delta: number) => costScroll?.scrollTo(Math.max(0, costScroll.scrollTop + delta))
     const disposeKeys = api.keymap.registerLayer({
       mode: "modal",
       bindings: [
+        { key: "up", desc: "Scroll up", preventDefault: true, cmd: () => scrollBy(-1) },
+        { key: "ctrl+p", desc: "Scroll up", preventDefault: true, cmd: () => scrollBy(-1) },
+        { key: "down", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
+        { key: "ctrl+n", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
+        { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => scrollBy(-Math.max(1, listHeight - 1)) },
+        { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => scrollBy(Math.max(1, listHeight - 1)) },
+        { key: "home", desc: "First project", preventDefault: true, cmd: () => costScroll?.scrollTo(0) },
+        { key: "end", desc: "Last project", preventDefault: true, cmd: () => costScroll?.scrollTo(Number.MAX_SAFE_INTEGER) },
         { key: "escape", desc: "Close", preventDefault: true, cmd: () => api.ui.dialog.clear() },
       ],
     })
+    const columns = (project: string, day: string, total: string, sessionCount: string, tone: "head" | "body" | "total") => {
+      const color = tone === "total" ? api.theme.current.text : api.theme.current.textMuted
+      const bold = tone === "total" ? TextAttributes.BOLD : undefined
+      return (
+        <box flexDirection="row" gap={2} height={1} flexShrink={0}>
+          <text width={projectWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "head" ? color : api.theme.current.text }}>
+            {project}
+          </text>
+          <Show when={showDay}>
+            <text width={dayWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "body" || tone === "total" ? api.theme.current.success : color }}>
+              {day.padStart(dayWidth)}
+            </text>
+          </Show>
+          <text width={totalWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
+            {total.padStart(totalWidth)}
+          </text>
+          <Show when={showSessions}>
+            <text width={sessionsWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
+              {sessionCount.padStart(sessionsWidth)}
+            </text>
+          </Show>
+        </box>
+      )
+    }
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} backgroundColor={api.theme.current.backgroundPanel}>
-          <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
-            Cost digest{" "}
-            <span style={{ fg: api.theme.current.textMuted }}>(24h · lifetime)</span>
-          </text>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={gap} backgroundColor={api.theme.current.backgroundPanel}>
+          <box flexDirection="column" flexShrink={0}>
+            <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
+              Cost digest{" "}
+              <span style={{ fg: api.theme.current.textMuted }}>(per project)</span>
+            </text>
+            <Show when={!failed && rows.length > 0}>
+              {columns("Project", "24h", "Total", "Sess", "head")}
+              {columns("All projects", money(totals.window), money(totals.lifetime), String(totals.sessions), "total")}
+            </Show>
+          </box>
           <Show
             when={!failed && rows.length > 0}
             fallback={
@@ -3589,29 +3667,20 @@ const tui: TuiPlugin = async (api) => {
               </text>
             }
           >
-            <scrollbox height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)} scrollbarOptions={{ visible: false }}>
-            <For each={rows}>
-              {(row) => (
-                <box flexDirection="row" gap={2} height={1} flexShrink={0}>
-                  <text width={windowWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.success }}>
-                    {money(row.window).padStart(windowWidth)}
-                  </text>
-                  <text width={lifetimeWidth} flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-                    {money(row.lifetime).padStart(lifetimeWidth)}
-                  </text>
-                  <text flexShrink={0} style={{ fg: api.theme.current.textMuted }}>
-                    ({row.sessions})
-                  </text>
-                  <text flexGrow={1} flexShrink={1} wrapMode="none">
-                    {prettyDir(row.directory, home)}
-                  </text>
-                </box>
-              )}
-            </For>
+            <scrollbox
+              ref={(box: typeof costScroll) => { costScroll = box }}
+              height={listHeight}
+              scrollbarOptions={{ visible: false }}
+            >
+              <For each={rows}>
+                {(row) => columns(fitDir(row.directory, home, projectWidth), money(row.window), money(row.lifetime), String(row.sessions), "body")}
+              </For>
             </scrollbox>
           </Show>
           <box flexShrink={0}>
-            <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
+            <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
+              {api.renderer.width < 60 ? "↑↓ scroll · esc close" : "↑↓/PgUp/PgDn scroll · esc close"}
+            </text>
           </box>
         </box>
       ),

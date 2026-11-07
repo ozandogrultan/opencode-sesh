@@ -267,8 +267,14 @@ when it has one and keeps the plain text otherwise.
   lines (`pickerHintLines`, compact form on narrow widths), so the chrome
   budget (`chromeRows`) is exact and the list absorbs any shortfall.
   Below 20 rows, decorative gaps collapse before functional chrome. Preview
-  metadata and its back hint never shrink or wrap. `/sesh-costs` scrolls its
-  bounded rows with right-aligned money columns; `/sesh-needs` uses fixed
+  metadata and its back hint never shrink or wrap. `/sesh-costs` shows the
+  project first, then right-aligned money columns under a heading row (`24h`
+  and `Total` spend from assistant-message cost; `Sess` is the number of
+  sessions with recorded cost) and an "All projects" total line. The heading
+  and total stay put while the project rows scroll (↑↓, Ctrl-P/N, PgUp/PgDn,
+  Home/End); `Sess`, then `24h`, drop when the project name would starve, and
+  `fitDir` shortens leading directory segments first, cutting the last segment
+  only when it alone is wider than the column; `/sesh-needs` uses fixed
   columns that truncate with an ellipsis (title, reason, then directory · wait
   time, where the wait time stays whole and "waiting (start unknown)" covers a
   missing start), drops the directory metadata and shortens reasons and the

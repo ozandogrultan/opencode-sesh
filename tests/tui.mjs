@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, fitDir, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
   return factory(
     readExtraction,
@@ -1136,6 +1136,26 @@ function makeApi(sessions, { latency = 0 } = {}) {
   const toasts = []
   data.openInCmuxWorkspace({ ui: { toast: (value) => toasts.push(value) } }, { ...entry, id: "ses_bad;touch injected" })
   assert.equal(toasts[0].message, "Invalid session ID")
+}
+
+// Cost rows shorten leading segments first and never cut the last segment
+// while room remains; an overlong last segment ends in an ellipsis.
+{
+  const { fitDir } = loadDataLayer()
+  const home = "/Users/me"
+  assert.equal(fitDir("/Users/me/work/app", home, 40), "~/work/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 40), "…/work/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 9), "…/app")
+  assert.equal(fitDir("/srv/team/work/app", home, 4), "app")
+  assert.equal(fitDir("/srv/team/work/application", home, 8), "applica…")
+  assert.equal(fitDir("/srv/team/work/application", home, 13), "…/application")
+  assert.equal(fitDir("/srv/team/work/application", home, 12), "application")
+  assert.equal(fitDir("/Users/me", home, 20), "~")
+  assert.equal(fitDir("", home, 20), "other")
+  for (const width of [3, 6, 10, 17, 25]) {
+    const fitted = fitDir("/srv/a-very-long-team-name/another-long-segment/final-segment-name", home, width)
+    assert.ok(fitted.length <= width, `${width}: ${fitted}`)
+  }
 }
 
 // Failure toasts carry the cause when there is one and keep the plain text otherwise.

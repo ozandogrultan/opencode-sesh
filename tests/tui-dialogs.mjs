@@ -368,4 +368,64 @@ await check("loading sessions failure names its cause", async () => {
   } finally { harness.close() }
 })
 
+await check("costs 44x14 and 80x24 label their columns, show a total and drop secondary columns", async () => {
+  const costRows = Array.from({ length: 30 }, (_, index) => ({ directory: `/work/deep/path/project${index}${index === 3 ? "-with-an-extremely-long-final-segment-name" : ""}`, cost: index + 0.4 }))
+  for (const [width, height] of [[44, 14], [80, 24]]) {
+    const harness = await createHarness({ width, height, sessions, costRows, source })
+    try {
+      const frame = await harness.show(await harness.command("sesh-costs"), Math.min(88, width - 2))
+      const lines = frame.split("\n")
+      const heading = lines.find((line) => line.includes("Project") && line.includes("Total"))
+      assert.ok(heading, frame)
+      assert.ok(heading.indexOf("Project") < heading.indexOf("24h") && heading.indexOf("24h") < heading.indexOf("Total"), frame)
+      assert.equal(heading.includes("Sess"), width >= 80, `Sess column only when wide\n${frame}`)
+      const total = lines.find((line) => line.includes("All projects"))
+      assert.match(total, /\$447\.00\s+\$447\.00/, frame)
+      const body = lines.filter((line) => /project\d+/.test(line))
+      assert.ok(body.length >= (width === 44 ? 3 : 6), `rows visible\n${frame}`)
+      const ends = body.map((line) => line.replace(/\s+$/, "").length)
+      assert.equal(new Set(ends).size, 1, `money columns right-align\n${frame}`)
+      assert.ok(frame.includes("scroll") && frame.includes("esc close"), frame)
+    } finally { harness.close() }
+  }
+})
+
+await check("costs scroll with arrows, page keys, home and end, and keep a long last segment intact", async () => {
+  const costRows = Array.from({ length: 30 }, (_, index) => ({ directory: `/work/p${index}`, cost: index + 0.4 }))
+  costRows[29].directory = "/work/an-extremely-long-final-directory-segment-that-cannot-fit"
+  const harness = await createHarness({ width: 60, height: 20, sessions, costRows, source })
+  try {
+    await harness.show(await harness.command("sesh-costs"), 58)
+    const scrollboxes = []
+    const walk = (node) => {
+      if (typeof node.scrollTo === "function") scrollboxes.push(node)
+      for (const child of node.getChildren?.() ?? []) walk(child)
+    }
+    walk(harness.setup.renderer.root)
+    const box = scrollboxes[0]
+    assert.ok(box, "costs have a scrollbox")
+    assert.equal(box.scrollTop, 0)
+    harness.press("down")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, 1)
+    harness.press("pagedown")
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 1, "page down scrolls further")
+    harness.press("end")
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 10)
+    harness.press("pageup")
+    await harness.setup.flush()
+    const afterPageUp = box.scrollTop
+    harness.press("up")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, afterPageUp - 1)
+    harness.press("home")
+    await harness.setup.flush()
+    assert.equal(box.scrollTop, 0)
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /an-extremely-long-final-d…/, "an overlong last segment ends in an ellipsis\n" + frame)
+  } finally { harness.close() }
+})
+
 process.exit(failures.length ? 1 : 0)
