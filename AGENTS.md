@@ -269,6 +269,12 @@ clear a dialog (`forkEntry` checks `alive`).
 
 ### Hard-won rules — do not regress
 
+- **Re-check the dialog z-index when bumping OpenCode.** `CONTEXT_MENU_Z_INDEX`
+  (3500) must stay above the dialog layer, `zIndex={3000}` in OpenCode's
+  `packages/tui/src/ui/dialog.tsx` (verified at v2.2.6, line 66). If the value
+  changes, update the constant and `DialogHost` in `tests/dialog-harness.mjs`
+  and the "OpenCode vX.Y.Z" notes next to them; `tests/tui.mjs` fails when the
+  pinned `@opencode/*` version is newer than the one recorded there.
 - **No `DialogSelect`.** Call `api.ui.dialog.setSize("xlarge")` **after**
   `dialog.replace(...)`; `replace` resets the size to medium.
 - Use the `backgroundColor` **prop** on boxes, never `style={{backgroundColor}}`.

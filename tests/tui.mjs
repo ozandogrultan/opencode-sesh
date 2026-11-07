@@ -1168,6 +1168,22 @@ function makeApi(sessions, { latency = 0 } = {}) {
   }
 }
 
+// The dialog z-index and host layout were verified against a specific OpenCode
+// release. A newer pinned @opencode/* means they must be re-checked.
+{
+  const version = (text) => text.split(".").map(Number)
+  const newer = (a, b) => version(a).some((part, i) => part !== version(b)[i] && part > version(b)[i] && version(a).slice(0, i).every((p, j) => p === version(b)[j]))
+  const pinned = manifest.devDependencies["@opencode/plugin"]
+  for (const file of ["tui-plugins/sesh-panel/tui.tsx", "tests/dialog-harness.mjs"]) {
+    const recorded = readFileSync(join(root, file), "utf8").match(/OpenCode v(\d+\.\d+\.\d+)/)?.[1]
+    assert.ok(recorded, `${file}: record the OpenCode version the dialog z-index was verified against ("OpenCode vX.Y.Z")`)
+    assert.ok(
+      !newer(pinned, recorded),
+      `@opencode/plugin is pinned to ${pinned} but ${file} was verified against v${recorded}: re-check the dialog zIndex in packages/tui/src/ui/dialog.tsx, then update CONTEXT_MENU_Z_INDEX, DialogHost and the recorded version`,
+    )
+  }
+}
+
 // Failure toasts carry the cause when there is one and keep the plain text otherwise.
 {
   const { withReason, errorReason } = loadDataLayer()
