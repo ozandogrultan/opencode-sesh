@@ -309,4 +309,35 @@ for (const [width, height] of [[44, 14], [80, 24]]) {
   })
 }
 
+await check("picker pins with option+s/r and ctrl+s/d; option+k filters pinned", async () => {
+  const harness = await createHarness({ width: 120, height: 40, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const frame = await harness.show(dialog, 116)
+    assert.ok(frame.includes("option+k pinned") && frame.includes("option+s/r pin"), frame)
+    assert.ok(!frame.includes("ctrl+s/d"), frame)
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 150))
+    const last = () => harness.toasts.at(-1)?.message
+    harness.press("alt+s")
+    await settle()
+    assert.equal(last(), "Pinned session")
+    harness.press("ctrl+s")
+    await settle()
+    assert.equal(last(), "Unpinned session")
+    harness.press("alt+r")
+    await settle()
+    assert.equal(last(), "Pinned directory")
+    harness.press("ctrl+d")
+    await settle()
+    assert.equal(last(), "Unpinned directory")
+    harness.press("alt+s")
+    await settle()
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("☆ Pinned"), "option+s must not toggle the pinned filter")
+    harness.press("alt+k")
+    await harness.setup.flush()
+    assert.ok(harness.setup.captureCharFrame().includes("★ Pinned"), "option+k toggles the pinned filter")
+  } finally { harness.close() }
+})
+
 process.exit(failures.length ? 1 : 0)

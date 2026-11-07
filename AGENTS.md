@@ -99,9 +99,10 @@ the schema below. Keystrokes never touch the database:
   (`SESH_PINS_FILE` overrides it for tests), shared by fzf and the TUI. Writes
   use a sibling lock directory and atomic rename. Ctrl-S toggles a selected
   session; Ctrl-D toggles its directory (terminal picker and option+o picker).
-  The sidebar and home lists use Option-S / Option-R instead: opencode binds
-  `ctrl+d` itself (composer delete-char, session delete), so ctrl pins would
-  shadow the composer. Pinned directories sort before groups
+  The option+o picker also pins with Option-S / Option-R (its pinned filter is
+  Option-K). The sidebar and home lists use only Option-S / Option-R: opencode
+  binds `ctrl+d` itself (composer delete-char, session delete), so ctrl pins
+  would shadow the composer. Pinned directories sort before groups
   containing pinned sessions. The terminal picker puts pinned sessions first
   inside each group; the TUI picker ranks pinned sessions first before filtering
   and keeps sessions within each directory ordered by recency; the sidebar keeps
@@ -239,7 +240,7 @@ when opencode exits, the picker reopens with the query preserved.
   so tool payloads never reach the UI thread; if the worker rejects, sessions
   not yet indexed fall back to the remote path. The header shows indexing progress/coverage. Visible transcript hits get
   short excerpts from the text-only index (never tool or reasoning payloads).
-  Project, needs-input (Option-W), and pinned-session (Option-S) filters compose
+  Project, needs-input (Option-W), and pinned-session (Option-K) filters compose
   with the query; the picker remembers query/scope/filters until plugin restart.
   `/sesh-needs` uses the shared needs-input set plus the oldest unresolved
   question or running-tool timestamp, lists longest-waiting first, and `n`

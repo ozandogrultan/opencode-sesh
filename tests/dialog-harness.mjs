@@ -112,6 +112,8 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   seed.close()
   const previousDb = process.env.SESH_DB
   process.env.SESH_DB = dbPath
+  const previousPins = process.env.SESH_PINS_FILE
+  process.env.SESH_PINS_FILE = join(dir, "pins.json")
   const api = {
     renderer: setup.renderer,
     theme: { current: theme },
@@ -208,6 +210,8 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
       setup.renderer.destroy?.()
       rmSync(dir, { recursive: true, force: true })
       restoreEnv()
+      if (previousPins === undefined) delete process.env.SESH_PINS_FILE
+      else process.env.SESH_PINS_FILE = previousPins
       if (previousDb === undefined) delete process.env.SESH_DB
       else process.env.SESH_DB = previousDb
     },

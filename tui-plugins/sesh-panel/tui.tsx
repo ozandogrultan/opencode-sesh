@@ -1447,8 +1447,8 @@ function pickerLastStart(rows: PickerRow[], height: number, excerpt: (entry: Ent
 }
 
 const PICKER_HINT_SEGMENTS = [
-  "↑↓ move", "enter open", "ctrl+g project", "option+w input", "option+s pinned", "option+p preview",
-  "ctrl+s/d pin", "option+d delete", "ctrl+f fork", "esc close",
+  "↑↓ move", "enter open", "ctrl+g project", "option+w input", "option+k pinned", "option+p preview",
+  "option+s/r pin", "option+d delete", "ctrl+f fork", "esc close",
 ]
 const PICKER_HINT_COMPACT = ["↑↓ move · enter open · esc close", "ctrl+g project · ctrl+f fork"]
 const PICKER_HINT_ONE_LINE = ["↑↓ move · enter open · right-click menu · esc close", "↑↓ move · enter open · esc close"]
@@ -3087,6 +3087,16 @@ const tui: TuiPlugin = async (api) => {
       if (state && !selectableEntries().some((entry) => entry.id === state.entry.id)) menu.close()
     })
 
+    // Option-S/R match the sidebar and home list; Ctrl-S/D match the fzf picker.
+    const pinSelectedSession = () => {
+      const entry = selectableEntries()[cursor()]
+      if (entry) onTogglePin("sessions", entry.id)
+    }
+    const pinSelectedDirectory = () => {
+      const entry = selectableEntries()[cursor()]
+      if (entry) onTogglePin("directories", entry.dir)
+    }
+
     const disposeNav = api.keymap.registerLayer({
       mode: "modal",
       priority: 1,
@@ -3114,14 +3124,8 @@ const tui: TuiPlugin = async (api) => {
           },
         },
         { key: "alt+p", desc: "Toggle transcript preview", preventDefault: true, cmd: togglePreview },
-        { key: "ctrl+s", desc: "Pin session", preventDefault: true, cmd: () => {
-          const entry = selectableEntries()[cursor()]
-          if (entry) onTogglePin("sessions", entry.id)
-        } },
-        { key: "ctrl+d", desc: "Pin directory", preventDefault: true, cmd: () => {
-          const entry = selectableEntries()[cursor()]
-          if (entry) onTogglePin("directories", entry.dir)
-        } },
+        ...["alt+s", "ctrl+s"].map((key) => ({ key, desc: "Pin session", preventDefault: true, cmd: pinSelectedSession })),
+        ...["alt+r", "ctrl+d"].map((key) => ({ key, desc: "Pin directory", preventDefault: true, cmd: pinSelectedDirectory })),
         {
           key: "alt+d",
           desc: "Delete session",
@@ -3152,7 +3156,7 @@ const tui: TuiPlugin = async (api) => {
           },
         },
         { key: "alt+w", desc: "Filter needs input", preventDefault: true, cmd: () => setWaitingOnly((value) => !value) },
-        { key: "alt+s", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
+        { key: "alt+k", desc: "Filter pinned sessions", preventDefault: true, cmd: () => setPinnedOnly((value) => !value) },
         {
           key: "escape",
           desc: "Close",
@@ -3402,7 +3406,7 @@ const tui: TuiPlugin = async (api) => {
                       : waitingOnly() && waitingCoverage() === "unavailable"
                         ? "Needs-input data unavailable · turn off the filter"
                       : pinnedOnly() && pins().sessions.length === 0
-                        ? "No pinned sessions yet · ctrl+s pins a session"
+                        ? "No pinned sessions yet · option+s pins a session"
                       : !indexProgress().complete && query().trim()
                         ? "No matches yet · still searching transcripts…"
                       : scope()

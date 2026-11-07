@@ -32,7 +32,7 @@ picker, or add `"opencode-sesh"` to `plugins` for the TUI panel
   shown across *all* your projects, not just the current one. Archived and
   subagent child sessions are hidden by default.
 - **Pin what matters.** Ctrl-S pins a session and Ctrl-D pins its directory in
-  either picker; the TUI sidebar and home list use Option-S and Option-R.
+  either picker; the TUI picker, sidebar and home list also use Option-S and Option-R.
   Pins are shared and persist across restarts. Pinned directories rise first
   (followed by directories containing pinned sessions in the TUI picker);
   pinned sessions sort first in the terminal picker and home list, while the
@@ -202,8 +202,8 @@ non-interactive `sesh-delete.sh` refuses unless given `--yes`.
 | Option-D | Arm deletion; press Option-D again, `y`, or Enter to confirm |
 | Ctrl-F | Fork the selected session |
 | Ctrl-G | Toggle scope: the selected session's project, or every project |
-| Option-W / Option-S | Show only sessions needing input / pinned sessions |
-| Ctrl-S / Ctrl-D | Pin or unpin the selected session / directory |
+| Option-W / Option-K | Show only sessions needing input / pinned sessions |
+| Option-S / Option-R (or Ctrl-S / Ctrl-D) | Pin or unpin the selected session / directory |
 | Esc | Close the preview first, then the picker |
 
 While deletion is armed, `n` or Esc cancels; it also cancels after five seconds.
@@ -265,8 +265,8 @@ shortcut. Clicking (or Enter on) a session opens it here. The full picker is one
 keystroke away.
 
 The home list also supports search and the Option-P, Option-S, Option-R, and
-Option-D actions on the hovered session. These Option pin shortcuts do not
-replace the picker's Ctrl-S/Ctrl-D bindings; Option-S in the picker filters pins.
+Option-D actions on the hovered session. The picker accepts the same
+Option-S / Option-R pins alongside its Ctrl-S/Ctrl-D bindings; its pinned filter is Option-K.
 It shows up to six sessions, reducing spacing and then the row count on shorter
 terminals to leave room for multiline prompts. On very short terminals it hides;
 Option-O and `/sesh` still open the full picker. Long titles and paths stay on a

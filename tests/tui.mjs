@@ -275,9 +275,11 @@ function loadAdapter(ctx) {
     assert.ok(marker >= 0 && start >= 0 && end > marker, `could not locate ${name} navigation bindings`)
     let layer
     const moves = []
-    new Function("api", "moveCursor", "togglePreview", "handleEscape", source.slice(start, end))(
+    new Function("api", "moveCursor", "togglePreview", "handleEscape", "pinSelectedSession", "pinSelectedDirectory", source.slice(start, end))(
       { keymap: { registerLayer(value) { layer = value; return () => {} } } },
       (delta) => moves.push(delta),
+      () => {},
+      () => {},
       () => {},
       () => {},
     )
