@@ -428,7 +428,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   const source = readFileSync(join(root, "tui-plugins/sesh-panel/tui.tsx"), "utf8")
   assert.doesNotMatch(source, /pending !== hovered\(\)/)
   assert.match(source, /const confirmArmed = /)
-  assert.match(source, /if \(pendingDelete\(\) || menuState\(\)\) return\s+setQuery\(value\)/)
+  assert.match(source, /if \(pendingDelete\(\)\) return\s+menu\.close\(\)\s+setQuery\(value\)/)
 }
 
 // Slash subcommands exist as separate registrations (the command API never
@@ -950,7 +950,7 @@ function makeApi(sessions, { latency = 0 } = {}) {
 
   {
     // A still pointer re-fires hover; republishing an identical selection
-    // would rebuild the keyed menu every frame until clicks fall through it.
+    // would needlessly republish menu state on every frame.
     const h = harness()
     h.menu.open(entry, 1, 1)
     const published = h.states.length
@@ -1035,8 +1035,9 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(sidebar, /const onRootMouseDown = \(\) => \{\s+menu\.close\(\)/)
   assert.match(sidebar, /preview\.closeIfOpen\(\)/, "one outside press must close an open preview")
   assert.match(overlay, /<Portal\s+mount=/)
-  assert.match(overlay, /<Portal[\s\S]*?<Show when=\{props\.view\(\)\} keyed>[\s\S]*?<\/Show>\s*<\/Portal>/)
-  assert.doesNotMatch(overlay, /<Show when=\{props\.view\(\)\} keyed>\s*<Portal/)
+  assert.match(overlay, /<Portal[\s\S]*?<Show when=\{props\.view\(\)\}>[\s\S]*?<\/Show>\s*<\/Portal>/)
+  assert.doesNotMatch(overlay, /<Show when=\{props\.view\(\)\} keyed>/, "hover must retain mouse targets")
+  assert.doesNotMatch(overlay, /<Show when=\{props\.view\(\)\}>\s*<Portal/)
   assert.match(overlay, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
   assert.match(sidebar, /on\(routeKey, \(\) => menu\.close\(\), \{ defer: true \}\)/)
   assert.match(sidebar, /itemRows\(\)\.some\(\(entry\) => entry\.id === state\.entry\.id\)\) menu\.close\(\)/)
@@ -1044,10 +1045,10 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open/)
   assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
   assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
-  assert.match(overlay, /props\.menu\.click\(view\.start \+ shown\(\), event\.button\)/)
+  assert.match(overlay, /props\.menu\.click\(view\(\)\.start \+ shown\(\), event\.button\)/)
   assert.match(
     overlay,
-    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*props\.menu\.click\(view\.start \+ shown\(\), event\.button\)/,
+    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*props\.menu\.click\(view\(\)\.start \+ shown\(\), event\.button\)/,
     "context menu items must activate on mouseUp so the trailing mouse release does not hit the dialog backdrop",
   )
   assert.doesNotMatch(overlay, /menu\.activate\(index\(\)\)/)

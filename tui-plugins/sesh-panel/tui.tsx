@@ -511,9 +511,7 @@ function createContextMenu(host: ContextMenuHost) {
   const select = (index: number) => {
     if (!state) return
     const next = Math.max(0, Math.min(state.items.length - 1, index))
-    // A still pointer re-fires over events; republishing an identical state
-    // would rebuild the keyed menu on every frame, churning renderables until
-    // clicks fall through to whatever is beneath.
+    // A still pointer re-fires over events; avoid publishing unchanged selection.
     if (next === state.index) return
     publish({ ...state, index: next })
   }
@@ -1598,37 +1596,37 @@ function ContextMenuOverlay(props: {
         container.zIndex = CONTEXT_MENU_Z_INDEX
       }}
     >
-      <Show when={props.view()} keyed>
+      <Show when={props.view()}>
         {(view) => (
           <box
             position="absolute"
-            left={view.box.left}
-            top={view.box.top}
-            width={view.box.width}
-            height={view.box.height}
+            left={view().box.left}
+            top={view().box.top}
+            width={view().box.width}
+            height={view().box.height}
             flexDirection="column"
-            border={view.bordered}
-            borderStyle={view.bordered ? "rounded" : undefined}
-            borderColor={view.bordered ? theme().borderActive : undefined}
+            border={view().bordered}
+            borderStyle={view().bordered ? "rounded" : undefined}
+            borderColor={view().bordered ? theme().borderActive : undefined}
             backgroundColor={theme().backgroundPanel}
             paddingLeft={1}
             paddingRight={1}
             onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
             onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
           >
-            <For each={view.items}>
+            <For each={view().items}>
               {(item, shown) => (
                 <box
                   height={1}
-                  backgroundColor={view.state.index === view.start + shown() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-                  onMouseOver={() => props.menu.select(view.start + shown())}
+                  backgroundColor={view().state.index === view().start + shown() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                  onMouseOver={() => props.menu.select(view().start + shown())}
                   // Release activates so the press that opens a dialog cannot
                   // straddle it: the release is consumed here before any dialog
                   // opened by the action exists.
                   onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
                   onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
                     event.stopPropagation()
-                    props.menu.click(view.start + shown(), event.button)
+                    props.menu.click(view().start + shown(), event.button)
                   }}
                 >
                   <text
@@ -1637,12 +1635,12 @@ function ContextMenuOverlay(props: {
                       fg:
                         item.id === "delete" || item.id === "confirm"
                           ? theme().error
-                          : view.state.index === view.start + shown()
+                          : view().state.index === view().start + shown()
                             ? theme().text
                             : theme().textMuted,
                     }}
                   >
-                    {view.label(item, shown())}
+                    {view().label(item, shown())}
                   </text>
                 </box>
               )}
@@ -3294,8 +3292,10 @@ const tui: TuiPlugin = async (api) => {
                 focusedTextColor={api.theme.current.text}
                 cursorColor={api.theme.current.primary}
                 cursorStyle={{ style: "line", blinking: false }}
+                onMouseDown={() => menu.close()}
                 onInput={(value) => {
-                  if (pendingDelete() || menuState()) return
+                  if (pendingDelete()) return
+                  menu.close()
                   setQuery(value)
                 }}
                 onSubmit={() => {
@@ -3790,7 +3790,8 @@ const tui: TuiPlugin = async (api) => {
     const currentID = route.name === "session" ? route.params?.sessionID : undefined
     const previous = items.findIndex((item) => item.entry.id === (currentID ?? lastNeedsID))
     const [cursor, setCursor] = createSignal(previous < 0 ? 0 : (previous + 1) % items.length)
-    let needsScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
+    let needsScroll: { scrollTop: number; width: number; height: number; scrollTo: (top: number) => void } | undefined
+    let needsViewport = { width: 0, height: 0 }
     const revealCursor = () => {
       const row = cursor()
       if (!needsScroll || needsScroll.height <= 0) return
@@ -3863,6 +3864,13 @@ const tui: TuiPlugin = async (api) => {
           </text>
           <scrollbox
             ref={(box) => { needsScroll = box; queueMicrotask(revealCursor) }}
+            renderAfter={() => {
+              if (!needsScroll) return
+              const { width, height } = needsScroll
+              if (width === needsViewport.width && height === needsViewport.height) return
+              needsViewport = { width, height }
+              revealCursor()
+            }}
             height={Math.max(1, Math.floor(tracked.size().height * 0.6) - 6)}
             scrollbarOptions={{ visible: false }}
           >

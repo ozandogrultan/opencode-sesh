@@ -249,15 +249,21 @@ await check("picker menu items sit above the dialog layer and never reach its ba
     await harness.setup.mockMouse.click(at.x, at.y, 2)
     let frame = ""
     let clicked = false
+    let previousPosition
     for (const deadline = Date.now() + 3000; Date.now() < deadline;) {
       await harness.setup.flush()
       frame = harness.setup.captureCharFrame()
       if (/esc back/.test(frame)) break
-      const lines = frame.split("\n")
-      const y = lines.findIndex((line) => line.includes("Preview transcript"))
-      if (y >= 0) {
-        clicked = true
-        await harness.setup.mockMouse.click(lines[y].indexOf("Preview"), y)
+      if (!clicked) {
+        const lines = frame.split("\n")
+        const y = lines.findIndex((line) => line.includes("Preview transcript"))
+        const x = y >= 0 ? lines[y].indexOf("Preview") : -1
+        const position = y >= 0 ? `${x},${y}` : undefined
+        if (position && position === previousPosition) {
+          clicked = true
+          await harness.setup.mockMouse.click(x, y)
+        }
+        previousPosition = position
       }
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -456,6 +462,77 @@ await check("costs scroll with arrows, page keys, home and end, and keep a long 
 })
 
 const settle = (ms = 40) => new Promise((resolve) => setTimeout(resolve, ms))
+
+await check("picker menu retains its mouse target when hover changes selection during a click", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const item = rowAt(harness.setup.captureCharFrame(), "Preview transcript")
+    await harness.setup.mockMouse.pressDown(item.x, item.y)
+    harness.setup.renderer.recheckHoverState()
+    await new Promise((resolve) => process.nextTick(resolve))
+    await harness.setup.mockMouse.release(item.x, item.y)
+    await settle(150)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /esc back/)
+    assert.equal(harness.backdropPresses, 0)
+    assert.equal(harness.cleared, 0)
+  } finally { harness.close() }
+})
+
+await check("picker search closes an open menu and keeps the query and results in sync", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    const dialog = await harness.command("sesh")
+    const at = rowAt(await harness.show(dialog, 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    const input = rowAt(harness.setup.captureCharFrame(), "Search title")
+    await harness.setup.mockMouse.click(input.x, input.y)
+    await harness.setup.mockInput.typeText("ZZZZ")
+    await settle(150)
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /ZZZZ/)
+    assert.ok(!frame.includes("Preview transcript"), "search closes the menu\n" + frame)
+    assert.equal(sessionRows(frame), 0, "the visible query filters the sessions\n" + frame)
+    assert.equal(harness.cleared, 0)
+  } finally { harness.close() }
+})
+
+await check("needs resize keeps a noninitial selected session visible", async () => {
+  const entries = Array.from({ length: 30 }, (_, index) => session(index, `Unique title ${index}`))
+  const harness = await createHarness({ width: 100, height: 40, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh-needs"), 88)
+    for (let i = 0; i < 8; i++) harness.press("down")
+    await harness.setup.flush()
+    const frame = await harness.resize(100, 14, 88)
+    assert.match(frame, /Unique title 21\b/, "the selected row remains visible\n" + frame)
+    harness.press("enter")
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: entries[21].id }])
+  } finally { harness.close() }
+})
+
+await check("needs manual scrolling does not snap back to the selected session", async () => {
+  const entries = Array.from({ length: 30 }, (_, index) => session(index, `Unique title ${index}`))
+  const harness = await createHarness({ width: 100, height: 24, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh-needs"), 88)
+    const findScrollbox = (node) => typeof node.scrollTo === "function"
+      ? node
+      : (node.getChildren?.() ?? []).map(findScrollbox).find(Boolean)
+    const box = findScrollbox(harness.setup.renderer.root)
+    assert.ok(box, "needs have a scrollbox")
+    box.scrollTo(10000)
+    await harness.setup.flush()
+    assert.ok(box.scrollTop > 0, "manual scrolling stays away from the selected first row")
+    assert.match(harness.setup.captureCharFrame(), /Unique title 0\b/)
+  } finally { harness.close() }
+})
 
 await check("picker 44x14 menu with the status line visible keeps the selected item on screen", async () => {
   const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.slice(0, 6).map((entry) => entry.id), source })

@@ -198,8 +198,8 @@ when opencode exits, the picker reopens with the query preserved.
   `contextMenuWindow` so the selected item is always visible when the items
   outnumber the rows, with ▲/▼ hints on its edge rows; closed on resize) and
   hides the footer while open; the overlay portals to the renderer root at
-  `CONTEXT_MENU_Z_INDEX` (3500), above OpenCode's dialog layer (3000) and below
-  its 5000 layer — a lower value renders the picker's menu behind the dialog; Esc closes the menu before the picker and Enter in the
+  `CONTEXT_MENU_Z_INDEX` (3500), above OpenCode's dialog layer (3000) — a lower
+  value renders the picker's menu behind the dialog; Esc closes the menu before the picker and Enter in the
   search input must not submit while it is open. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
