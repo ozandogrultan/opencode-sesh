@@ -283,7 +283,8 @@ The full picker pages through your global session list
 and indexes transcript text for every session in the background, showing
 indexing progress under the search box while it runs (and noting partial
 coverage or a reached safety cap; a complete index takes no row). Terminals
-under 28 rows get a one-line footer and tighter directory headings.
+under 28 rows get a one-line footer and tighter directory headings; dialogs
+re-flow when the terminal is resized.
 Transcript matches show a short excerpt
 under the result; the Project, Needs input, and Pinned filters combine with
 search. The picker remembers your query and filters until you restart opencode.

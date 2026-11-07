@@ -340,7 +340,12 @@ function releaseHoverOnTyping(renderer: TuiPluginApi["renderer"], release: () =>
 
 // The message carried by a thrown value or an API error body, as one short line.
 function errorReason(error: unknown, depth = 0): string | undefined {
-  if (typeof error === "string") return truncate(error.replace(/\s+/g, " ").trim(), 80) || undefined
+  if (typeof error === "string") {
+    const text = error.replace(/\s+/g, " ").trim()
+    // A proxy or gateway error page is markup, not a reason.
+    if (!text || text.startsWith("<") || /<html|<!doctype/i.test(text)) return undefined
+    return truncate(text, 80)
+  }
   if (!error || typeof error !== "object" || depth > 3) return undefined
   const body = error as { message?: unknown; data?: unknown; error?: unknown }
   return errorReason(body.message, depth + 1) ?? errorReason(body.data, depth + 1) ?? errorReason(body.error, depth + 1)
@@ -426,6 +431,24 @@ function contextMenuBox(
   return { left, top, width, height }
 }
 
+// Renderer dimensions as a signal, so dialog layouts re-derive on resize.
+// The caller must run `dispose` when its dialog closes.
+function trackSize(api: TuiPluginApi) {
+  const read = () => ({ width: api.renderer.width, height: api.renderer.height })
+  const [size, setSize] = createSignal(read())
+  const onResize = () => setSize(read())
+  api.renderer.on("resize", onResize)
+  return { size, dispose: () => api.renderer.off("resize", onResize) }
+}
+
+// The slice of `count` items that fits `rows` lines while keeping `index` in
+// view; the whole list when it fits.
+function contextMenuWindow(count: number, index: number, rows: number): { start: number; size: number } {
+  const size = Math.max(1, Math.min(count, rows))
+  const start = Math.max(0, Math.min(count - size, index - Math.floor(size / 2)))
+  return { start, size }
+}
+
 // The menu's position, kept inside `bounds` (default: the whole terminal). A
 // menu squeezed below its bordered height renders borderless.
 function createMenuView(
@@ -444,7 +467,10 @@ function createMenuView(
       rows,
       limit && { top: Math.max(0, limit.top), bottom: Math.min(rows, limit.bottom) },
     )
-    return { state: current, box, bordered: box.height >= current.items.length + 2 }
+    const bordered = box.height >= current.items.length + 2
+    // A menu taller than its bounds scrolls its items so the selection stays visible.
+    const { start, size } = contextMenuWindow(current.items.length, current.index, bordered ? box.height - 2 : box.height)
+    return { state: current, box, bordered, start, items: current.items.slice(start, start + size) }
   })
 }
 
@@ -1481,7 +1507,12 @@ const PICKER_HINT_SEGMENTS = [
   "option+s/r pin", "option+d delete", "ctrl+f fork", "esc close",
 ]
 const PICKER_HINT_COMPACT = ["↑↓ move · enter open · esc close", "ctrl+g project · ctrl+f fork"]
-const PICKER_HINT_ONE_LINE = ["↑↓ move · enter open · right-click menu · esc close", "↑↓ move · enter open · esc close"]
+// The first form that fits wins; at 44 columns only the shortest does.
+const PICKER_HINT_ONE_LINE = [
+  "↑↓ move · enter open · option+p preview · right-click menu · esc close",
+  "↑↓ move · enter open · right-click menu · esc close",
+  "↑↓ move · enter open · esc close",
+]
 const PICKER_TALL = 28
 
 // The footer hint as non-wrapping lines: the two-line form when it fits, else
@@ -1491,7 +1522,7 @@ const PICKER_TALL = 28
 function pickerHintLines(width: number, height = PICKER_TALL): string[] {
   const join = (parts: string[]) => parts.join(" · ")
   if (height < PICKER_TALL) {
-    return [truncate(PICKER_HINT_ONE_LINE.find((line) => line.length <= width) ?? PICKER_HINT_ONE_LINE[1], width)]
+    return [truncate(PICKER_HINT_ONE_LINE.find((line) => line.length <= width) ?? PICKER_HINT_ONE_LINE.at(-1)!, width)]
   }
   const wide = [join(PICKER_HINT_SEGMENTS.slice(0, 6)), join(PICKER_HINT_SEGMENTS.slice(6))]
   if (wide.every((line) => line.length <= width)) return wide
@@ -1558,27 +1589,27 @@ function ContextMenuOverlay(props: {
             height={view.box.height}
             flexDirection="column"
             border={view.bordered}
-            borderStyle="rounded"
-            borderColor={theme().borderActive}
+            borderStyle={view.bordered ? "rounded" : undefined}
+            borderColor={view.bordered ? theme().borderActive : undefined}
             backgroundColor={theme().backgroundPanel}
             paddingLeft={1}
             paddingRight={1}
             onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
             onMouseUp={(event: { stopPropagation: () => void }) => event.stopPropagation()}
           >
-            <For each={view.state.items}>
-              {(item, index) => (
+            <For each={view.items}>
+              {(item, shown) => (
                 <box
                   height={1}
-                  backgroundColor={view.state.index === index() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
-                  onMouseOver={() => props.menu.select(index())}
+                  backgroundColor={view.state.index === view.start + shown() ? theme().backgroundElement : RGBA.fromInts(0, 0, 0, 0)}
+                  onMouseOver={() => props.menu.select(view.start + shown())}
                   // Release activates so the press that opens a dialog cannot
                   // straddle it: the release is consumed here before any dialog
                   // opened by the action exists.
                   onMouseDown={(event: { stopPropagation: () => void }) => event.stopPropagation()}
                   onMouseUp={(event: { button?: number; stopPropagation: () => void }) => {
                     event.stopPropagation()
-                    props.menu.click(index(), event.button)
+                    props.menu.click(view.start + shown(), event.button)
                   }}
                 >
                   <text
@@ -1587,7 +1618,7 @@ function ContextMenuOverlay(props: {
                       fg:
                         item.id === "delete" || item.id === "confirm"
                           ? theme().error
-                          : view.state.index === index()
+                          : view.state.index === view.start + shown()
                             ? theme().text
                             : theme().textMuted,
                     }}
@@ -2462,10 +2493,6 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     setPolledRunning(snapshot.running ?? new Set())
   })))
 
-  createEffect(() => {
-    const state = menuState()
-    if (state && !filtered().some((entry) => entry.id === state.entry.id)) menu.close()
-  })
 
   const filtered = createMemo(() => {
     const q = query().trim().toLowerCase()
@@ -2475,6 +2502,11 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
         )
       : entries()
     return pinnedFirst(list, props.pins())
+  })
+
+  createEffect(() => {
+    const state = menuState()
+    if (state && !filtered().some((entry) => entry.id === state.entry.id)) menu.close()
   })
   // Unmeasured (before the first frame) reads as no room.
   const [top, setTop] = createSignal(dimensions().height)
@@ -2823,31 +2855,32 @@ const tui: TuiPlugin = async (api) => {
       return flat
     })
 
-    const termHeight = api.renderer.height
+    const tracked = trackSize(api)
+    const termHeight = () => tracked.size().height
     // The dialog host anchors content a quarter of the way down the screen and
     // lets it size to content, so a taller picker drifts downward. Pin the
     // content height and offset it up by the same amount to keep it centred.
-    const dialogWidth = Math.min(116, api.renderer.width - 2)
-    const hintLines = pickerHintLines(dialogWidth - 8, termHeight)
-    const compactFilters = dialogWidth - 8 < 40
-    const chromeGap = termHeight < 20 ? 0 : 1
+    const dialogWidth = () => Math.min(116, tracked.size().width - 2)
+    const hintLines = createMemo(() => pickerHintLines(dialogWidth() - 8, termHeight()))
+    const compactFilters = () => dialogWidth() - 8 < 40
+    const chromeGap = () => (termHeight() < 20 ? 0 : 1)
     // Short terminals drop the blank line above each directory heading.
-    const groupLines = termHeight < PICKER_TALL ? 1 : 2
+    const groupLines = () => (termHeight() < PICKER_TALL ? 1 : 2)
     // Padding (2), title (1), search (1 + gap), filters (1 + gap), the status
     // line when shown (1 + gap), gaps around the list (2 × gap), footer hint.
     const chromeRows = () => {
       const status = coverageLabel() ? 1 : 0
-      return 5 + status + chromeGap * (4 + status) + hintLines.length
+      return 5 + status + chromeGap() * (4 + status) + hintLines().length
     }
-    const dialogShare = termHeight < 20 ? 0.85 : 0.75
-    const dialogHeight = () => Math.min(Math.max(Math.floor(termHeight * dialogShare), chromeRows() + 4), Math.max(termHeight - 2, 1))
+    const dialogShare = () => (termHeight() < 20 ? 0.85 : 0.75)
+    const dialogHeight = () => Math.min(Math.max(Math.floor(termHeight() * dialogShare()), chromeRows() + 4), Math.max(termHeight() - 2, 1))
     const listHeight = () => Math.max(1, dialogHeight() - chromeRows())
     // Never lift the dialog above the first terminal row.
-    const dialogOffset = () => Math.max(-Math.floor(termHeight / 4), Math.min(0, Math.floor(termHeight / 4 - dialogHeight() / 2 - 1)))
+    const dialogOffset = () => Math.max(-Math.floor(termHeight() / 4), Math.min(0, Math.floor(termHeight() / 4 - dialogHeight() / 2 - 1)))
     const hasExcerpt = (entry: Entry) => !!transcriptMatchExcerpt(searchIndex().get(entry.id), entry, query())
-    const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt, groupLines))
+    const maxViewportStart = createMemo(() => pickerLastStart(pickerRows(), listHeight(), hasExcerpt, groupLines()))
     const visiblePickerRows = createMemo(() => pickerWindow(
-      pickerRows(), Math.min(viewportStart(), maxViewportStart()), listHeight(), hasExcerpt, groupLines,
+      pickerRows(), Math.min(viewportStart(), maxViewportStart()), listHeight(), hasExcerpt, groupLines(),
     ))
 
     let previousSelection: Entry[] = []
@@ -2932,7 +2965,7 @@ const tui: TuiPlugin = async (api) => {
       const target = flat.findIndex((row) => row.kind === "item" && row.entry.id === id)
       let start = Math.min(viewportStart(), maxViewportStart())
       if (target < start) start = target
-      else while (start < target && !pickerWindow(flat, start, listHeight(), hasExcerpt, groupLines).some(
+      else while (start < target && !pickerWindow(flat, start, listHeight(), hasExcerpt, groupLines()).some(
         (row) => row.kind === "item" && row.entry.id === id,
       )) start++
       setViewportStart(Math.max(0, Math.min(start, maxViewportStart())))
@@ -3059,7 +3092,9 @@ const tui: TuiPlugin = async (api) => {
       })
     }
 
+    // A fork that finishes after the picker closed must not clear whatever dialog is open now.
     const forkEntry = (entry: Entry) => forkSession(api, entry, () => {
+      if (!alive) return
       cleanup()
       api.ui.dialog.clear()
     })
@@ -3110,7 +3145,7 @@ const tui: TuiPlugin = async (api) => {
     // (hidden while it is open), never the header or the search box.
     const menuView = createMenuView(api, menuState, () => listBox && {
       top: listBox.y,
-      bottom: listBox.y + listBox.height + chromeGap + hintLines.length,
+      bottom: listBox.y + listBox.height + chromeGap() + hintLines().length,
     })
     createEffect(() => {
       const state = menuState()
@@ -3199,6 +3234,7 @@ const tui: TuiPlugin = async (api) => {
     const cleanup = () => {
       if (!alive) return
       alive = false
+      tracked.dispose()
       menu.close()
       if (confirmTimer) clearTimeout(confirmTimer)
       pickerState = { query: query(), scope: scope(), waitingOnly: waitingOnly(), pinnedOnly: pinnedOnly() }
@@ -3216,7 +3252,7 @@ const tui: TuiPlugin = async (api) => {
           marginTop={dialogOffset()}
           paddingTop={1}
           paddingBottom={1}
-          gap={chromeGap}
+          gap={chromeGap()}
           backgroundColor={api.theme.current.backgroundPanel}
         >
           <box paddingLeft={4} paddingRight={4} flexShrink={0}>
@@ -3228,7 +3264,7 @@ const tui: TuiPlugin = async (api) => {
                 esc
               </text>
             </box>
-            <box paddingTop={chromeGap}>
+            <box paddingTop={chromeGap()}>
               <input
                 focused
                 placeholder="Search title, directory, transcript…"
@@ -3282,23 +3318,23 @@ const tui: TuiPlugin = async (api) => {
               />
             </box>
             <Show when={coverageLabel()}>
-              <box paddingTop={chromeGap}>
-                <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{truncate(coverageLabel(), dialogWidth - 8)}</text>
+              <box paddingTop={chromeGap()}>
+                <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{truncate(coverageLabel(), dialogWidth() - 8)}</text>
               </box>
             </Show>
-            <box flexDirection="row" gap={compactFilters ? 1 : 2} paddingTop={chromeGap}>
+            <box flexDirection="row" gap={compactFilters() ? 1 : 2} paddingTop={chromeGap()}>
               <text flexShrink={0} wrapMode="none" style={{ fg: scope() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => {
                 const group = currentProject()
                 if (group) setScope(scope() === group ? undefined : group)
                 else api.ui.toast({ message: "No current project to filter", variant: "info" })
               }}>
-                {scope() ? `Project: ${truncate(scope()!, compactFilters ? 10 : 22)}` : "Project: all"}
+                {scope() ? `Project: ${truncate(scope()!, compactFilters() ? 10 : 22)}` : "Project: all"}
               </text>
               <text flexShrink={0} wrapMode="none" style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
-                {waitingOnly() ? (compactFilters ? "● Input" : "● Needs input") : (compactFilters ? "○ Input" : "○ Needs input")}
+                {waitingOnly() ? (compactFilters() ? "● Input" : "● Needs input") : (compactFilters() ? "○ Input" : "○ Needs input")}
               </text>
               <text flexShrink={0} wrapMode="none" style={{ fg: pinnedOnly() ? api.theme.current.accent : api.theme.current.textMuted }} onMouseDown={() => setPinnedOnly((value) => !value)}>
-                {pinnedOnly() ? (compactFilters ? "★ Pin" : "★ Pinned") : (compactFilters ? "☆ Pin" : "☆ Pinned")}
+                {pinnedOnly() ? (compactFilters() ? "★ Pin" : "★ Pinned") : (compactFilters() ? "☆ Pin" : "☆ Pinned")}
               </text>
             </box>
             <ContextMenuOverlay api={api} menu={menu} view={menuView} />
@@ -3316,7 +3352,7 @@ const tui: TuiPlugin = async (api) => {
             <For each={visiblePickerRows()}>
                 {(row) => {
                   if (row.kind === "group") return (
-                    <box flexDirection="row" paddingTop={row.continued || groupLines === 1 ? 0 : 1} paddingLeft={4} paddingRight={4}
+                    <box flexDirection="row" paddingTop={row.continued || groupLines() === 1 ? 0 : 1} paddingLeft={4} paddingRight={4}
                       onMouseDown={() => {
                         menu.close()
                         setCollapsed((state) => ({ ...state, [row.dir]: !state[row.dir] }))
@@ -3448,21 +3484,21 @@ const tui: TuiPlugin = async (api) => {
                 </box>
               </Show>
             </box>
-          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column" height={hintLines.length}>
+          <box paddingLeft={4} paddingRight={4} flexShrink={0} flexDirection="column" height={hintLines().length}>
             <Show
               when={pendingDelete()}
               fallback={
                 <Show when={!menuState()}>
-                  <For each={hintLines}>
+                  <For each={hintLines()}>
                     {(line) => <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{line}</text>}
                   </For>
                 </Show>
               }
             >
               <text wrapMode="none" style={{ fg: api.theme.current.warning }}>
-                {dialogWidth < 70
+                {dialogWidth() < 70
                   ? "y delete · n cancel"
-                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth - 40)}"? y confirm · n cancel`}
+                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth() - 40)}"? y confirm · n cancel`}
               </text>
             </Show>
           </box>
@@ -3471,7 +3507,7 @@ const tui: TuiPlugin = async (api) => {
               position="absolute"
               left={0}
               top={0}
-              width={dialogWidth}
+              width={dialogWidth()}
               height={dialogHeight()}
               flexDirection="column"
               backgroundColor={api.theme.current.backgroundPanel}
@@ -3483,7 +3519,7 @@ const tui: TuiPlugin = async (api) => {
             >
               <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
                 <text attributes={TextAttributes.BOLD}>
-                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth - 18) : "Preview"}
+                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth() - 18) : "Preview"}
                 </text>
                 <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
               </box>
@@ -3515,7 +3551,7 @@ const tui: TuiPlugin = async (api) => {
                 </Show>
               </scrollbox>
               <text flexShrink={0} wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-                {dialogWidth < 48 ? "↑↓ session · esc back" : "↑↓ switch session · esc back to picker"}
+                {dialogWidth() < 48 ? "↑↓ session · esc back" : "↑↓ switch session · esc back to picker"}
               </text>
             </box>
           </Show>
@@ -3589,23 +3625,29 @@ const tui: TuiPlugin = async (api) => {
     const home = process.env.HOME ?? ""
     // Columns: project, then 24h and total spend and the number of sessions
     // that recorded cost. The dialog is at most 88 wide minus 8 of padding.
-    const inner = Math.max(20, Math.min(88, api.renderer.width - 2) - 8)
-    const cell = (label: string, pick: (row: CostRow | typeof totals) => string) =>
-      Math.max(label.length, pick(totals).length, ...rows.map((row) => pick(row).length))
-    const dayWidth = cell("24h", (row) => money(row.window))
-    const totalWidth = cell("Total", (row) => money(row.lifetime))
-    const sessionsWidth = cell("Sess", (row) => String(row.sessions))
+    const tracked = trackSize(api)
+    const inner = () => Math.max(20, Math.min(88, tracked.size().width - 2) - 8)
+    // Project rows show "—" for no spend; the total line always shows an amount.
+    const totalMoney = (n: number) => `$${n.toFixed(2)}`
+    const cell = (label: string, pick: (row: CostRow) => string, total: string) =>
+      Math.max(label.length, total.length, ...rows.map((row) => pick(row).length))
+    const dayWidth = cell("24h", (row) => money(row.window), totalMoney(totals.window))
+    const totalWidth = cell("Total", (row) => money(row.lifetime), totalMoney(totals.lifetime))
+    const sessionsWidth = cell("Sess", (row) => String(row.sessions), String(totals.sessions))
     // Secondary columns go first when the project name would starve: sessions, then 24h.
     const PROJECT_MIN = 16
-    const showSessions = inner - (dayWidth + totalWidth + sessionsWidth + 6) >= PROJECT_MIN
-    const showDay = inner - (dayWidth + totalWidth + 4 + (showSessions ? sessionsWidth + 2 : 0)) >= PROJECT_MIN
-    const projectWidth = Math.max(
+    const showSessions = () => inner() - (dayWidth + totalWidth + sessionsWidth + 6) >= PROJECT_MIN
+    const showDay = () => inner() - (dayWidth + totalWidth + 4 + (showSessions() ? sessionsWidth + 2 : 0)) >= PROJECT_MIN
+    const projectWidth = () => Math.max(
       8,
-      inner - totalWidth - 2 - (showDay ? dayWidth + 2 : 0) - (showSessions ? sessionsWidth + 2 : 0),
+      inner() - totalWidth - 2 - (showDay() ? dayWidth + 2 : 0) - (showSessions() ? sessionsWidth + 2 : 0),
     )
-    const gap = api.renderer.height < 20 ? 0 : 1
+    const gap = () => (tracked.size().height < 20 ? 0 : 1)
     // The heading and total stay put; only the project rows scroll.
-    const listHeight = Math.max(1, (api.renderer.height < 20 ? api.renderer.height - 6 : Math.floor(api.renderer.height * 0.6)) - 5 - 2 * gap)
+    const listHeight = () => {
+      const rows = tracked.size().height
+      return Math.max(1, (rows < 20 ? rows - 6 : Math.floor(rows * 0.6)) - 5 - 2 * gap())
+    }
     let costScroll: { scrollTop: number; height: number; scrollTo: (top: number) => void } | undefined
     const scrollBy = (delta: number) => costScroll?.scrollTo(Math.max(0, costScroll.scrollTop + delta))
     const disposeKeys = api.keymap.registerLayer({
@@ -3615,22 +3657,22 @@ const tui: TuiPlugin = async (api) => {
         { key: "ctrl+p", desc: "Scroll up", preventDefault: true, cmd: () => scrollBy(-1) },
         { key: "down", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
         { key: "ctrl+n", desc: "Scroll down", preventDefault: true, cmd: () => scrollBy(1) },
-        { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => scrollBy(-Math.max(1, listHeight - 1)) },
-        { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => scrollBy(Math.max(1, listHeight - 1)) },
+        { key: "pageup", desc: "Page up", preventDefault: true, cmd: () => scrollBy(-Math.max(1, listHeight() - 1)) },
+        { key: "pagedown", desc: "Page down", preventDefault: true, cmd: () => scrollBy(Math.max(1, listHeight() - 1)) },
         { key: "home", desc: "First project", preventDefault: true, cmd: () => costScroll?.scrollTo(0) },
         { key: "end", desc: "Last project", preventDefault: true, cmd: () => costScroll?.scrollTo(Number.MAX_SAFE_INTEGER) },
         { key: "escape", desc: "Close", preventDefault: true, cmd: () => api.ui.dialog.clear() },
       ],
     })
-    const columns = (project: string, day: string, total: string, sessionCount: string, tone: "head" | "body" | "total") => {
+    const columns = (project: () => string, day: string, total: string, sessionCount: string, tone: "head" | "body" | "total") => {
       const color = tone === "total" ? api.theme.current.text : api.theme.current.textMuted
       const bold = tone === "total" ? TextAttributes.BOLD : undefined
       return (
         <box flexDirection="row" gap={2} height={1} flexShrink={0}>
-          <text width={projectWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "head" ? color : api.theme.current.text }}>
-            {project}
+          <text width={projectWidth()} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "head" ? color : api.theme.current.text }}>
+            {project()}
           </text>
-          <Show when={showDay}>
+          <Show when={showDay()}>
             <text width={dayWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: tone === "body" || tone === "total" ? api.theme.current.success : color }}>
               {day.padStart(dayWidth)}
             </text>
@@ -3638,7 +3680,7 @@ const tui: TuiPlugin = async (api) => {
           <text width={totalWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
             {total.padStart(totalWidth)}
           </text>
-          <Show when={showSessions}>
+          <Show when={showSessions()}>
             <text width={sessionsWidth} flexShrink={0} wrapMode="none" attributes={bold} style={{ fg: color }}>
               {sessionCount.padStart(sessionsWidth)}
             </text>
@@ -3648,15 +3690,15 @@ const tui: TuiPlugin = async (api) => {
     }
     api.ui.dialog.replace(
       () => (
-        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={gap} backgroundColor={api.theme.current.backgroundPanel}>
+        <box flexDirection="column" paddingLeft={4} paddingRight={4} paddingTop={1} gap={gap()} backgroundColor={api.theme.current.backgroundPanel}>
           <box flexDirection="column" flexShrink={0}>
             <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
               Cost digest{" "}
               <span style={{ fg: api.theme.current.textMuted }}>(per project)</span>
             </text>
             <Show when={!failed && rows.length > 0}>
-              {columns("Project", "24h", "Total", "Sess", "head")}
-              {columns("All projects", money(totals.window), money(totals.lifetime), String(totals.sessions), "total")}
+              {columns(() => "Project", "24h", "Total", "Sess", "head")}
+              {columns(() => "All projects", totalMoney(totals.window), totalMoney(totals.lifetime), String(totals.sessions), "total")}
             </Show>
           </box>
           <Show
@@ -3669,22 +3711,23 @@ const tui: TuiPlugin = async (api) => {
           >
             <scrollbox
               ref={(box: typeof costScroll) => { costScroll = box }}
-              height={listHeight}
+              height={listHeight()}
               scrollbarOptions={{ visible: false }}
             >
               <For each={rows}>
-                {(row) => columns(fitDir(row.directory, home, projectWidth), money(row.window), money(row.lifetime), String(row.sessions), "body")}
+                {(row) => columns(() => fitDir(row.directory, home, projectWidth()), money(row.window), money(row.lifetime), String(row.sessions), "body")}
               </For>
             </scrollbox>
           </Show>
           <box flexShrink={0}>
             <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-              {api.renderer.width < 60 ? "↑↓ scroll · esc close" : "↑↓/PgUp/PgDn scroll · esc close"}
+              {tracked.size().width < 60 ? "↑↓ scroll · esc close" : "↑↓/PgUp/PgDn scroll · esc close"}
             </text>
           </box>
         </box>
       ),
       () => {
+        tracked.dispose()
         disposeKeys()
       },
     )
@@ -3768,25 +3811,26 @@ const tui: TuiPlugin = async (api) => {
     // Fixed column widths so every cell truncates with an ellipsis instead of
     // being clipped by its neighbour: the dialog is at most 88 wide, minus its
     // padding (8) and the row padding (2).
-    const wide = api.renderer.width >= 80
-    const inner = Math.max(20, Math.min(88, api.renderer.width - 2) - 10)
+    const tracked = trackSize(api)
+    const wide = () => tracked.size().width >= 80
+    const inner = () => Math.max(20, Math.min(88, tracked.size().width - 2) - 10)
     const metaText = (item: (typeof items)[number]) => {
       const time = item.since === undefined ? "waiting (start unknown)" : `waiting ${ago(item.since)}`
       return { dir: prettyDir(item.entry.dir, home), time }
     }
-    const reasonWidth = wide ? 15 : 6
+    const reasonWidth = () => (wide() ? 15 : 6)
     const metas = items.map(metaText)
     const timeWidth = Math.max(0, ...metas.map((meta) => meta.time.length))
-    const metaWidth = wide
-      ? Math.min(Math.max(...metas.map((meta) => meta.dir.length + 3 + meta.time.length)), Math.max(timeWidth, Math.floor(inner * 0.4)))
+    const metaWidth = () => wide()
+      ? Math.min(Math.max(...metas.map((meta) => meta.dir.length + 3 + meta.time.length)), Math.max(timeWidth, Math.floor(inner() * 0.4)))
       : 0
-    const titleWidth = Math.max(8, inner - reasonWidth - 2 - (wide ? metaWidth + 2 : 0))
+    const titleWidth = () => Math.max(8, inner() - reasonWidth() - 2 - (wide() ? metaWidth() + 2 : 0))
     // The wait time stays whole; the directory shortens, or drops when it
     // would keep fewer than four columns.
     const metaLabel = (item: (typeof items)[number]) => {
       const { dir, time } = metaText(item)
-      const room = metaWidth - time.length - 3
-      return room >= 4 ? `${truncate(dir, room)} · ${time}` : truncate(time, metaWidth)
+      const room = metaWidth() - time.length - 3
+      return room >= 4 ? `${truncate(dir, room)} · ${time}` : truncate(time, metaWidth())
     }
     api.ui.dialog.replace(
       () => (
@@ -3794,12 +3838,12 @@ const tui: TuiPlugin = async (api) => {
           <text flexShrink={0} wrapMode="none" attributes={TextAttributes.BOLD}>
             Needs input{" "}
             <span style={{ fg: api.theme.current.textMuted }}>
-              ({wide ? `${items.length} · longest waiting first` : items.length})
+              ({wide() ? `${items.length} · longest waiting first` : items.length})
             </span>
           </text>
           <scrollbox
             ref={(box) => { needsScroll = box; queueMicrotask(revealCursor) }}
-            height={Math.max(1, Math.floor(api.renderer.height * 0.6) - 6)}
+            height={Math.max(1, Math.floor(tracked.size().height * 0.6) - 6)}
             scrollbarOptions={{ visible: false }}
           >
             <For each={items}>
@@ -3820,15 +3864,15 @@ const tui: TuiPlugin = async (api) => {
                   }}
                 >
                   <text
-                    width={titleWidth}
+                    width={titleWidth()}
                     flexShrink={0}
                     wrapMode="none"
                     style={{ fg: api.theme.current.text }}
                   >
-                    {truncate(item.entry.title, titleWidth - 1)}
+                    {truncate(item.entry.title, titleWidth() - 1)}
                   </text>
                   <text
-                    width={reasonWidth}
+                    width={reasonWidth()}
                     flexShrink={0}
                     wrapMode="none"
                     style={{
@@ -3838,11 +3882,11 @@ const tui: TuiPlugin = async (api) => {
                           : api.theme.current.warning,
                     }}
                   >
-                    {api.renderer.width < 80 ? (item.reason === "awaiting answer" ? "answer" : "stuck") : item.reason}
+                    {!wide() ? (item.reason === "awaiting answer" ? "answer" : "stuck") : item.reason}
                   </text>
-                  <Show when={wide}>
+                  <Show when={wide()}>
                   <text
-                    width={metaWidth}
+                    width={metaWidth()}
                     flexShrink={0}
                     wrapMode="none"
                     style={{
@@ -3861,12 +3905,13 @@ const tui: TuiPlugin = async (api) => {
           </scrollbox>
           <box flexShrink={0}>
             <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>
-              {api.renderer.width < 80 ? "↑↓ move · enter open · esc close" : "↑↓ navigate · enter open · n open next waiting · esc close"}
+              {!wide() ? "↑↓ move · enter open · esc close" : "↑↓ navigate · enter open · n open next waiting · esc close"}
             </text>
           </box>
         </box>
       ),
       () => {
+        tracked.dispose()
         disposeNav()
       },
     )

@@ -194,8 +194,9 @@ when opencode exits, the picker reopens with the query preserved.
   (`createContextMenu` + `ContextMenuOverlay`: open, preview, cmux workspace
   only when `inCmux()` — `CMUX_WORKSPACE_ID` — fork, pin/unpin, delete). The
   picker's menu registers its key layer in `modal` mode, stays inside the list
-  area (`createMenuView` bounds; borderless when squeezed) and hides the
-  footer while open; Esc closes the menu before the picker and Enter in the
+  area (`createMenuView` bounds; borderless when squeezed, and windowed by
+  `contextMenuWindow` so the selected item is always visible when the items
+  outnumber the rows) and hides the footer while open; Esc closes the menu before the picker and Enter in the
   search input must not submit while it is open. The sidebar section lists every
   session without a row cap and flex-grows to fill the sidebar, with overflow
   scrolling inside; the picker remains the place for transcript search.
@@ -254,7 +255,14 @@ when opencode exits, the picker reopens with the query preserved.
 
 Failure toasts (delete, fork, pins, session load, needs-input and cost data)
 go through `withReason(message, error)`, which appends the error's message
-when it has one and keeps the plain text otherwise.
+when it has one (preferring `.message` / `.data.message`) and keeps the plain
+text otherwise; markup-looking strings (proxy error pages) are ignored.
+
+Dialog layouts derive from `trackSize(api)` (renderer dimensions as a signal,
+released when the dialog closes): the picker's chrome, `/sesh-costs` columns
+and `/sesh-needs` columns re-flow on resize instead of keeping values captured
+when the dialog opened. A fork that finishes after the picker closed must not
+clear a dialog (`forkEntry` checks `alive`).
 
 ### Hard-won rules — do not regress
 
@@ -270,7 +278,8 @@ when it has one and keeps the plain text otherwise.
   metadata and its back hint never shrink or wrap. `/sesh-costs` shows the
   project first, then right-aligned money columns under a heading row (`24h`
   and `Total` spend from assistant-message cost; `Sess` is the number of
-  sessions with recorded cost) and an "All projects" total line. The heading
+  sessions with recorded cost) and an "All projects" total line (always an amount, `$0.00` for no spend;
+  project rows show "—"). The heading
   and total stay put while the project rows scroll (↑↓, Ctrl-P/N, PgUp/PgDn,
   Home/End); `Sess`, then `24h`, drop when the project name would starve, and
   `fitDir` shortens leading directory segments first, cutting the last segment

@@ -47,7 +47,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "setTimeout",
     "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn",
     `${js}
-    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, fitDir, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
+    return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, fitDir, contextMenuWindow, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
   return factory(
     readExtraction,
@@ -384,7 +384,7 @@ function loadPickerWindow() {
   assert.equal(pickerLastStart(rows, 5, () => false, 1), 2)
 }
 
-const { homeDirLabels, queryRunningIds, createRunningState, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu } =
+const { homeDirLabels, queryRunningIds, createRunningState, fetchEntries, buildSearchIndex, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, contextMenuWindow, createContextMenu } =
   loadDataLayer()
 
 // Fake worker that runs DB_WORKER_SOURCE against node:sqlite, with the same
@@ -819,6 +819,16 @@ function makeApi(sessions, { latency = 0 } = {}) {
 
 {
   const labels = (items) => items.map((item) => item.label)
+  // A menu taller than its bounds scrolls so the selection is always shown.
+  assert.deepEqual(contextMenuWindow(6, 0, 10), { start: 0, size: 6 })
+  for (const rows of [1, 2, 3, 5]) {
+    for (let index = 0; index < 6; index++) {
+      const { start, size } = contextMenuWindow(6, index, rows)
+      assert.equal(size, Math.min(6, rows))
+      assert.ok(index >= start && index < start + size, `index ${index} in ${rows} rows: ${start}+${size}`)
+      assert.ok(start >= 0 && start + size <= 6)
+    }
+  }
   assert.deepEqual(labels(contextMenuItems(false, false)), ["Open", "Preview transcript", "Fork", "Pin", "Delete"])
   assert.deepEqual(labels(contextMenuItems(true, true)), [
     "Open", "Preview transcript", "Open in new cmux workspace", "Fork", "Unpin", "Delete",
@@ -1034,10 +1044,10 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open/)
   assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
   assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
-  assert.match(overlay, /props\.menu\.click\(index\(\), event\.button\)/)
+  assert.match(overlay, /props\.menu\.click\(view\.start \+ shown\(\), event\.button\)/)
   assert.match(
     overlay,
-    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*props\.menu\.click\(index\(\), event\.button\)/,
+    /onMouseUp=\{\(event: \{ button\?: number; stopPropagation: \(\) => void \}\) => \{\s*event\.stopPropagation\(\)\s*props\.menu\.click\(view\.start \+ shown\(\), event\.button\)/,
     "context menu items must activate on mouseUp so the trailing mouse release does not hit the dialog backdrop",
   )
   assert.doesNotMatch(overlay, /menu\.activate\(index\(\)\)/)
@@ -1168,6 +1178,12 @@ function makeApi(sessions, { latency = 0 } = {}) {
   for (const empty of [undefined, null, {}, new Error(""), 42, { message: 7 }]) {
     assert.equal(withReason("Could not fork session", empty), "Could not fork session", String(empty))
   }
+  assert.equal(withReason("Could not load sessions", "<html><body>502 Bad Gateway</body></html>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", "<!DOCTYPE html><title>x</title>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", "  <p>oops</p>"), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", { data: "<html>proxy</html>" }), "Could not load sessions")
+  assert.equal(withReason("Could not load sessions", { message: "readable", data: "<html>x</html>" }), "Could not load sessions: readable")
+  assert.equal(withReason("Could not load sessions", { data: { message: "typed" }, error: "ignored" }), "Could not load sessions: typed")
   const cycle = { }
   cycle.data = cycle
   assert.equal(errorReason(cycle), undefined, "cyclic error bodies terminate")

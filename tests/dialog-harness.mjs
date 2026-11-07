@@ -50,8 +50,8 @@ export function HomeHost(props) {
 // quarter-height anchor, one-row content padding, terminal-minus-two width cap.
 export function DialogHost(props) {
   return (
-    <box width="100%" height="100%" alignItems="center" paddingTop={props.height / 4}>
-      <box width={props.width} paddingTop={1}>{props.content()}</box>
+    <box width="100%" height="100%" alignItems="center" paddingTop={props.height() / 4}>
+      <box width={props.width()} paddingTop={1}>{props.content()}</box>
     </box>
   )
 }
@@ -99,6 +99,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const navigations = []
   let cleared = 0
   let listedSessions = [...sessions]
+  let hostWidth, setHostWidth, hostHeight, setHostHeight
   const dir = mkdtempSync(join(tmpdir(), "sesh-dialogs-"))
   const dbPath = join(dir, "opencode.db")
   const seed = new Database(dbPath)
@@ -107,7 +108,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const insert = seed.prepare("INSERT INTO session_message VALUES (?, 0, 'assistant', ?, ?)")
   costRows.forEach((row, index) => {
     seed.prepare("INSERT INTO session_v2 VALUES (?, ?)").run(`ses_cost${index}`, row.directory)
-    insert.run(`ses_cost${index}`, JSON.stringify({ cost: row.cost }), Date.now())
+    insert.run(`ses_cost${index}`, JSON.stringify({ cost: row.cost }), Date.now() - (row.age ?? 0))
   })
   seed.close()
   const previousDb = process.env.SESH_DB
@@ -164,7 +165,10 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
     return dialogs.at(-1)
   }
   const show = async (dialog, dialogWidth) => {
-    await render(() => panel.DialogHost({ content: dialog.content, width: dialogWidth, height: setup.renderer.height }), setup.renderer)
+    // Host geometry follows the terminal like the real dialog host does.
+    ;[hostWidth, setHostWidth] = createSignal(dialogWidth)
+    ;[hostHeight, setHostHeight] = createSignal(setup.renderer.height)
+    await render(() => panel.DialogHost({ content: dialog.content, width: hostWidth, height: hostHeight }), setup.renderer)
     await setup.flush()
     await setup.flush()
     await setup.flush()
@@ -172,6 +176,15 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   }
   return {
     api, setup, panel, layers, toasts, navigations, command, show,
+    // Resize the terminal and the dialog host together, as the real host does.
+    async resize(columns, rows, dialogWidth) {
+      setup.resize(columns, rows)
+      setHostHeight(rows)
+      setHostWidth(dialogWidth)
+      await setup.flush()
+      await setup.flush()
+      return setup.captureCharFrame()
+    },
     run(slash) { commands.find((entry) => entry.slash?.name === slash).onSelect() },
     get cleared() { return cleared },
     get spawns() { return globalThis.__seshSpawns },
