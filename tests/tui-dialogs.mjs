@@ -670,6 +670,44 @@ await check("picker closes its action menu on resize and brings the footer back"
   } finally { harness.close() }
 })
 
+await check("picker status-row changes keep the retained selection visible", async () => {
+  const entries = sessions.map((entry, index) => ({ ...entry, title: `Pick${index}` }))
+  const harness = await createHarness({ width: 80, height: 24, sessions: entries, waiting: entries.map((entry) => entry.id), source })
+  try {
+    await harness.show(await harness.command("sesh"), 78)
+    for (let i = 0; i < 5; i++) harness.press("down")
+    await harness.setup.flush()
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /needs input/, "the filter adds a status row\n" + frame)
+    assert.match(frame, /Pick5\b/, "the retained selection stays visible\n" + frame)
+    harness.press("enter")
+    assert.deepEqual(harness.navigations.at(-1), ["session", { sessionID: entries[5].id }])
+  } finally { harness.close() }
+})
+
+await check("picker closes its action menu when a status row changes the list bounds", async () => {
+  const harness = await createHarness({ width: 44, height: 14, sessions, waiting: sessions.map((entry) => entry.id), source })
+  harness.setCmux(true)
+  try {
+    const at = rowAt(await harness.show(await harness.command("sesh"), 42), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+    harness.press("alt+w")
+    await settle()
+    await harness.setup.flush()
+    const frame = harness.setup.captureCharFrame()
+    assert.match(frame, /needs input/, "the filter adds a status row\n" + frame)
+    assert.ok(!frame.includes("Preview transcript"), "the menu closes when its bounds change\n" + frame)
+    assert.match(frame, /Project: all/, "the controls remain unobscured\n" + frame)
+    assert.match(frame, /esc close/, "the footer returns\n" + frame)
+    assert.equal(harness.spawns.length, 0)
+  } finally { harness.close() }
+})
+
 await check("costs and needs re-derive their columns on resize", async () => {
   const costRows = Array.from({ length: 5 }, (_, index) => ({ directory: `/work/p${index}`, cost: index + 1 }))
   const harness = await createHarness({ width: 80, height: 24, sessions, costRows, waiting: sessions.map((entry) => entry.id), source })
@@ -712,6 +750,85 @@ await check("costs total row shows $0.00 where project rows show a dash", async 
     const frame = await harness.show(await harness.command("sesh-costs"), 78)
     assert.match(frame.split("\n").find((line) => line.includes("All projects")), /\$0\.00\s+\$5\.00/, frame)
     assert.match(frame.split("\n").find((line) => line.includes("old1")), /—\s+\$2\.00/, frame)
+  } finally { harness.close() }
+})
+
+for (const view of ["home", "sidebar", "picker"]) {
+  for (const key of ["y", "alt+d"]) {
+    await check(`${view} right-click cancels another session's armed deletion before ${key}`, async () => {
+      const harness = await createHarness({ width: 80, height: 24, sessions, source })
+      const deleted = []
+      const deleteSession = harness.api.client.session.delete
+      harness.api.client.session.delete = async (args) => { deleted.push(args.sessionID); return deleteSession(args) }
+      try {
+        const frame = view === "picker"
+          ? await harness.show(await harness.command("sesh"), 78)
+          : await harness[view]()
+        const first = rowAt(frame, "Session number 0")
+        await harness.setup.mockMouse.moveTo(first.x, first.y)
+        await harness.setup.flush()
+        harness.press("alt+d")
+        await harness.setup.flush()
+        assert.ok([...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.key === "y")), "the first session is armed")
+        const second = rowAt(harness.setup.captureCharFrame(), "Session number 1")
+        await harness.setup.mockMouse.moveTo(second.x, second.y)
+        await harness.setup.mockMouse.click(second.x, second.y, 2)
+        await harness.setup.flush()
+        assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+        assert.ok(![...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.key === "y")), "opening another menu cancels the old confirmation")
+        if (key === "alt+d") harness.press(key)
+        await harness.setup.flush()
+        assert.deepEqual(deleted, [], "the old session must not be deleted")
+        for (let i = 0; i < 4; i++) harness.press("down")
+        harness.press("enter")
+        await harness.setup.flush()
+        assert.match(harness.setup.captureCharFrame(), /Confirm delete/)
+        harness.press("up")
+        harness.press("enter")
+        await settle()
+        await harness.setup.flush()
+        assert.deepEqual(deleted, [sessions[1].id], "only the menu's session is deleted")
+      } finally { harness.close() }
+    })
+  }
+}
+
+for (const view of ["home", "sidebar"]) {
+  await check(`${view} menu closes when the host enters native modal mode`, async () => {
+    const harness = await createHarness({ width: 80, height: 24, sessions, source })
+    try {
+      const at = rowAt(await harness[view](), "Session number 1")
+      await harness.setup.mockMouse.click(at.x, at.y, 2)
+      await harness.setup.flush()
+      assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+      assert.equal(harness.api.ui.dialog.open, false, "native dialogs are outside the adapter")
+      harness.setMode("modal")
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"))
+      assert.ok(![...harness.layers].some((layer) => layer.bindings?.some((binding) => binding.desc === "Choose menu item")), "the menu's key layer is released")
+      await harness.setup.mockMouse.click(at.x, at.y, 2)
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "modal mode blocks reopening")
+      harness.setMode("base")
+      await harness.setup.flush()
+      assert.ok(!harness.setup.captureCharFrame().includes("Preview transcript"), "returning to base does not reopen the menu")
+    } finally { harness.close() }
+  })
+}
+
+await check("picker menu remains usable in host modal mode", async () => {
+  const harness = await createHarness({ width: 80, height: 24, sessions, source })
+  try {
+    harness.setMode("modal")
+    const at = rowAt(await harness.show(await harness.command("sesh"), 78), "Session number 1")
+    await harness.setup.mockMouse.click(at.x, at.y, 2)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /Preview transcript/)
+    harness.press("down")
+    harness.press("enter")
+    await settle(150)
+    await harness.setup.flush()
+    assert.match(harness.setup.captureCharFrame(), /esc back/)
   } finally { harness.close() }
 })
 

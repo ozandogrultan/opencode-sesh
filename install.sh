@@ -192,14 +192,16 @@ install_tui_panel() {
     note "created $PACKAGE_JSON"
   fi
   pkg_tmp=$(mktemp "${TMPDIR:-/tmp}/sesh-pkg.XXXXXX")
-  if jq --arg p "^$plugin_version" --arg o "$OPENTUI_RANGE" --arg s "$SOLID_VERSION" '
+  if jq --arg p "^$plugin_version" --arg o "$OPENTUI_RANGE" --arg s "$SOLID_VERSION" \
+    --arg w "$(jq -r '.dependencies["string-width"]' "$SOURCE_DIR/package.json")" '
     .dependencies = ((.dependencies // {}) as $d
       | {
           "@opencode/plugin": ($d["@opencode/plugin"] // $p),
           "@opentui/core": ($d["@opentui/core"] // $o),
           "@opentui/keymap": ($d["@opentui/keymap"] // $o),
           "@opentui/solid": ($d["@opentui/solid"] // $o),
-          "solid-js": ($d["solid-js"] // $s)
+          "solid-js": ($d["solid-js"] // $s),
+          "string-width": ($d["string-width"] // $w)
         } + $d)
   ' "$PACKAGE_JSON" > "$pkg_tmp" 2>/dev/null; then
     if cmp -s "$PACKAGE_JSON" "$pkg_tmp"; then

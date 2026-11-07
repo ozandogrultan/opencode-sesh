@@ -12,6 +12,7 @@ import { dirname, join } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
 import { getTreeSitterClient, RGBA, SyntaxStyle, TextAttributes } from "@opentui/core"
 import { Portal } from "@opentui/solid"
+import stringWidth from "string-width"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
 
@@ -202,16 +203,23 @@ function prettyDir(dir: string, home: string): string {
 // segment short while any room remains: leading segments go first ("…/a/b",
 // then "…/b"), and only a last segment wider than the column ends in "…".
 function fitDir(dir: string, home: string, width: number): string {
+  if (width <= 0) return ""
   const pretty = prettyDir(dir, home)
-  if (pretty.length <= width) return pretty
+  if (stringWidth(pretty) <= width) return pretty
   const parts = pretty.split("/").filter((part) => part && part !== "…")
   const last = parts.at(-1) ?? pretty
   for (let keep = parts.length - 1; keep >= 2; keep--) {
     const candidate = `…/${parts.slice(-keep).join("/")}`
-    if (candidate.length <= width) return candidate
+    if (stringWidth(candidate) <= width) return candidate
   }
-  if (last.length + 2 <= width) return `…/${last}`
-  return truncate(last, width)
+  if (stringWidth(last) + 2 <= width) return `…/${last}`
+  if (stringWidth(last) <= width) return last
+  let fitted = ""
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(last)) {
+    if (stringWidth(fitted + segment + "…") > width) break
+    fitted += segment
+  }
+  return fitted + "…"
 }
 
 // Home rows show a directory's last segment; distinct directories that share
@@ -1806,10 +1814,10 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     if (state && !itemRows().some((entry) => entry.id === state.entry.id)) menu.close()
   })
   createEffect(() => {
-    if (props.api.ui.dialog.open) menu.close()
     // A modal dialog owns input while open: yield the sidebar's keyboard
     // captures too, so its layers cannot double-fire with the dialog's own.
-    if (props.api.ui.dialog.open) {
+    if (props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE) {
+      menu.close()
       cancelDelete()
       setNavActive(false)
       setSearching(false)
@@ -1919,7 +1927,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
     },
     pinned: (entry) => props.pins().sessions.includes(entry.id),
     cmux: inCmux,
-    blocked: () => props.api.ui.dialog.open,
+    blocked: () => props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE,
     onChange: setMenuState,
   })
 
@@ -2247,6 +2255,7 @@ function SidebarSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
                   if (event.button === RIGHT_BUTTON) {
                     event.stopPropagation()
+                    cancelDelete()
                     menu.open(row.entry, event.x, event.y)
                   } else {
                     // Sidebar-internal: openSession releases the sidebar's own
@@ -2405,7 +2414,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
     },
     pinned: (entry) => props.pins().sessions.includes(entry.id),
     cmux: inCmux,
-    blocked: () => props.api.ui.dialog.open,
+    blocked: () => props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE,
     onChange: setMenuState,
   })
   const menuView = createMenuView(props.api, menuState)
@@ -2438,7 +2447,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
   // A modal dialog owns input while open: yield this list's keyboard captures
   // too, so its layers cannot double-fire with the dialog's own.
   createEffect(() => {
-    if (props.api.ui.dialog.open) {
+    if (props.api.ui.dialog.open || props.api.mode.current() !== BASE_MODE) {
       menu.close()
       cancelDelete()
       setSearching(false)
@@ -2664,6 +2673,7 @@ function HomeSessions(props: { api: TuiPluginApi } & PinProps) {
                 onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
                   if (event.button === RIGHT_BUTTON) {
                     event.stopPropagation()
+                    cancelDelete()
                     menu.open(entry, event.x, event.y)
                   } else {
                     props.api.route.navigate("session", { sessionID: entry.id })
@@ -3182,8 +3192,9 @@ const tui: TuiPlugin = async (api) => {
       const state = menuState()
       if (state && !selectableEntries().some((entry) => entry.id === state.entry.id)) menu.close()
     })
-    // The menu's anchor and bounds are screen positions: a resize invalidates them.
-    createEffect(on(tracked.size, () => {
+    // Terminal dimensions and chrome rows determine the list's screen bounds.
+    const layoutKey = createMemo(() => `${tracked.size().width}:${termHeight()}:${chromeRows()}`)
+    createEffect(on(layoutKey, () => {
       menu.close()
       revealCursor()
     }, { defer: true }))
@@ -3421,6 +3432,7 @@ const tui: TuiPlugin = async (api) => {
                       onMouseDown={(event: { button?: number; x: number; y: number; stopPropagation: () => void }) => {
                         if (event.button === RIGHT_BUTTON) {
                           event.stopPropagation()
+                          cancelDelete()
                           selectEntry(row.entry)
                           menu.open(row.entry, event.x, event.y)
                         } else {

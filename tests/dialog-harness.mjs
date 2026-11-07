@@ -108,6 +108,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   let cleared = 0
   let backdropPresses = 0
   let listedSessions = [...sessions]
+  const [mode, setMode] = createSignal("base")
   let hostWidth, setHostWidth, hostHeight, setHostHeight
   const dir = mkdtempSync(join(tmpdir(), "sesh-dialogs-"))
   const dbPath = join(dir, "opencode.db")
@@ -127,7 +128,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
   const api = {
     renderer: setup.renderer,
     theme: { current: theme },
-    mode: { current: () => "base" },
+    mode: { current: mode },
     route: { current: { name: "home" }, navigate(...args) { navigations.push(args) } },
     state: { path: { directory: "/work/project" }, session: { status: () => "idle" } },
     keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
@@ -184,7 +185,7 @@ export async function createHarness({ width, height, sessions, waiting = [], cos
     return setup.captureCharFrame()
   }
   return {
-    api, setup, panel, layers, toasts, navigations, command, show,
+    api, setup, panel, layers, toasts, navigations, command, show, setMode,
     // Resize the terminal and the dialog host together, as the real host does.
     async resize(columns, rows, dialogWidth) {
       setup.resize(columns, rows)

@@ -99,6 +99,7 @@ let pollDisposed = false
 const api = {
   renderer: setup.renderer,
   theme: { current: theme },
+  mode: { current: () => "base" },
   ui: { dialog: { open: false } },
   keymap: { registerLayer(layer) { layers.add(layer); return () => layers.delete(layer) } },
   route: { get current() { return { name: routeName() } } },

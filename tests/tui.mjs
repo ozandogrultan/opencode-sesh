@@ -10,6 +10,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DatabaseSync } from "node:sqlite"
+import stringWidth from "string-width"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -45,7 +46,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     "readFile",
     "process",
     "setTimeout",
-    "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn",
+    "setInterval", "clearInterval", "POLL_MS", "existsSync", "spawnSync", "spawn", "stringWidth",
     `${js}
     return { fetchEntries, buildSearchIndex, buildSearchIndexRemote, createSessionPoll, resolveDbPath, openInCmuxWorkspace, inCmux, errorReason, withReason, fitDir, contextMenuWindow, SESSION_PAGE_LIMIT, SESSION_MAX, REMOTE_CONCURRENCY, TRANSCRIPT_BATCH, newestFirst, sidebarMarker, transcriptMatchExcerpt, filterPickerEntries, queryWaitingDetails, createDbClient, DB_WORKER_SOURCE, costRowsQuery, contextMenuItems, contextMenuBox, createContextMenu, TRANSCRIPT_BATCH_BYTES, transcriptCache, clearTranscriptCache, homeDirLabels, queryRunningIds, createRunningState }`,
   )
@@ -56,6 +57,7 @@ function loadDataLayer(readExtraction = async () => { throw new Error("no local 
     runtime.setInterval ?? setInterval, runtime.clearInterval ?? clearInterval, 15_000,
     runtime.existsSync ?? (() => false), runtime.spawnSync ?? (() => ({ status: 1 })),
     runtime.spawn ?? (() => { throw new Error("unexpected spawn") }),
+    stringWidth,
   )
 }
 
@@ -1044,8 +1046,8 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.match(overlay, /process\.nextTick\(\(\) => container\?\.destroyRecursively\?\.\(\)\)/)
   assert.match(sidebar, /on\(routeKey, \(\) => menu\.close\(\), \{ defer: true \}\)/)
   assert.match(sidebar, /itemRows\(\)\.some\(\(entry\) => entry\.id === state\.entry\.id\)\) menu\.close\(\)/)
-  assert.match(sidebar, /if \(props\.api\.ui\.dialog\.open\) menu\.close\(\)/)
-  assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open/)
+  assert.match(sidebar, /if \(props\.api\.ui\.dialog\.open \|\| props\.api\.mode\.current\(\) !== BASE_MODE\) \{\s*menu\.close\(\)/)
+  assert.match(sidebar, /blocked: \(\) => props\.api\.ui\.dialog\.open \|\| props\.api\.mode\.current\(\) !== BASE_MODE/)
   assert.match(sidebar, /renderer\.on\("resize", closeMenu\)[\s\S]*renderer\.off\("resize", closeMenu\)/)
   assert.match(sidebar, /onMouseScroll=\{\(\) => menu\.close\(\)\}/)
   assert.match(overlay, /props\.menu\.click\(view\(\)\.start \+ shown\(\), event\.button\)/)
@@ -1166,6 +1168,18 @@ function makeApi(sessions, { latency = 0 } = {}) {
   assert.equal(fitDir("/srv/team/work/application", home, 12), "application")
   assert.equal(fitDir("/Users/me", home, 20), "~")
   assert.equal(fitDir("", home, 20), "other")
+  assert.equal(fitDir("/work/项目应用程序项目应用程序", home, 16), "项目应用程序项…")
+  for (const last of ["项目应用程序项目应用程序", "e\u0301".repeat(12), "👩‍💻".repeat(8), "🇹🇷".repeat(8)]) {
+    const segments = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(last)].map(({ segment }) => segment)
+    const prefixes = new Set(segments.map((_, index) => segments.slice(0, index + 1).join("")))
+    prefixes.add("")
+    for (const width of [0, 1, 2, 3, 8, 16, 24]) {
+      const fitted = fitDir(`/work/${last}`, home, width)
+      assert.ok(stringWidth(fitted) <= width, `${JSON.stringify(fitted)} exceeds ${width} cells`)
+      const tail = fitted.replace(/^.*\//, "").replace(/…$/, "")
+      assert.ok(prefixes.has(tail), `${JSON.stringify(fitted)} splits a grapheme`)
+    }
+  }
   for (const width of [3, 6, 10, 17, 25]) {
     const fitted = fitDir("/srv/a-very-long-team-name/another-long-segment/final-segment-name", home, width)
     assert.ok(fitted.length <= width, `${width}: ${fitted}`)
