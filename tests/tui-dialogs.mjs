@@ -372,6 +372,32 @@ for (const title of ["项目应用程序".repeat(4), "e\u0301".repeat(30), "👩
   })
 }
 
+for (const [width, height] of [[44, 14], [80, 24]]) {
+  await check(`picker preview heading and armed delete truncate CJK titles by cell width at ${width}x${height}`, async () => {
+    const entry = session(0, "项目应用程序".repeat(10))
+    const harness = await createHarness({ width, height, sessions: [entry], source })
+    try {
+      await harness.show(await harness.command("sesh"), Math.min(116, width - 2))
+      if (width >= 80) {
+        harness.press("alt+d")
+        await harness.setup.flush()
+        const armed = harness.setup.captureCharFrame().split("\n").find((line) => line.includes("y confirm"))
+        assert.ok(armed, "the armed delete line is shown")
+        assert.ok(armed.includes("…"), armed)
+        assert.ok(armed.trimEnd().endsWith("y confirm · n cancel"), "the confirm hint stays whole\n" + armed)
+        harness.press("n")
+        await harness.setup.flush()
+      }
+      harness.press("alt+p")
+      await harness.setup.flush()
+      const heading = harness.setup.captureCharFrame().split("\n").find((line) => line.includes("项目"))
+      assert.ok(heading, "the preview heading is shown")
+      assert.ok(heading.trimEnd().includes("…"), heading)
+      assert.ok(heading.includes("esc close"), "the title leaves room for the close hint on its line\n" + heading)
+    } finally { harness.close() }
+  })
+}
+
 await check("picker pins with option+s/r and ctrl+s/d; option+k filters pinned", async () => {
   const harness = await createHarness({ width: 120, height: 40, sessions, source })
   try {
