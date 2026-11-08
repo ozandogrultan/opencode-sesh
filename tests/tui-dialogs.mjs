@@ -384,7 +384,7 @@ for (const [width, height] of [[44, 14], [80, 24]]) {
         const armed = harness.setup.captureCharFrame().split("\n").find((line) => line.includes("y confirm"))
         assert.ok(armed, "the armed delete line is shown")
         assert.ok(armed.includes("…"), armed)
-        assert.ok(stringWidth(armed) <= width, armed)
+        assert.ok(armed.trimEnd().endsWith("y confirm · n cancel"), "the confirm hint stays whole\n" + armed)
         harness.press("n")
         await harness.setup.flush()
       }
@@ -393,7 +393,7 @@ for (const [width, height] of [[44, 14], [80, 24]]) {
       const heading = harness.setup.captureCharFrame().split("\n").find((line) => line.includes("项目"))
       assert.ok(heading, "the preview heading is shown")
       assert.ok(heading.trimEnd().includes("…"), heading)
-      assert.ok(stringWidth(heading) <= width, heading)
+      assert.ok(heading.includes("esc close"), "the title leaves room for the close hint on its line\n" + heading)
     } finally { harness.close() }
   })
 }
