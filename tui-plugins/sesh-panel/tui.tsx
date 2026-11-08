@@ -3373,7 +3373,7 @@ const tui: TuiPlugin = async (api) => {
             </box>
             <Show when={coverageLabel()}>
               <box paddingTop={chromeGap()}>
-                <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{truncate(coverageLabel(), dialogWidth() - 8)}</text>
+                <text wrapMode="none" style={{ fg: api.theme.current.textMuted }}>{truncateCells(coverageLabel(), dialogWidth() - 8)}</text>
               </box>
             </Show>
             <box flexDirection="row" gap={compactFilters() ? 1 : 2} paddingTop={chromeGap()}>
@@ -3382,7 +3382,7 @@ const tui: TuiPlugin = async (api) => {
                 if (group) setScope(scope() === group ? undefined : group)
                 else api.ui.toast({ message: "No current project to filter", variant: "info" })
               }}>
-                {scope() ? `Project: ${truncate(scope()!, compactFilters() ? 10 : 22)}` : "Project: all"}
+                {scope() ? `Project: ${truncateCells(scope()!, compactFilters() ? 10 : 22)}` : "Project: all"}
               </text>
               <text flexShrink={0} wrapMode="none" style={{ fg: waitingOnly() ? api.theme.current.warning : api.theme.current.textMuted }} onMouseDown={() => setWaitingOnly((value) => !value)}>
                 {waitingOnly() ? (compactFilters() ? "● Input" : "● Needs input") : (compactFilters() ? "○ Input" : "○ Needs input")}
@@ -3553,7 +3553,7 @@ const tui: TuiPlugin = async (api) => {
               <text wrapMode="none" style={{ fg: api.theme.current.warning }}>
                 {dialogWidth() < 70
                   ? "y delete · n cancel"
-                  : `Delete "${truncate(pendingDelete()!.title, dialogWidth() - 40)}"? y confirm · n cancel`}
+                  : `Delete "${truncateCells(pendingDelete()!.title, dialogWidth() - 40)}"? y confirm · n cancel`}
               </text>
             </Show>
           </box>
@@ -3574,7 +3574,7 @@ const tui: TuiPlugin = async (api) => {
             >
               <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
                 <text attributes={TextAttributes.BOLD}>
-                  {previewID() ? truncate(selectableEntries()[cursor()]!.title, dialogWidth() - 18) : "Preview"}
+                  {previewID() ? truncateCells(selectableEntries()[cursor()]!.title, dialogWidth() - 18) : "Preview"}
                 </text>
                 <text style={{ fg: api.theme.current.textMuted }}>esc close</text>
               </box>
