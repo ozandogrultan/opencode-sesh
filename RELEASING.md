@@ -1,7 +1,8 @@
 # Releasing
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) does the whole
-job: run tests, publish to npm with provenance, and create the GitHub release.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs in two
+jobs: `cut` (manual runs only) bumps, tags and pushes; `publish` runs tests,
+publishes to npm with provenance and creates the GitHub release.
 There are two ways to trigger it.
 
 Development uses [bun](https://bun.sh) (`bun install`, `bun run test`). Publishing
