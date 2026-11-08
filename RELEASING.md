@@ -21,6 +21,8 @@ That workflow checks out `main`, drafts notable commits, bumps the version,
 writes the changelog, commits and tags it, pushes, publishes to npm, and cuts
 the GitHub release using the new changelog section. It does nothing when there
 are no notable commits since the last release.
+If publishing fails after the tag is pushed, use **Re-run failed jobs**: the
+publish job retries the existing tag without cutting a new version.
 
 Do this from a green `main` — it releases whatever is there.
 
