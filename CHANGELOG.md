@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **tui:** Fit more picker rows, unify row actions, and label the cost digest
 
+### Changed
+
+- **tui:** Option-S / Option-R now pin the selected session / its directory in the picker (Ctrl-S / Ctrl-D still work); the Pinned filter moved from Option-S to Option-K
+- **tui:** The panel now depends on `string-width`, installed automatically (the installer adds it to the config `package.json`)
+
 ## [2.3.8] - 2026-11-06
 
 ### Fixed
