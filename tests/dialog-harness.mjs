@@ -46,9 +46,9 @@ export function SidebarHost(props) {
 export function HomeHost(props) {
   return <box width={props.width} height={props.height} flexDirection="column"><box height={3} /><HomeBottom {...props.panelProps} /></box>
 }
-// Host layout verified against OpenCode v2.2.6, packages/tui/src/ui/dialog.tsx
+// Host layout verified against OpenCode v2.2.7, packages/tui/src/ui/dialog.tsx
 // (zIndex={3000} at line 66):
-// https://github.com/anomalyco/opencode/blob/v2.2.6/packages/tui/src/ui/dialog.tsx#L66
+// https://github.com/anomalyco/opencode/blob/v2.2.7/packages/tui/src/ui/dialog.tsx#L66
 // A full-screen absolute layer, a backdrop that closes on mouse-up, a content
 // box that stops mouse-up, a quarter-height anchor and one-row content padding.
 // When bumping OpenCode, re-check it and CONTEXT_MENU_Z_INDEX in tui.tsx.
