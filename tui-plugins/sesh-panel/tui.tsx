@@ -414,9 +414,9 @@ type ContextMenuHost = {
 }
 
 const CONTEXT_MENU_LAYER_PRIORITY = 30
-// Verified against OpenCode v2.2.7: the dialog layer is zIndex={3000}
+// Verified against OpenCode v2.3.2: the dialog layer is zIndex={3000}
 // (packages/tui/src/ui/dialog.tsx#L66,
-// https://github.com/anomalyco/opencode/blob/v2.2.7/packages/tui/src/ui/dialog.tsx#L66)
+// https://github.com/anomalyco/opencode/blob/v2.3.2/packages/tui/src/ui/dialog.tsx#L66)
 // and OpenCode's own context menus use 2500/2600. The menu must clear the
 // dialog (the picker's menu opens over it); toasts set no zIndex. Re-check on
 // every OpenCode bump, together with DialogHost in tests/dialog-harness.mjs.
