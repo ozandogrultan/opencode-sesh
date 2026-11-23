@@ -73,8 +73,8 @@
   },
   "peerDependencies": {
     "@opencode/plugin": ">=2.2.0",
-    "@opentui/core": ">=0.7.0",
-    "@opentui/solid": ">=0.7.0",
+    "@opentui/core": ">=0.9.4",
+    "@opentui/solid": ">=0.9.4",
     "solid-js": ">=1.9.0"
   },
   "devDependencies": {
@@ -85,9 +85,9 @@
     "@opencode/client": "2.2.7",
     "@opencode/plugin": "2.2.7",
     "@opencode/theme": "2.2.7",
-    "@opentui/core": "^0.8.0",
-    "@opentui/keymap": "^0.8.0",
-    "@opentui/solid": "^0.8.0",
+    "@opentui/core": "^0.9.4",
+    "@opentui/keymap": "^0.9.4",
+    "@opentui/solid": "^0.9.4",
     "@types/node": "26.6.6",
     "babel-preset-solid": "1.9.19",
     "husky": "^9.1.7",

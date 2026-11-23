@@ -16,7 +16,7 @@ import stringWidth from "string-width"
 
 type ThemeColors = TuiPluginApi["theme"]["current"]
 
-let markdownStyleCache: { theme: ThemeColors; style: SyntaxStyle } | undefined
+let markdownStyleCache: { theme: ThemeColors; owner: unknown; style: SyntaxStyle } | undefined
 
 function buildMarkdownStyle(theme: ThemeColors, owner?: unknown): SyntaxStyle {
   return (SyntaxStyle as any).fromTheme([
@@ -86,9 +86,9 @@ function buildMarkdownStyle(theme: ThemeColors, owner?: unknown): SyntaxStyle {
 }
 
 function getMarkdownStyle(theme: ThemeColors, owner?: unknown): SyntaxStyle | undefined {
-  if (markdownStyleCache?.theme === theme) return markdownStyleCache?.style
+  if (markdownStyleCache?.theme === theme && markdownStyleCache.owner === owner) return markdownStyleCache?.style
   try {
-    markdownStyleCache = { theme, style: buildMarkdownStyle(theme, owner) }
+    markdownStyleCache = { theme, owner, style: buildMarkdownStyle(theme, owner) }
     return markdownStyleCache?.style
   } catch {
     try {
