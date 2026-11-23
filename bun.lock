@@ -25,7 +25,7 @@
         "typescript": "7.0.2",
       },
       "peerDependencies": {
-        "@opencode/plugin": ">=2.2.0",
+        "@opencode/plugin": ">=2.4.0",
         "@opentui/core": ">=0.9.4",
         "@opentui/solid": ">=0.9.4",
         "solid-js": ">=1.9.0",
